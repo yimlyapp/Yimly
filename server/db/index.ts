@@ -77,8 +77,15 @@ export async function setupDatabase() {
 
     try {
       if (fs.existsSync(dbPath)) {
-        const backupPath = `${dbPath}.corrupt.${Date.now()}`;
+        const timestamp = Date.now();
+        const backupPath = `${dbPath}.corrupt.${timestamp}`;
         fs.copyFileSync(dbPath, backupPath);
+        if (fs.existsSync(`${dbPath}-wal`)) {
+          fs.copyFileSync(`${dbPath}-wal`, `${backupPath}-wal`);
+        }
+        if (fs.existsSync(`${dbPath}-shm`)) {
+          fs.copyFileSync(`${dbPath}-shm`, `${backupPath}-shm`);
+        }
         console.log(`📁 Created timestamped backup copy of corrupted database at: ${backupPath}`);
       }
     } catch (backupErr) {
@@ -109,3 +116,16 @@ export async function setupDatabase() {
     console.error('Failed to cleanup stale sessions on startup:', error);
   }
 }
+
+export async function checkpointAndCloseDatabase() {
+  try {
+    if (sqlite && !databaseCorrupted) {
+      await sqlite.execute('PRAGMA wal_checkpoint(TRUNCATE);');
+      await sqlite.close();
+      console.log('Database WAL checkpointed and closed cleanly.');
+    }
+  } catch (err) {
+    console.error('Error during database clean shutdown:', err);
+  }
+}
+

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
-import { sessions, controllers, queueItems, songs, artists } from '../db/schema.js';
-import { eq, and, asc } from 'drizzle-orm';
+import { sessions, controllers, queueItems, songs, artists, users } from '../db/schema.js';
+import { eq, and, asc, or } from 'drizzle-orm';
 import { requireAuth } from '../middleware/auth.js';
 import crypto from 'crypto';
 import { notifyQueueUpdate } from '../ws/index.js';
@@ -19,9 +19,11 @@ router.post('/sessions', async (req, res) => {
     const device = req.headers['user-agent'] || 'Unknown Device';
     
     // Close previous sessions hosted by this user to prevent stale sessions
-    await db.update(sessions)
-      .set({ status: 'closed' })
-      .where(and(eq(sessions.hostId, user.id), eq(sessions.status, 'active')));
+    if (user?.id) {
+      await db.update(sessions)
+        .set({ status: 'closed' })
+        .where(and(eq(sessions.hostId, user.id), eq(sessions.status, 'active')));
+    }
       
     const sessionId = crypto.randomUUID();
     let roomCode = generateRoomCode();
@@ -35,10 +37,17 @@ router.post('/sessions', async (req, res) => {
       attempts++;
     }
 
+    // Determine hostId: user.id if logged in, or fallback to first admin / user in database
+    let hostId = user?.id;
+    if (!hostId) {
+      const defaultUser = await db.select({ id: users.id }).from(users).limit(1);
+      hostId = defaultUser[0]?.id || 1;
+    }
+
     const inserted = await db.insert(sessions).values({
       id: sessionId,
-      roomCode: `${roomCode.slice(0,3)} ${roomCode.slice(3)}`, // Store formatted or unformatted? Let's format it.
-      hostId: user.id,
+      roomCode: `${roomCode.slice(0,3)} ${roomCode.slice(3)}`,
+      hostId: hostId,
       hostDevice: device,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -46,6 +55,7 @@ router.post('/sessions', async (req, res) => {
 
     res.json(inserted[0]);
   } catch (error) {
+    console.error('Failed to create room:', error);
     res.status(500).json({ error: 'Failed to create room' });
   }
 });
@@ -53,10 +63,26 @@ router.post('/sessions', async (req, res) => {
 router.post('/sessions/join', async (req, res) => {
   try {
     const { roomCode } = req.body;
+    if (!roomCode) {
+      return res.status(400).json({ error: 'Room code is required' });
+    }
     const user = (req as any).user;
     const device = req.headers['user-agent'] || 'Unknown Device';
 
-    const session = await db.select().from(sessions).where(and(eq(sessions.roomCode, roomCode), eq(sessions.status, 'active'))).limit(1);
+    const normalizedCode = String(roomCode).replace(/\s+/g, '');
+    const formattedCode = `${normalizedCode.slice(0, 3)} ${normalizedCode.slice(3)}`;
+
+    const session = await db.select().from(sessions).where(
+      and(
+        or(
+          eq(sessions.roomCode, roomCode),
+          eq(sessions.roomCode, formattedCode),
+          eq(sessions.roomCode, normalizedCode)
+        ),
+        eq(sessions.status, 'active')
+      )
+    ).limit(1);
+
     if (session.length === 0) {
       return res.status(404).json({ error: 'Room not found or inactive' });
     }
@@ -65,13 +91,14 @@ router.post('/sessions/join', async (req, res) => {
     await db.insert(controllers).values({
       id: controllerId,
       sessionId: session[0].id,
-      userId: user.id,
+      userId: user?.id || null,
       device: device,
       lastSeenTime: new Date(),
     });
 
     res.json({ sessionId: session[0].id, controllerId });
   } catch (error) {
+    console.error('Failed to join room:', error);
     res.status(500).json({ error: 'Failed to join room' });
   }
 });

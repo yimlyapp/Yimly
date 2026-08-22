@@ -14,11 +14,26 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
+export const isPublicRoute = (req: Request): boolean => {
+  const url = (req.originalUrl || req.url || '').split('?')[0];
+  const method = req.method.toUpperCase();
+
+  if (method === 'POST' && (url === '/api/karaoke/sessions' || url === '/api/karaoke/sessions/join')) {
+    return true;
+  }
+  return false;
+};
+
 export const requireAuth = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  console.log(`[AUTH] authenticated-user request to ${req.originalUrl}`);
-  const token = req.cookies.yimly_token || req.headers.authorization?.split(' ')[1];
+  const isExempt = isPublicRoute(req);
+  console.log(`[AUTH] request to ${req.originalUrl} (public exempt: ${isExempt})`);
+  const token = req.cookies?.yimly_token || req.headers.authorization?.split(' ')[1];
 
   if (!token) {
+    if (isExempt) {
+      console.log(`[AUTH] public exempt route ${req.method} ${req.originalUrl} allowed without token`);
+      return next();
+    }
     console.log(`[AUTH] authenticated-user failure: No token found. Cookies present: ${Object.keys(req.cookies || {})}`);
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -32,6 +47,9 @@ export const requireAuth = async (req: AuthenticatedRequest, res: Response, next
     }).from(users).where(eq(users.id, decoded.id)).limit(1);
 
     if (userResult.length === 0) {
+      if (isExempt) {
+        return next();
+      }
       console.log(`[AUTH] authenticated-user failure: User not found in DB`);
       return res.status(401).json({ error: 'Unauthorized' });
     }
@@ -40,6 +58,9 @@ export const requireAuth = async (req: AuthenticatedRequest, res: Response, next
     req.user = userResult[0];
     next();
   } catch (error) {
+    if (isExempt) {
+      return next();
+    }
     console.log(`[AUTH] authenticated-user failure: JWT verify failed - ${(error as Error).message}`);
     return res.status(401).json({ error: 'Unauthorized' });
   }

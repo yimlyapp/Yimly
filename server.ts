@@ -3,7 +3,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import cookieParser from 'cookie-parser';
-import { setupDatabase, db, databaseCorrupted, databaseErrorMessage } from './server/db/index.js';
+import { setupDatabase, db, databaseCorrupted, databaseErrorMessage, checkpointAndCloseDatabase } from './server/db/index.js';
 import { users } from './server/db/schema.js';
 import fs from 'fs';
 import path from 'path';
@@ -124,6 +124,11 @@ app.get('/api/search', requireAuth, async (req, res) => {
   }
 });
 
+// API 404 handler: ensure all unhandled /api/* requests return JSON, never fallback to index.html
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ error: `API route not found: ${req.method} ${req.originalUrl}` });
+});
+
 async function startServer() {
   if (!isProd) {
     // Development mode: Use Vite's middleware
@@ -148,5 +153,16 @@ async function startServer() {
     console.log(`Server is running on http://0.0.0.0:${PORT}`);
   });
 }
+
+// Graceful shutdown on restart/termination to prevent SQLite WAL corruption
+process.on('SIGINT', async () => {
+  await checkpointAndCloseDatabase();
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  await checkpointAndCloseDatabase();
+  process.exit(0);
+});
 
 startServer();
