@@ -44,13 +44,15 @@ export default function App() {
             <Route path="/setup" element={<Navigate to="/login" replace />} />
             <Route path="/login" element={<Login />} />
             
+            {/* Public Karaoke Room - Validated Session Route */}
+            <Route path="/rooms/:sessionId" element={<RoomSession />} />
+
             <Route path="/" element={<Layout />}>
               <Route index element={<Home />} />
               <Route path="settings" element={<Settings />} />
               <Route path="users" element={<Users />} />
               <Route path="library" element={<Library />} />
               <Route path="rooms" element={<Rooms />} />
-              <Route path="rooms/:sessionId" element={<RoomSession />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </>

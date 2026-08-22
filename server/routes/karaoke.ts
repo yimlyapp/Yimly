@@ -113,6 +113,63 @@ router.get('/active-sessions', async (req, res) => {
   }
 });
 
+// Validate Room & Controller Endpoint
+router.get('/sessions/:sessionId/validate', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const role = (req.query.role as string) || 'guest';
+    const controllerId = req.query.controllerId as string;
+
+    const session = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (session.length === 0) {
+      return res.status(404).json({ valid: false, error: 'Room not found', code: 'ROOM_NOT_FOUND' });
+    }
+
+    if (session[0].status !== 'active') {
+      return res.status(410).json({ valid: false, error: 'This karaoke session has expired or ended', code: 'ROOM_EXPIRED' });
+    }
+
+    if (role === 'guest') {
+      if (!controllerId) {
+        return res.status(403).json({ 
+          valid: false, 
+          error: 'Controller ID required for guest access', 
+          code: 'CONTROLLER_REQUIRED' 
+        });
+      }
+
+      const controller = await db.select().from(controllers).where(
+        and(eq(controllers.id, controllerId), eq(controllers.sessionId, sessionId))
+      ).limit(1);
+
+      if (controller.length === 0) {
+        return res.status(403).json({ 
+          valid: false, 
+          error: 'Invalid or expired guest controller ID', 
+          code: 'INVALID_CONTROLLER' 
+        });
+      }
+
+      return res.json({
+        valid: true,
+        role: 'guest',
+        session: session[0],
+        controller: controller[0]
+      });
+    }
+
+    // Role is host
+    return res.json({
+      valid: true,
+      role: 'host',
+      session: session[0]
+    });
+  } catch (error) {
+    console.error('Failed to validate session:', error);
+    res.status(500).json({ valid: false, error: 'Failed to validate session' });
+  }
+});
+
 router.get('/sessions/:sessionId/state', async (req, res) => {
   try {
     const { sessionId } = req.params;
@@ -128,7 +185,7 @@ router.get('/sessions/:sessionId/state', async (req, res) => {
       status: queueItems.status,
       songTitle: songs.title,
       artistName: artists.name,
-      userId: queueItems.userId, // you would join with users to get name
+      userId: queueItems.userId,
       songId: songs.id
     })
     .from(queueItems)
@@ -136,10 +193,6 @@ router.get('/sessions/:sessionId/state', async (req, res) => {
     .innerJoin(artists, eq(songs.artistId, artists.id))
     .where(eq(queueItems.sessionId, sessionId))
     .orderBy(asc(queueItems.position));
-
-    // You could also store playback state in DB, but in-memory in WS handler is also fine,
-    // though the instructions mention "playback_state" table or similar. We can just keep it simple
-    // and rely on WS for real-time playback state, or store it in a singleton.
 
     res.json({ session: session[0], queue });
   } catch (error) {
@@ -151,16 +204,35 @@ router.get('/sessions/:sessionId/state', async (req, res) => {
 router.post('/sessions/:sessionId/queue', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const { songId } = req.body;
+    const { songId, controllerId } = req.body;
     const user = (req as any).user;
+
+    const session = await db.select().from(sessions).where(and(eq(sessions.id, sessionId), eq(sessions.status, 'active'))).limit(1);
+    if (session.length === 0) {
+      return res.status(404).json({ error: 'Active session not found' });
+    }
+
+    const song = await db.select().from(songs).where(eq(songs.id, Number(songId))).limit(1);
+    if (song.length === 0) {
+      return res.status(404).json({ error: 'Song not found' });
+    }
 
     const existingQueue = await db.select().from(queueItems).where(eq(queueItems.sessionId, sessionId));
     const nextPosition = existingQueue.length > 0 ? Math.max(...existingQueue.map(q => q.position)) + 1 : 1;
 
+    let userId = user?.id || null;
+    if (!userId && controllerId) {
+      const ctrl = await db.select().from(controllers).where(eq(controllers.id, controllerId)).limit(1);
+      userId = ctrl[0]?.userId || null;
+    }
+    if (!userId) {
+      userId = session[0].hostId || 1;
+    }
+
     const inserted = await db.insert(queueItems).values({
       sessionId,
       songId,
-      userId: user.id,
+      userId,
       addedAt: new Date(),
       position: nextPosition,
     }).returning();
@@ -169,6 +241,7 @@ router.post('/sessions/:sessionId/queue', async (req, res) => {
     
     res.json(inserted[0]);
   } catch (error) {
+    console.error('Failed to add to queue:', error);
     res.status(500).json({ error: 'Failed to add to queue' });
   }
 });

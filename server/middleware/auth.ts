@@ -18,9 +18,21 @@ export const isPublicRoute = (req: Request): boolean => {
   const url = (req.originalUrl || req.url || '').split('?')[0];
   const method = req.method.toUpperCase();
 
+  // Public Karaoke session creation and joining
   if (method === 'POST' && (url === '/api/karaoke/sessions' || url === '/api/karaoke/sessions/join')) {
     return true;
   }
+
+  // Public Karaoke session validation, state query, and queueing for active room participants
+  if (/^\/api\/karaoke\/sessions\/[^\/]+\/(validate|state|queue)$/.test(url)) {
+    return true;
+  }
+
+  // Public songs endpoints for karaoke playback, search, lyrics, and audio streaming
+  if (method === 'GET' && /^\/api\/songs(\/.*)?$/.test(url)) {
+    return true;
+  }
+
   return false;
 };
 
