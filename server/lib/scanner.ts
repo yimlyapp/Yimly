@@ -157,17 +157,26 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     } else if (ext === '.lrc') {
       foundFilePaths.add(fullPath);
       // Associate .lrc with matching base song name
+      const lrcKey = baseName.replace(/\s*\((instrumental|karaoke|vocals|backing version)\)\s*/gi, '').toLowerCase();
+      let matched = false;
+      
       for (const [key, songInfo] of songsMap.entries()) {
-        if (baseName.toLowerCase().includes(songInfo.title.toLowerCase()) || baseName.toLowerCase().includes(songInfo.artist.toLowerCase())) {
+        const cleanTitle = songInfo.title.toLowerCase();
+        // If the LRC filename contains the title, it's a good match
+        if (lrcKey.includes(cleanTitle)) {
           songInfo.lrc = fullPath;
+          matched = true;
           break;
         }
       }
-      // If not matched yet, store in a fallback map or match by exact baseName
-      const lrcKey = baseName.replace(/\s*\((instrumental|karaoke|vocals)\)\s*/gi, '').toLowerCase();
-      for (const [key, songInfo] of songsMap.entries()) {
-        if (key.includes(lrcKey) || lrcKey.includes(songInfo.title.toLowerCase())) {
-          songInfo.lrc = fullPath;
+      
+      // If not matched, try looser match
+      if (!matched) {
+        for (const [key, songInfo] of songsMap.entries()) {
+          if (key.includes(lrcKey) || lrcKey.includes(songInfo.title.toLowerCase())) {
+            songInfo.lrc = fullPath;
+            break;
+          }
         }
       }
     }

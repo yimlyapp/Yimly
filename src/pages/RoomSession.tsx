@@ -85,10 +85,6 @@ export default function RoomSession() {
           case 'SONG_CHANGED':
             fetchState();
             setPlaying(true);
-            if (audioRef.current && isHost) {
-              audioRef.current.currentTime = 0;
-              audioRef.current.play().catch(err => console.log('Autoplay prevented:', err));
-            }
             break;
           case 'VARIANT_CHANGED':
             setVariant(msg.payload.variant);

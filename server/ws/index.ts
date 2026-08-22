@@ -164,21 +164,22 @@ export function setupWebSockets(wss: WebSocketServer) {
   });
 }
 
-async function advanceQueue(sessionId: string, room: RoomState) {
+async function advanceQueue(sessionId: string, room: RoomState & { isAdvancing?: boolean }) {
+  if (room.isAdvancing) return;
+  room.isAdvancing = true;
+
   try {
-    // 1. Mark current playing or first pending as finished
+    // 1. Remove current playing or first pending from the queue
     if (room.currentQueueItemId) {
-      await db.update(queueItems)
-        .set({ status: 'finished' })
+      await db.delete(queueItems)
         .where(eq(queueItems.id, room.currentQueueItemId));
     } else {
-      // Find current playing in DB and finish it
+      // Find current playing in DB and delete it
       const currentPlaying = await db.select().from(queueItems)
         .where(and(eq(queueItems.sessionId, sessionId), eq(queueItems.status, 'playing')))
         .limit(1);
       if (currentPlaying.length > 0) {
-        await db.update(queueItems)
-          .set({ status: 'finished' })
+        await db.delete(queueItems)
           .where(eq(queueItems.id, currentPlaying[0].id));
       }
     }
@@ -223,6 +224,8 @@ async function advanceQueue(sessionId: string, room: RoomState) {
     broadcastToRoom(sessionId, { type: 'QUEUE_UPDATED' });
   } catch (err) {
     console.error('Error advancing queue:', err);
+  } finally {
+    room.isAdvancing = false;
   }
 }
 
