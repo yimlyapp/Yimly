@@ -19,7 +19,7 @@ export default function Rooms() {
       const res = await fetch('/api/karaoke/sessions', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      navigate(`/rooms/${data.id}`);
+      navigate(`/rooms/${data.id}?role=host`);
     } catch (err: any) {
       setError(err.message);
     }
@@ -37,7 +37,7 @@ export default function Rooms() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      navigate(`/rooms/${data.sessionId}`);
+      navigate(`/rooms/${data.sessionId}?role=guest&controllerId=${data.controllerId}`);
     } catch (err: any) {
       setError(err.message);
     }
