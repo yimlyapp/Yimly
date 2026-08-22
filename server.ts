@@ -89,6 +89,8 @@ app.get('/api/search', requireAuth, async (req, res) => {
       title: songs.title,
       artist: artists.name,
       album: albums.title,
+      artworkPath: songs.artworkPath,
+      albumArtworkPath: albums.artworkPath,
     })
     .from(songs)
     .leftJoin(artists, eq(songs.artistId, artists.id))
@@ -99,6 +101,7 @@ app.get('/api/search', requireAuth, async (req, res) => {
     const foundArtists = await db.select({
       id: artists.id,
       name: artists.name,
+      artworkPath: artists.artworkPath,
     })
     .from(artists)
     .where(like(artists.name, searchStr))
@@ -108,6 +111,7 @@ app.get('/api/search', requireAuth, async (req, res) => {
       id: albums.id,
       title: albums.title,
       artist: artists.name,
+      artworkPath: albums.artworkPath,
     })
     .from(albums)
     .leftJoin(artists, eq(albums.artistId, artists.id))
@@ -115,13 +119,31 @@ app.get('/api/search', requireAuth, async (req, res) => {
     .limit(10);
 
     res.json([
-      ...foundArtists.map(a => ({ type: 'artist', ...a })),
-      ...foundAlbums.map(al => ({ type: 'album', ...al })),
-      ...foundSongs.map(s => ({ type: 'song', ...s })),
+      ...foundArtists.map(a => ({ type: 'artist', hasArtwork: !!a.artworkPath, ...a })),
+      ...foundAlbums.map(al => ({ type: 'album', hasArtwork: !!al.artworkPath, ...al })),
+      ...foundSongs.map(s => ({ type: 'song', hasArtwork: !!s.artworkPath || !!s.albumArtworkPath, ...s })),
     ]);
   } catch (error) {
     res.status(500).json({ error: 'Global search failed' });
   }
+});
+
+// Direct artwork serving route
+app.get('/api/artwork/:filename', (req, res) => {
+  const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
+  const safeFilename = path.basename(req.params.filename);
+  const filePath = path.join(dataDir, 'artwork', safeFilename);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Artwork not found' });
+  }
+
+  const ext = path.extname(safeFilename).toLowerCase();
+  const contentType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
+
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  res.sendFile(filePath);
 });
 
 // API 404 handler: ensure all unhandled /api/* requests return JSON, never fallback to index.html

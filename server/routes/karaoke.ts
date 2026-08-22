@@ -186,7 +186,8 @@ router.get('/sessions/:sessionId/state', async (req, res) => {
       songTitle: songs.title,
       artistName: artists.name,
       userId: queueItems.userId,
-      songId: songs.id
+      songId: songs.id,
+      artworkPath: songs.artworkPath,
     })
     .from(queueItems)
     .innerJoin(songs, eq(queueItems.songId, songs.id))
@@ -194,7 +195,12 @@ router.get('/sessions/:sessionId/state', async (req, res) => {
     .where(eq(queueItems.sessionId, sessionId))
     .orderBy(asc(queueItems.position));
 
-    res.json({ session: session[0], queue });
+    const formattedQueue = queue.map(q => ({
+      ...q,
+      hasArtwork: !!q.artworkPath,
+    }));
+
+    res.json({ session: session[0], queue: formattedQueue });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch state' });
   }

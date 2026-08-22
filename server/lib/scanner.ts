@@ -1,10 +1,79 @@
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { db } from '../db/index.js';
 import { libraries, artists, albums, songs, lyrics } from '../db/schema.js';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, isNull, isNotNull } from 'drizzle-orm';
 import * as mm from 'music-metadata';
+
+// Setup artwork cache directory
+const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
+const artworkDir = path.join(dataDir, 'artwork');
+
+/**
+ * Selects the best front-cover image from embedded ID3/metadata pictures.
+ */
+export function selectFrontCover(pictures?: mm.IPicture[]): mm.IPicture | null {
+  if (!pictures || pictures.length === 0) return null;
+
+  // 1. Look for explicit Cover (front)
+  const frontCover = pictures.find(p => {
+    const typeStr = (p.type || '').toLowerCase();
+    return typeStr.includes('front') || typeStr.includes('cover (front)') || typeStr === 'cover';
+  });
+  if (frontCover) return frontCover;
+
+  // 2. If no explicit front cover, avoid known back cover, leaflet, or icon if others exist
+  const nonBackCover = pictures.find(p => {
+    const typeStr = (p.type || '').toLowerCase();
+    return !typeStr.includes('back') && !typeStr.includes('leaflet') && !typeStr.includes('icon');
+  });
+  if (nonBackCover) return nonBackCover;
+
+  // 3. Fallback to first available picture
+  return pictures[0];
+}
+
+/**
+ * Saves embedded picture buffer to cached artwork directory using content-based SHA-256 hash.
+ * Returns the cached filename (e.g. hash.jpg or hash.png).
+ */
+export async function saveEmbeddedArtwork(picture: mm.IPicture): Promise<string> {
+  if (!fsSync.existsSync(artworkDir)) {
+    await fs.mkdir(artworkDir, { recursive: true });
+  }
+
+  // Determine file extension
+  let ext = 'jpg';
+  const format = (picture.format || '').toLowerCase();
+  if (format.includes('png')) {
+    ext = 'png';
+  } else if (format.includes('webp')) {
+    ext = 'webp';
+  } else if (format.includes('gif')) {
+    ext = 'gif';
+  } else if (format.includes('jpeg') || format.includes('jpg')) {
+    ext = 'jpg';
+  } else if (picture.data && picture.data.length >= 4) {
+    if (picture.data[0] === 0x89 && picture.data[1] === 0x50 && picture.data[2] === 0x4E && picture.data[3] === 0x47) {
+      ext = 'png';
+    } else if (picture.data[0] === 0xFF && picture.data[1] === 0xD8 && picture.data[2] === 0xFF) {
+      ext = 'jpg';
+    }
+  }
+
+  const hash = crypto.createHash('sha256').update(picture.data).digest('hex');
+  const filename = `${hash}.${ext}`;
+  const filePath = path.join(artworkDir, filename);
+
+  // If already cached, reuse existing file without re-writing
+  if (!fsSync.existsSync(filePath)) {
+    await fs.writeFile(filePath, Buffer.from(picture.data));
+  }
+
+  return filename;
+}
 
 interface ScannedMediaItem {
   artist: string;
@@ -21,6 +90,7 @@ interface ScannedMediaItem {
   variant: string;
   fileSize?: number;
   format?: string;
+  artworkPath?: string;
 }
 
 export async function scanLibrary(libraryId: number, dirPath: string) {
@@ -57,6 +127,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
       let fileSize = 0;
       let format = 'mp3';
       let variant = 'original';
+      let artworkFilename: string | undefined = undefined;
 
       try {
         const stats = await fs.stat(fullPath);
@@ -93,6 +164,14 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
         }
         if (common.year) {
           year = common.year;
+        }
+
+        // Extract embedded front cover picture if present in MP3
+        if (common.picture && common.picture.length > 0) {
+          const selectedPic = selectFrontCover(common.picture);
+          if (selectedPic) {
+            artworkFilename = await saveEmbeddedArtwork(selectedPic);
+          }
         }
       } catch (err) {
         // Fallback to filename parsing if ID3 reading fails
@@ -138,10 +217,15 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
           year,
           fileSize,
           format,
+          artworkPath: artworkFilename,
         });
       }
 
       const songInfo = songsMap.get(key)!;
+      if (artworkFilename && (!songInfo.artworkPath || variant !== 'instrumental')) {
+        songInfo.artworkPath = artworkFilename;
+      }
+
       if (variant === 'instrumental') {
         songInfo.instrumentalAudio = fullPath;
       } else {
@@ -192,10 +276,16 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     let artistRec = await db.select().from(artists).where(eq(artists.name, song.artist)).limit(1);
     let artistId: number;
     if (artistRec.length === 0) {
-      const inserted = await db.insert(artists).values({ name: song.artist }).returning();
+      const inserted = await db.insert(artists).values({
+        name: song.artist,
+        artworkPath: song.artworkPath || null,
+      }).returning();
       artistId = inserted[0].id;
     } else {
       artistId = artistRec[0].id;
+      if (song.artworkPath && !artistRec[0].artworkPath) {
+        await db.update(artists).set({ artworkPath: song.artworkPath }).where(eq(artists.id, artistId));
+      }
     }
 
     // 2. Upsert Album
@@ -209,12 +299,16 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
           artistId,
           title: song.album,
           year: song.year,
+          artworkPath: song.artworkPath || null,
         }).returning();
         albumId = inserted[0].id;
       } else {
         albumId = albumRec[0].id;
-        if (song.year && !albumRec[0].year) {
-          await db.update(albums).set({ year: song.year }).where(eq(albums.id, albumId));
+        const updates: any = {};
+        if (song.year && !albumRec[0].year) updates.year = song.year;
+        if (song.artworkPath && !albumRec[0].artworkPath) updates.artworkPath = song.artworkPath;
+        if (Object.keys(updates).length > 0) {
+          await db.update(albums).set(updates).where(eq(albums.id, albumId));
         }
       }
     }
@@ -241,6 +335,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
         variant: song.mainAudio ? 'original' : 'instrumental',
         fileSize: song.fileSize,
         format: song.format,
+        artworkPath: song.artworkPath || null,
       }).returning();
       songId = inserted[0].id;
     } else {
@@ -256,6 +351,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
         year: song.year || existingSong[0].year,
         fileSize: song.fileSize || existingSong[0].fileSize,
         format: song.format || existingSong[0].format,
+        artworkPath: song.artworkPath || existingSong[0].artworkPath,
       }).where(eq(songs.id, songId));
     }
 
@@ -283,6 +379,30 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
       await db.delete(lyrics).where(eq(lyrics.songId, dbSong.id));
       // Remove song record
       await db.delete(songs).where(eq(songs.id, dbSong.id));
+    }
+  }
+
+  // Backfill any albums without artwork from their child songs
+  const albumsWithoutArtwork = await db.select().from(albums).where(isNull(albums.artworkPath));
+  for (const alb of albumsWithoutArtwork) {
+    const songWithArtwork = await db.select({ artworkPath: songs.artworkPath })
+      .from(songs)
+      .where(and(eq(songs.albumId, alb.id), isNotNull(songs.artworkPath)))
+      .limit(1);
+    if (songWithArtwork.length > 0 && songWithArtwork[0].artworkPath) {
+      await db.update(albums).set({ artworkPath: songWithArtwork[0].artworkPath }).where(eq(albums.id, alb.id));
+    }
+  }
+
+  // Backfill any artists without artwork from their songs
+  const artistsWithoutArtwork = await db.select().from(artists).where(isNull(artists.artworkPath));
+  for (const art of artistsWithoutArtwork) {
+    const songWithArtwork = await db.select({ artworkPath: songs.artworkPath })
+      .from(songs)
+      .where(and(eq(songs.artistId, art.id), isNotNull(songs.artworkPath)))
+      .limit(1);
+    if (songWithArtwork.length > 0 && songWithArtwork[0].artworkPath) {
+      await db.update(artists).set({ artworkPath: songWithArtwork[0].artworkPath }).where(eq(artists.id, art.id));
     }
   }
 

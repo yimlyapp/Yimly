@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
 import { albums, artists, songs, lyrics } from '../db/schema.js';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, isNotNull, and } from 'drizzle-orm';
 import { requireAuth } from '../middleware/auth.js';
+import fs from 'fs';
+import path from 'path';
 
 const router = Router();
 router.use(requireAuth);
@@ -21,7 +23,12 @@ router.get('/', async (req, res) => {
     .from(albums)
     .leftJoin(artists, eq(albums.artistId, artists.id));
 
-    res.json(allAlbums);
+    const formatted = allAlbums.map(a => ({
+      ...a,
+      hasArtwork: !!a.artworkPath,
+    }));
+
+    res.json(formatted);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch albums' });
   }
@@ -30,6 +37,8 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const albumId = parseInt(req.params.id);
+    if (isNaN(albumId)) return res.status(400).json({ error: 'Invalid album ID' });
+
     const albumRec = await db.select({
       id: albums.id,
       title: albums.title,
@@ -52,6 +61,7 @@ router.get('/:id', async (req, res) => {
       discNumber: songs.discNumber,
       duration: songs.duration,
       variant: songs.variant,
+      artworkPath: songs.artworkPath,
       hasLrc: lyrics.id,
     })
     .from(songs)
@@ -60,10 +70,62 @@ router.get('/:id', async (req, res) => {
 
     res.json({
       ...albumRec[0],
-      songs: albumSongs.map(s => ({ ...s, hasLrc: !!s.hasLrc })),
+      hasArtwork: !!albumRec[0].artworkPath,
+      songs: albumSongs.map(s => ({
+        ...s,
+        hasArtwork: !!s.artworkPath || !!albumRec[0].artworkPath,
+        hasLrc: !!s.hasLrc
+      })),
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch album details' });
+  }
+});
+
+router.get('/:id/artwork', async (req, res) => {
+  try {
+    const albumId = parseInt(req.params.id);
+    if (isNaN(albumId)) return res.status(400).json({ error: 'Invalid album ID' });
+
+    const album = await db.select({
+      artworkPath: albums.artworkPath,
+    }).from(albums).where(eq(albums.id, albumId)).limit(1);
+
+    if (album.length === 0) return res.status(404).json({ error: 'Album not found' });
+
+    let artworkFilename = album[0].artworkPath;
+
+    // Fallback: Check any song inside this album with artwork
+    if (!artworkFilename) {
+      const songWithArt = await db.select({ artworkPath: songs.artworkPath })
+        .from(songs)
+        .where(and(eq(songs.albumId, albumId), isNotNull(songs.artworkPath)))
+        .limit(1);
+      if (songWithArt.length > 0 && songWithArt[0].artworkPath) {
+        artworkFilename = songWithArt[0].artworkPath;
+      }
+    }
+
+    if (!artworkFilename) {
+      return res.status(404).json({ error: 'No embedded artwork found for this album' });
+    }
+
+    const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
+    const safeFilename = path.basename(artworkFilename);
+    const filePath = path.join(dataDir, 'artwork', safeFilename);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Cached artwork file not found on disk' });
+    }
+
+    const ext = path.extname(safeFilename).toLowerCase();
+    const contentType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    res.sendFile(filePath);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to serve album artwork' });
   }
 });
 

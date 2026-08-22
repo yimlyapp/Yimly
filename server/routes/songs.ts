@@ -4,6 +4,7 @@ import { songs, artists, albums, lyrics } from '../db/schema.js';
 import { eq, like, or } from 'drizzle-orm';
 import { requireAuth } from '../middleware/auth.js';
 import fs from 'fs';
+import path from 'path';
 
 const router = Router();
 router.use(requireAuth);
@@ -22,6 +23,8 @@ router.get('/', async (req, res) => {
       genre: songs.genre,
       year: songs.year,
       trackNumber: songs.trackNumber,
+      artworkPath: songs.artworkPath,
+      albumArtworkPath: albums.artworkPath,
       hasLrc: lyrics.id
     })
     .from(songs)
@@ -32,6 +35,7 @@ router.get('/', async (req, res) => {
 
     const formatted = allSongs.map(s => ({
       ...s,
+      hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
       hasLrc: !!s.hasLrc
     }));
 
@@ -52,6 +56,8 @@ router.get('/search', async (req, res) => {
       title: songs.title,
       artist: artists.name,
       album: albums.title,
+      artworkPath: songs.artworkPath,
+      albumArtworkPath: albums.artworkPath,
     })
     .from(songs)
     .leftJoin(artists, eq(songs.artistId, artists.id))
@@ -68,6 +74,7 @@ router.get('/search', async (req, res) => {
 
     const formatted = searchSongs.map(s => ({
       type: 'song',
+      hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
       ...s
     }));
 
@@ -97,6 +104,8 @@ router.get('/:id', async (req, res) => {
       instrumentalAudioPath: songs.instrumentalAudioPath,
       hasInstrumental: songs.instrumentalAudioPath,
       hasLrc: lyrics.id,
+      artworkPath: songs.artworkPath,
+      albumArtworkPath: albums.artworkPath,
     })
     .from(songs)
     .leftJoin(artists, eq(songs.artistId, artists.id))
@@ -109,11 +118,60 @@ router.get('/:id', async (req, res) => {
 
     res.json({
       ...songRec[0],
+      hasArtwork: !!songRec[0].artworkPath || !!songRec[0].albumArtworkPath,
       hasLrc: !!songRec[0].hasLrc,
       hasInstrumental: !!songRec[0].hasInstrumental
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch song details' });
+  }
+});
+
+router.get('/:id/artwork', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid song ID' });
+
+    const song = await db.select({
+      artworkPath: songs.artworkPath,
+      albumId: songs.albumId,
+    }).from(songs).where(eq(songs.id, id)).limit(1);
+
+    if (song.length === 0) return res.status(404).json({ error: 'Song not found' });
+
+    let artworkFilename = song[0].artworkPath;
+
+    // Fallback to album's embedded artwork if song does not directly reference it
+    if (!artworkFilename && song[0].albumId) {
+      const album = await db.select({ artworkPath: albums.artworkPath })
+        .from(albums)
+        .where(eq(albums.id, song[0].albumId))
+        .limit(1);
+      if (album.length > 0 && album[0].artworkPath) {
+        artworkFilename = album[0].artworkPath;
+      }
+    }
+
+    if (!artworkFilename) {
+      return res.status(404).json({ error: 'No embedded artwork found for this track' });
+    }
+
+    const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
+    const safeFilename = path.basename(artworkFilename);
+    const filePath = path.join(dataDir, 'artwork', safeFilename);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Cached artwork file not found on disk' });
+    }
+
+    const ext = path.extname(safeFilename).toLowerCase();
+    const contentType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    res.sendFile(filePath);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to serve artwork' });
   }
 });
 

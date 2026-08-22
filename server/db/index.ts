@@ -6,10 +6,14 @@ import path from 'path';
 import { migrate } from 'drizzle-orm/libsql/migrator';
 import { eq } from 'drizzle-orm';
 
-// Ensure data directory exists
+// Ensure data directory and artwork directory exist
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
+}
+const artworkDir = path.join(dataDir, 'artwork');
+if (!fs.existsSync(artworkDir)) {
+  fs.mkdirSync(artworkDir, { recursive: true });
 }
 
 const dbPath = path.join(dataDir, 'yimly.db');
@@ -106,6 +110,13 @@ export async function setupDatabase() {
     }
   } else {
     console.warn('Migrations folder not found, skipping migrations.');
+  }
+
+  // Ensure artwork_path column exists in songs table (backward compatibility safety)
+  try {
+    await sqlite.execute('ALTER TABLE songs ADD COLUMN artwork_path text;');
+  } catch (e) {
+    // Column already exists, safe to ignore
   }
 
   // Cleanup any sessions that were left active when the server last shut down/crashed

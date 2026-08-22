@@ -366,13 +366,13 @@ export default function RoomSession() {
   // -------------------------------------------------------------
   if (validationStatus === 'loading') {
     return (
-      <div className="min-h-screen bg-zinc-950 text-white flex flex-col items-center justify-center p-6">
+      <div className="min-h-screen bg-[#0A0B10] text-white flex flex-col items-center justify-center p-6">
         <div className="flex flex-col items-center gap-4 text-center max-w-sm">
-          <div className="w-16 h-16 rounded-full bg-emerald-950/40 border border-emerald-500/30 flex items-center justify-center">
-            <Disc className="w-8 h-8 text-emerald-400 animate-spin" />
+          <div className="w-16 h-16 rounded-2xl bg-[#FF4FA3]/15 border border-[#FF4FA3]/30 flex items-center justify-center shadow-lg shadow-[#FF4FA3]/20">
+            <Disc className="w-8 h-8 text-[#FF4FA3] animate-spin" />
           </div>
-          <h2 className="text-xl font-bold tracking-tight text-zinc-100">Connecting to Karaoke Room</h2>
-          <p className="text-sm text-zinc-400">Verifying session credentials and synchronizing player state...</p>
+          <h2 className="text-xl font-bold tracking-tight text-white">Connecting to Karaoke Room</h2>
+          <p className="text-xs text-zinc-400">Verifying session credentials and synchronizing player state...</p>
         </div>
       </div>
     );
@@ -383,13 +383,13 @@ export default function RoomSession() {
   // -------------------------------------------------------------
   if (validationStatus !== 'valid') {
     return (
-      <div className="min-h-screen bg-zinc-950 text-white flex flex-col items-center justify-center p-6">
-        <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-8 shadow-2xl text-center">
-          <div className="w-16 h-16 rounded-full bg-red-950/50 border border-red-500/30 text-red-400 flex items-center justify-center mx-auto mb-5">
+      <div className="min-h-screen bg-[#0A0B10] text-white flex flex-col items-center justify-center p-6">
+        <div className="w-full max-w-md bg-[#141622] border border-white/10 rounded-3xl p-8 shadow-2xl text-center">
+          <div className="w-16 h-16 rounded-2xl bg-red-950/50 border border-red-500/30 text-red-400 flex items-center justify-center mx-auto mb-5">
             <AlertCircle className="w-8 h-8" />
           </div>
 
-          <span className="inline-block px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider bg-red-500/10 text-red-400 border border-red-500/20 mb-3">
+          <span className="inline-block px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-red-500/15 text-red-400 border border-red-500/25 mb-3">
             {validationStatus === 'not_found' && 'Room Not Found'}
             {validationStatus === 'expired' && 'Room Expired'}
             {validationStatus === 'invalid_controller' && 'Guest Access Rejected'}
@@ -403,24 +403,24 @@ export default function RoomSession() {
             {validationStatus === 'error' && 'Unable to Join'}
           </h2>
 
-          <p className="text-sm text-zinc-400 mb-8 leading-relaxed">
+          <p className="text-xs text-zinc-400 mb-8 leading-relaxed">
             {errorMessage || 'Please check the room URL or room code and try again.'}
           </p>
 
           <div className="flex flex-col gap-3">
             <button
               onClick={() => navigate('/rooms')}
-              className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
+              className="w-full py-3.5 bg-[#FF4FA3] hover:bg-[#ff69b2] text-white font-semibold rounded-xl transition-all shadow-lg shadow-[#FF4FA3]/25 flex items-center justify-center gap-2"
             >
               <Mic className="w-4 h-4" />
-              Join Another Room
+              <span>Join Another Room</span>
             </button>
             <button
               onClick={() => window.location.reload()}
-              className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
+              className="w-full py-3 bg-white/5 hover:bg-white/10 text-zinc-300 font-medium rounded-xl transition-colors flex items-center justify-center gap-2 text-xs"
             >
               <RefreshCw className="w-4 h-4" />
-              Retry Connection
+              <span>Retry Connection</span>
             </button>
           </div>
         </div>
@@ -432,25 +432,25 @@ export default function RoomSession() {
   // Render: Active Karaoke Room Experience
   // -------------------------------------------------------------
   return (
-    <div className="flex h-screen bg-zinc-950 text-white overflow-hidden flex-col lg:flex-row relative">
+    <div className="flex h-screen bg-[#0A0B10] text-white overflow-hidden flex-col lg:flex-row relative font-sans">
       {/* Room Song Catalog / Add to Queue Modal */}
       {showLibrary && (
-        <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 md:p-8">
-          <div className="w-full max-w-3xl bg-zinc-900 border border-zinc-800 rounded-2xl flex flex-col h-[85vh] shadow-2xl overflow-hidden">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 md:p-8">
+          <div className="w-full max-w-3xl bg-[#141622] border border-white/10 rounded-3xl flex flex-col h-[85vh] shadow-2xl overflow-hidden">
             {/* Modal Header */}
-            <div className="p-5 border-b border-zinc-800 bg-zinc-950/80 flex items-center justify-between shrink-0">
+            <div className="p-5 border-b border-white/5 bg-[#0E0F17] flex items-center justify-between shrink-0">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-emerald-950/50 border border-emerald-500/30 rounded-xl text-emerald-400">
+                <div className="p-2.5 bg-[#FF4FA3]/15 border border-[#FF4FA3]/30 rounded-xl text-[#FF4FA3]">
                   <LibraryIcon className="w-5 h-5" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-white">Room Song Catalog</h2>
-                  <p className="text-xs text-zinc-400">Search and add songs to the live room queue</p>
+                  <h2 className="text-lg font-bold text-white">Song Catalog</h2>
+                  <p className="text-xs text-zinc-400">Search and queue songs to the live room</p>
                 </div>
               </div>
               <button 
                 onClick={() => setShowLibrary(false)}
-                className="p-2 text-zinc-400 hover:text-white bg-zinc-800/80 hover:bg-zinc-800 rounded-xl transition-colors"
+                className="p-2 text-zinc-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-xl transition-colors"
                 title="Close"
               >
                 <X className="w-5 h-5" />
@@ -458,15 +458,15 @@ export default function RoomSession() {
             </div>
 
             {/* Search Input */}
-            <div className="p-4 border-b border-zinc-800/80 bg-zinc-900/60 shrink-0">
+            <div className="p-4 border-b border-white/5 bg-[#11121C] shrink-0">
               <div className="relative">
-                <Search className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input 
                   type="text"
                   placeholder="Search song title, artist, or album..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500"
+                  className="w-full bg-[#0A0B10] border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-[#FF4FA3] focus:ring-1 focus:ring-[#FF4FA3]"
                 />
               </div>
             </div>
@@ -483,11 +483,22 @@ export default function RoomSession() {
                 return (
                   <div 
                     key={song.id}
-                    className="p-3.5 bg-zinc-950/60 hover:bg-zinc-800/60 border border-zinc-800/80 rounded-xl flex items-center justify-between gap-3 transition-colors group"
+                    className="p-3.5 bg-[#0D0E15] hover:bg-[#1A1C2C] border border-white/5 rounded-2xl flex items-center justify-between gap-3 transition-colors group"
                   >
                     <div className="flex items-center gap-3 min-w-0 flex-1">
-                      <div className="w-10 h-10 rounded-lg bg-zinc-800 border border-zinc-700 flex items-center justify-center shrink-0">
-                        <Music className="w-5 h-5 text-emerald-400" />
+                      <div className="w-10 h-10 rounded-xl bg-[#1C1E2D] border border-white/5 flex items-center justify-center shrink-0 overflow-hidden">
+                        {song.hasArtwork ? (
+                          <img
+                            src={`/api/songs/${song.id}/artwork`}
+                            alt={song.title}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              (e.target as HTMLElement).style.display = 'none';
+                            }}
+                          />
+                        ) : (
+                          <Music className="w-5 h-5 text-zinc-400 group-hover:text-[#FF4FA3] transition-colors" />
+                        )}
                       </div>
                       <div className="min-w-0">
                         <h4 className="font-medium text-sm text-white truncate">{song.title}</h4>
@@ -501,17 +512,17 @@ export default function RoomSession() {
 
                     <div className="flex items-center gap-2 shrink-0">
                       {song.hasLrc && (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/25">
                           LRC
                         </span>
                       )}
                       <button
                         onClick={() => handleAddSongToQueue(song.id)}
                         disabled={isAdding || isAdded}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all ${
+                        className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
                           isAdded 
-                            ? 'bg-emerald-600 text-white' 
-                            : 'bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white border border-emerald-500/30'
+                            ? 'bg-[#FF4FA3] text-white' 
+                            : 'bg-[#FF4FA3]/15 hover:bg-[#FF4FA3] text-[#FF4FA3] hover:text-white border border-[#FF4FA3]/30'
                         }`}
                       >
                         {isAdded ? (
@@ -541,94 +552,116 @@ export default function RoomSession() {
         </div>
       )}
 
-      {/* Left / Main Player Stage */}
-      <div className="flex-1 flex flex-col border-r border-zinc-800/80 relative">
+      {/* Left / Main Stage */}
+      <div className="flex-1 flex flex-col border-r border-white/5 relative min-w-0">
         {/* Top Room Banner */}
-        <div className="px-6 py-4 border-b border-zinc-800 bg-zinc-900/60 backdrop-blur flex items-center justify-between z-10">
+        <div className="px-6 py-4 border-b border-white/5 bg-[#11121A]/80 backdrop-blur-md flex items-center justify-between z-10 shrink-0">
           <div className="flex items-center gap-4">
             <button 
               onClick={() => navigate('/rooms')}
-              className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors"
+              className="p-2 hover:bg-white/5 rounded-xl text-zinc-400 hover:text-white transition-colors"
               title="Back to Rooms"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
             <div>
-              <span className="text-xs text-zinc-400 uppercase tracking-widest font-semibold block">Karaoke Room</span>
+              <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-bold block">Karaoke Room</span>
               <div className="flex items-center gap-3">
-                <span className="text-xl font-mono font-bold text-emerald-400 tracking-wider">
+                <span className="text-xl font-mono font-black text-white tracking-widest">
                   {session?.roomCode}
                 </span>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-medium border border-emerald-500/20 flex items-center gap-1.5">
-                  <Radio className="w-3 h-3 animate-pulse" /> Live Session
+                <span className="px-2.5 py-0.5 rounded-full bg-[#FF4FA3]/15 text-[#FF4FA3] text-xs font-semibold border border-[#FF4FA3]/30 flex items-center gap-1.5">
+                  <Radio className="w-3 h-3 animate-pulse" /> Live Room
                 </span>
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${isHost ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'}`}>
-              {isHost ? 'Host Mode' : 'Singer / Guest Mode'}
+            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+              isHost 
+                ? 'bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/30' 
+                : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
+            }`}>
+              {isHost ? 'Host Display Mode' : 'Singer Controller'}
             </span>
           </div>
         </div>
 
-        {/* Main Stage & Lyrics Viewer */}
-        <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-gradient-to-b from-zinc-900/40 via-zinc-950 to-zinc-950">
+        {/* Main Stage & Lyrics Screen */}
+        <div className="flex-1 flex flex-col items-center justify-center p-6 md:p-10 relative overflow-hidden bg-gradient-to-b from-[#12131F] via-[#0A0B10] to-[#0A0B10]">
+          {/* Ambient glow behind vinyl */}
+          <div className="absolute w-[500px] h-[500px] bg-[#FF4FA3]/10 rounded-full blur-3xl pointer-events-none" />
+
           {currentSong ? (
             <div className="w-full max-w-4xl mx-auto flex flex-col items-center text-center z-10">
               {/* Album Art / Vinyl Graphic */}
-              <div className="w-36 h-36 md:w-48 md:h-48 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl flex items-center justify-center mb-6 relative group overflow-hidden">
-                <Disc className={`w-20 h-20 text-emerald-500 ${playing ? 'animate-spin' : ''}`} style={{ animationDuration: '6s' }} />
-                <div className="absolute inset-0 bg-gradient-to-tr from-emerald-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="w-36 h-36 md:w-48 md:h-48 rounded-3xl bg-[#141622] border border-white/10 shadow-2xl flex items-center justify-center mb-6 relative group overflow-hidden">
+                {currentSong.hasArtwork ? (
+                  <img
+                    src={`/api/songs/${currentSong.songId}/artwork`}
+                    alt={currentSong.songTitle}
+                    className={`w-full h-full object-cover rounded-3xl ${playing ? 'scale-105' : ''} transition-transform duration-700`}
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                ) : (
+                  <Disc 
+                    className={`w-20 h-20 text-[#FF4FA3] ${playing ? 'animate-spin' : ''}`} 
+                    style={{ animationDuration: '6s' }} 
+                  />
+                )}
+                <div className="absolute inset-0 bg-gradient-to-tr from-[#FF4FA3]/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
 
               {/* Song Title & Artist */}
-              <h1 className="text-3xl md:text-5xl font-bold text-white mb-2 tracking-tight">{currentSong.songTitle}</h1>
-              <p className="text-lg md:text-xl text-zinc-400 font-medium mb-6">{currentSong.artistName}</p>
+              <h1 className="text-3xl md:text-5xl font-black text-white mb-2 tracking-tight">{currentSong.songTitle}</h1>
+              <p className="text-lg md:text-xl text-zinc-400 font-medium mb-5">{currentSong.artistName}</p>
 
               {/* Singer Pill */}
-              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-zinc-900 border border-zinc-800 text-sm text-zinc-300 mb-8 shadow-inner">
-                <User className="w-4 h-4 text-emerald-400" />
+              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#141622] border border-white/10 text-xs text-zinc-300 mb-8 shadow-inner">
+                <User className="w-3.5 h-3.5 text-[#FF4FA3]" />
                 <span>Sung by: <strong className="text-white">Singer {currentSong.userId || 'Guest'}</strong></span>
               </div>
 
-              {/* Lyrics Box */}
-              <div className="w-full max-w-2xl bg-zinc-900/80 border border-zinc-800/80 rounded-2xl p-6 shadow-xl backdrop-blur min-h-[180px] max-h-[240px] overflow-y-auto flex flex-col justify-center">
+              {/* High-Contrast Karaoke Lyrics Box */}
+              <div className="w-full max-w-2xl bg-[#12131E]/90 border border-white/10 rounded-3xl p-6 md:p-8 shadow-2xl backdrop-blur-md min-h-[180px] max-h-[260px] overflow-y-auto flex flex-col justify-center">
                 {lyrics.length > 0 ? (
                   <div className="space-y-3">
                     {activeLyricIndex !== -1 && lyrics[activeLyricIndex - 1] && (
-                      <p className="text-zinc-500 text-sm transition-all">{lyrics[activeLyricIndex - 1].text}</p>
+                      <p className="text-zinc-500 text-sm md:text-base transition-all">{lyrics[activeLyricIndex - 1].text}</p>
                     )}
-                    <p className="text-xl md:text-2xl font-bold text-emerald-400 scale-105 transition-all">
-                      {activeLyricIndex !== -1 ? lyrics[activeLyricIndex].text : (lyrics[0]?.text || 'Get ready...')}
+                    <p className="text-2xl md:text-3xl font-black text-[#FF4FA3] tracking-wide scale-105 transition-all drop-shadow-md">
+                      {activeLyricIndex !== -1 ? lyrics[activeLyricIndex].text : (lyrics[0]?.text || 'Get ready to sing...')}
                     </p>
                     {activeLyricIndex !== -1 && lyrics[activeLyricIndex + 1] && (
-                      <p className="text-zinc-400 text-sm transition-all">{lyrics[activeLyricIndex + 1].text}</p>
+                      <p className="text-zinc-400 text-sm md:text-base transition-all">{lyrics[activeLyricIndex + 1].text}</p>
                     )}
                   </div>
                 ) : (
                   <div className="text-zinc-500 text-sm py-8 flex flex-col items-center gap-2">
-                    <FileText className="w-6 h-6 opacity-40" />
-                    <span>Lyrics unavailable for this song</span>
+                    <FileText className="w-6 h-6 opacity-40 text-zinc-400" />
+                    <span>Synchronized lyrics not available for this track</span>
                   </div>
                 )}
               </div>
             </div>
           ) : (
             <div className="text-center z-10 py-16">
-              <div className="w-20 h-20 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto mb-4">
+              <div className="w-20 h-20 rounded-3xl bg-[#141622] border border-white/10 flex items-center justify-center mx-auto mb-4 shadow-xl">
                 <Music className="w-10 h-10 text-zinc-600" />
               </div>
-              <h2 className="text-2xl font-bold text-zinc-300 mb-2">Queue is Empty</h2>
-              <p className="text-zinc-500 text-sm max-w-md mx-auto mb-6">
-                No songs are currently playing. Browse the song catalog to start your karaoke party!
+              <h2 className="text-2xl font-bold text-white mb-2">Queue is Empty</h2>
+              <p className="text-zinc-400 text-xs md:text-sm max-w-md mx-auto mb-6">
+                No songs are currently playing in this room. Browse the song catalog to queue up tracks!
               </p>
               <button
                 onClick={() => setShowLibrary(true)}
-                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-xl transition-colors inline-flex items-center gap-2 text-sm shadow-lg shadow-emerald-950/40"
+                className="px-6 py-3 bg-[#FF4FA3] hover:bg-[#ff69b2] text-white font-semibold rounded-xl transition-all inline-flex items-center gap-2 text-sm shadow-lg shadow-[#FF4FA3]/25"
               >
-                <Plus className="w-4 h-4" /> Add First Song
+                <Plus className="w-4 h-4" />
+                <span>Add First Song</span>
               </button>
             </div>
           )}
@@ -667,35 +700,35 @@ export default function RoomSession() {
 
         {/* Bottom Control Bar */}
         {isHost ? (
-          <div className="p-6 bg-zinc-900 border-t border-zinc-800 flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="p-5 md:p-6 bg-[#11121A] border-t border-white/5 flex flex-col md:flex-row items-center justify-between gap-4 shrink-0">
             <div className="flex items-center gap-3 w-full md:w-auto justify-center md:justify-start">
-              {/* Instrumental Toggle */}
+              {/* Instrumental Toggle Switch */}
               <button 
                 onClick={handleToggleInstrumental}
-                className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all border ${
+                className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all border ${
                   variant === 'instrumental' 
-                    ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg shadow-emerald-900/20' 
-                    : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'
+                    ? 'bg-[#FF4FA3] text-white border-[#FF4FA3] shadow-lg shadow-[#FF4FA3]/20' 
+                    : 'bg-[#181926] text-zinc-300 border-white/10 hover:bg-[#222436]'
                 }`}
                 title="Switch between Original Vocal and Instrumental version"
               >
-                <Music className="w-4 h-4" />
+                <Music className="w-3.5 h-3.5" />
                 <span>Instrumental: {variant === 'instrumental' ? 'ON' : 'OFF'}</span>
               </button>
               
-              {/* Lyric Offset Controls */}
-              <div className="flex items-center gap-1 bg-zinc-950 px-3 py-1.5 rounded-xl border border-zinc-800 text-xs">
-                <span className="text-zinc-400 mr-1 font-medium">Offset:</span>
+              {/* Lyric Offset Tuner */}
+              <div className="flex items-center gap-1 bg-[#0A0B10] px-3 py-1.5 rounded-xl border border-white/10 text-xs">
+                <span className="text-zinc-500 mr-1 font-medium">Offset:</span>
                 <button 
                   onClick={() => handleOffsetChange(-250)}
-                  className="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded transition-colors"
+                  className="px-2 py-0.5 bg-[#1C1E2D] hover:bg-[#25283C] text-white rounded-lg transition-colors font-medium"
                 >
                   -250ms
                 </button>
-                <span className="px-2 font-mono text-emerald-400 font-bold">{lyricOffset > 0 ? `+${lyricOffset}` : lyricOffset}ms</span>
+                <span className="px-2 font-mono text-[#FF4FA3] font-bold">{lyricOffset > 0 ? `+${lyricOffset}` : lyricOffset}ms</span>
                 <button 
                   onClick={() => handleOffsetChange(250)}
-                  className="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded transition-colors"
+                  className="px-2 py-0.5 bg-[#1C1E2D] hover:bg-[#25283C] text-white rounded-lg transition-colors font-medium"
                 >
                   +250ms
                 </button>
@@ -707,102 +740,117 @@ export default function RoomSession() {
               <button 
                 onClick={handleRestart}
                 disabled={!currentSong}
-                className="p-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-full transition-colors disabled:opacity-40"
-                title="Restart song"
+                className="p-3 bg-[#181926] hover:bg-[#222436] text-white rounded-full transition-colors disabled:opacity-30 border border-white/5"
+                title="Restart track"
               >
-                <RotateCcw className="w-5 h-5" />
+                <RotateCcw className="w-4 h-4" />
               </button>
               
               <button 
                 onClick={togglePlay}
                 disabled={!currentSong}
-                className="w-14 h-14 bg-white hover:bg-zinc-200 text-black rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95 shadow-lg disabled:opacity-40"
+                className="w-14 h-14 bg-white hover:bg-zinc-200 text-black rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95 shadow-xl disabled:opacity-30"
                 title={playing ? 'Pause' : 'Play'}
               >
-                {playing ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6 ml-1" />}
+                {playing ? <Pause className="w-6 h-6 fill-black" /> : <Play className="w-6 h-6 fill-black ml-1" />}
               </button>
 
               <button 
                 onClick={handleSkip}
                 disabled={!currentSong}
-                className="p-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-full transition-colors disabled:opacity-40"
-                title="Skip song"
+                className="p-3 bg-[#181926] hover:bg-[#222436] text-white rounded-full transition-colors disabled:opacity-30 border border-white/5"
+                title="Skip track"
               >
-                <SkipForward className="w-5 h-5" />
+                <SkipForward className="w-4 h-4" />
               </button>
             </div>
 
             <button
               onClick={() => setShowLibrary(true)}
-              className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium rounded-xl transition-colors flex items-center gap-1.5"
+              className="px-4 py-2.5 bg-[#FF4FA3]/15 hover:bg-[#FF4FA3] text-[#FF4FA3] hover:text-white border border-[#FF4FA3]/30 text-xs font-semibold rounded-xl transition-all flex items-center gap-1.5"
             >
-              <Plus className="w-4 h-4 text-emerald-400" />
-              Add Songs
+              <Plus className="w-4 h-4" />
+              <span>Add Songs</span>
             </button>
           </div>
         ) : (
-          <div className="p-6 bg-zinc-900 border-t border-zinc-800 flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
+          /* Singer / Guest Controller View (Mobile WebView optimized) */
+          <div className="p-5 bg-[#11121A] border-t border-white/5 flex flex-col md:flex-row items-center justify-between gap-4 shrink-0">
+            <div className="flex items-center gap-3 w-full md:w-auto">
               <button
                 onClick={() => setShowLibrary(true)}
-                className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-xl transition-colors flex items-center gap-2 shadow-lg shadow-emerald-950/40"
+                className="w-full md:w-auto px-6 py-3.5 bg-[#FF4FA3] hover:bg-[#ff69b2] text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#FF4FA3]/25"
               >
                 <LibraryIcon className="w-5 h-5" />
-                Browse Song Catalog
+                <span>Browse & Queue Songs</span>
               </button>
-              <div className="text-sm text-zinc-400 hidden sm:block">Find and add your favorite songs to the queue</div>
             </div>
-            <div className="text-xs text-zinc-500 font-medium hidden lg:block">
-              Listening & lyrics synchronized with room
+            <div className="text-xs text-zinc-500 font-medium text-center md:text-right">
+              Lyrics & Queue synchronized live with host screen
             </div>
           </div>
         )}
       </div>
 
       {/* Right Sidebar: Up Next Queue */}
-      <div className="w-full lg:w-96 bg-zinc-900 flex flex-col h-full border-t lg:border-t-0 border-zinc-800">
-        <div className="p-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-950/40">
+      <div className="w-full lg:w-96 bg-[#11121A] flex flex-col h-auto lg:h-full border-t lg:border-t-0 border-white/5 shrink-0">
+        <div className="p-4 border-b border-white/5 flex items-center justify-between bg-[#0E0F17]">
           <div className="flex items-center gap-2">
-            <Sliders className="w-5 h-5 text-emerald-400" />
-            <h2 className="font-semibold text-white">Up Next Queue</h2>
+            <Sliders className="w-4 h-4 text-[#FF4FA3]" />
+            <h2 className="font-bold text-sm text-white">Up Next Queue</h2>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs bg-zinc-800 px-2.5 py-1 rounded-full text-zinc-300 font-medium">{queue.length} songs</span>
+            <span className="text-xs bg-[#1C1E2D] px-2.5 py-0.5 rounded-full text-zinc-300 font-medium border border-white/5">{queue.length} songs</span>
             <button
               onClick={() => setShowLibrary(true)}
-              className="p-1.5 bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded-lg transition-colors"
+              className="p-1.5 bg-[#FF4FA3]/15 hover:bg-[#FF4FA3] text-[#FF4FA3] hover:text-white rounded-lg transition-colors border border-[#FF4FA3]/30"
               title="Add Song"
             >
-              <Plus className="w-4 h-4" />
+              <Plus className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="flex-1 overflow-y-auto p-4 space-y-2.5 max-h-[350px] lg:max-h-none">
           {queue.map((item, index) => {
             const isCurrentPlaying = item.status === 'playing' || index === 0;
             return (
               <div 
                 key={item.id} 
-                className={`p-3.5 rounded-xl border transition-all flex items-start justify-between gap-3 ${
+                className={`p-3.5 rounded-2xl border transition-all flex items-center justify-between gap-3 ${
                   isCurrentPlaying 
-                    ? 'bg-emerald-950/20 border-emerald-500/40 shadow-md' 
-                    : 'bg-zinc-950 border-zinc-800/60 hover:border-zinc-700'
+                    ? 'bg-[#181524] border-[#FF4FA3]/40 shadow-lg shadow-[#FF4FA3]/10' 
+                    : 'bg-[#141622] border-white/5 hover:border-white/10'
                 }`}
               >
+                <div className="w-10 h-10 rounded-xl bg-[#1C1E2D] border border-white/5 flex items-center justify-center shrink-0 overflow-hidden">
+                  {item.hasArtwork ? (
+                    <img
+                      src={`/api/songs/${item.songId}/artwork`}
+                      alt={item.songTitle}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                  ) : (
+                    <Music className="w-4 h-4 text-zinc-400" />
+                  )}
+                </div>
+
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
+                  <div className="flex items-center gap-2 mb-0.5">
                     <span className="text-xs font-mono text-zinc-500">#{index + 1}</span>
-                    <h3 className="font-medium text-sm text-white truncate">{item.songTitle}</h3>
+                    <h3 className="font-semibold text-sm text-white truncate">{item.songTitle}</h3>
                     {isCurrentPlaying && (
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-emerald-500 text-black">
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3] text-white shrink-0">
                         Playing
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-zinc-400 truncate mb-2">{item.artistName}</p>
+                  <p className="text-xs text-zinc-400 truncate mb-1">{item.artistName}</p>
                   <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
-                    <User className="w-3 h-3 text-emerald-400" />
+                    <User className="w-3 h-3 text-[#FF4FA3]" />
                     <span>Singer {item.userId || 'Guest'}</span>
                   </div>
                 </div>
@@ -822,4 +870,3 @@ export default function RoomSession() {
     </div>
   );
 }
-
