@@ -22,6 +22,13 @@
       "when": 1787360595346,
       "tag": "0002_cynical_quentin_quire",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1787370000000,
+      "tag": "0003_media_upgrade",
+      "breakpoints": true
     }
   ]
 }
