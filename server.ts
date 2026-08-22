@@ -3,7 +3,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import cookieParser from 'cookie-parser';
-import { setupDatabase, db } from './server/db/index.js';
+import { setupDatabase, db, databaseCorrupted, databaseErrorMessage } from './server/db/index.js';
 import { users } from './server/db/schema.js';
 import fs from 'fs';
 import path from 'path';
@@ -32,6 +32,14 @@ setupDatabase().then(async () => {
 
 // Health Check
 app.get('/health', (req, res) => {
+  if (databaseCorrupted) {
+    return res.status(503).json({
+      status: 'unhealthy',
+      version: '1.0.0',
+      database: 'corrupted',
+      error: databaseErrorMessage || 'Database corruption detected. Manual recovery required.'
+    });
+  }
   res.json({
     status: 'ok',
     version: '1.0.0',

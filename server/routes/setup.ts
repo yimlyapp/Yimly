@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { db } from '../db/index.js';
+import { db, databaseCorrupted, databaseErrorMessage } from '../db/index.js';
 import { users } from '../db/schema.js';
 import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
@@ -13,6 +13,9 @@ const setupSchema = z.object({
 });
 
 router.get('/status', async (req, res) => {
+  if (databaseCorrupted) {
+    return res.status(503).json({ error: databaseErrorMessage || 'Database corruption detected. Manual recovery required.' });
+  }
   try {
     const adminExists = await db.select().from(users).where(eq(users.role, 'administrator')).limit(1);
     const isSetup = adminExists.length > 0;
@@ -24,6 +27,9 @@ router.get('/status', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
+  if (databaseCorrupted) {
+    return res.status(503).json({ error: databaseErrorMessage || 'Database corruption detected. Manual recovery required.' });
+  }
   try {
     const adminExists = await db.select().from(users).where(eq(users.role, 'administrator')).limit(1);
     if (adminExists.length > 0) {

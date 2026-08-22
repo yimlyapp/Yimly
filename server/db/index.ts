@@ -11,16 +11,83 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-export const sqlite = createClient({
-  url: `file:${path.join(dataDir, 'yimly.db')}`,
+const dbPath = path.join(dataDir, 'yimly.db');
+
+export let sqlite = createClient({
+  url: `file:${dbPath}`,
 });
 
-export const db = drizzle(sqlite, { schema });
+export let db = drizzle(sqlite, { schema });
 
-// Run migrations on startup
+export let databaseCorrupted = false;
+export let databaseErrorMessage: string | null = null;
+
+// Run migrations on startup and check for corruption
 export async function setupDatabase() {
-  // we will run this from index.ts or server.ts
   const migrationsFolder = path.resolve(process.cwd(), 'server/db/migrations');
+  
+  let isCorrupt = false;
+  let corruptionReason = '';
+
+  try {
+    // Configure robust SQLite pragmas for stability and corruption prevention
+    await sqlite.execute('PRAGMA journal_mode = WAL;');
+    await sqlite.execute('PRAGMA synchronous = NORMAL;');
+    await sqlite.execute('PRAGMA busy_timeout = 5000;');
+
+    const result = await sqlite.execute('PRAGMA integrity_check;');
+    if (result.rows && result.rows.length > 0) {
+      const val = Object.values(result.rows[0])[0];
+      if (val !== 'ok') {
+        corruptionReason = `PRAGMA integrity_check returned: ${val}`;
+        isCorrupt = true;
+      }
+    }
+  } catch (err: any) {
+    if (err && (err.message?.includes('CORRUPT') || err.message?.includes('malformed') || err.code === 'SQLITE_CORRUPT')) {
+      corruptionReason = err.message || 'SQLITE_CORRUPT error during integrity check';
+      isCorrupt = true;
+    }
+  }
+
+  if (!isCorrupt) {
+    try {
+      await db.select().from(schema.users).limit(1);
+    } catch (err: any) {
+      if (err && (err.message?.includes('CORRUPT') || err.message?.includes('malformed') || err.code === 'SQLITE_CORRUPT')) {
+        corruptionReason = err.message || 'SQLITE_CORRUPT error querying users table';
+        isCorrupt = true;
+      }
+    }
+  }
+
+  if (isCorrupt) {
+    databaseCorrupted = true;
+    databaseErrorMessage = `Database corruption detected: ${corruptionReason}. Manual database recovery required.`;
+
+    console.error('========================================================================');
+    console.error('🚨 CRITICAL DATABASE CORRUPTION ERROR');
+    console.error(`Database Path: ${dbPath}`);
+    console.error(`Reason: ${corruptionReason}`);
+    console.error('Action taken: Stopped database initialization. Preserved original database.');
+    console.error('A timestamped backup copy has been created for diagnostic purposes.');
+    console.error('MANUAL DATABASE RECOVERY IS REQUIRED. Do not delete or overwrite data.');
+    console.error('========================================================================');
+
+    try {
+      if (fs.existsSync(dbPath)) {
+        const backupPath = `${dbPath}.corrupt.${Date.now()}`;
+        fs.copyFileSync(dbPath, backupPath);
+        console.log(`📁 Created timestamped backup copy of corrupted database at: ${backupPath}`);
+      }
+    } catch (backupErr) {
+      console.error('Failed to create backup copy of corrupted database:', backupErr);
+    }
+
+    // Stop normal database initialization. Do NOT create a new empty database, do NOT run migrations.
+    return;
+  }
+
   // Check if migrations folder exists before running migrate to avoid crashing if it's not generated yet
   if (fs.existsSync(migrationsFolder)) {
     try {
