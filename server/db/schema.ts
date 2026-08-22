@@ -14,6 +14,7 @@ export const sessions = sqliteTable('sessions', {
   roomCode: text('room_code').notNull().unique(),
   hostId: integer('host_id').references(() => users.id).notNull(),
   hostDevice: text('host_device').notNull(),
+  status: text('status', { enum: ['active', 'closed'] }).notNull().default('active'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 });

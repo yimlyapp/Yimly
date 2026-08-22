@@ -50,7 +50,7 @@ export default function RoomSession() {
     fetchState();
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(`${protocol}//${window.location.host}/ws/karaoke?sessionId=${sessionId}`);
+    const socket = new WebSocket(`${protocol}//${window.location.host}/ws/karaoke?sessionId=${sessionId}&isHost=${isHost}`);
     
     socket.onmessage = (event) => {
       try {
@@ -97,6 +97,10 @@ export default function RoomSession() {
             break;
           case 'OFFSET_CHANGED':
             setLyricOffset(msg.payload.offset);
+            break;
+          case 'SESSION_CLOSED':
+            alert('The host has closed the session.');
+            window.location.href = '/';
             break;
         }
       } catch (err) {

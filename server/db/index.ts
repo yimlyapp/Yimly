@@ -4,6 +4,7 @@ import * as schema from './schema.js';
 import fs from 'fs';
 import path from 'path';
 import { migrate } from 'drizzle-orm/libsql/migrator';
+import { eq } from 'drizzle-orm';
 
 // Ensure data directory exists
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
@@ -98,5 +99,13 @@ export async function setupDatabase() {
     }
   } else {
     console.warn('Migrations folder not found, skipping migrations.');
+  }
+
+  // Cleanup any sessions that were left active when the server last shut down/crashed
+  try {
+    await db.update(schema.sessions).set({ status: 'closed' }).where(eq(schema.sessions.status, 'active'));
+    console.log('Cleaned up stale sessions on startup.');
+  } catch (error) {
+    console.error('Failed to cleanup stale sessions on startup:', error);
   }
 }

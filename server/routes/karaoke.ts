@@ -18,7 +18,11 @@ router.post('/sessions', async (req, res) => {
     const user = (req as any).user;
     const device = req.headers['user-agent'] || 'Unknown Device';
     
-    // Deactivate previous sessions hosted by this user? For now just create a new one.
+    // Close previous sessions hosted by this user to prevent stale sessions
+    await db.update(sessions)
+      .set({ status: 'closed' })
+      .where(and(eq(sessions.hostId, user.id), eq(sessions.status, 'active')));
+      
     const sessionId = crypto.randomUUID();
     let roomCode = generateRoomCode();
     
@@ -52,9 +56,9 @@ router.post('/sessions/join', async (req, res) => {
     const user = (req as any).user;
     const device = req.headers['user-agent'] || 'Unknown Device';
 
-    const session = await db.select().from(sessions).where(eq(sessions.roomCode, roomCode)).limit(1);
+    const session = await db.select().from(sessions).where(and(eq(sessions.roomCode, roomCode), eq(sessions.status, 'active'))).limit(1);
     if (session.length === 0) {
-      return res.status(404).json({ error: 'Room not found' });
+      return res.status(404).json({ error: 'Room not found or inactive' });
     }
 
     const controllerId = crypto.randomUUID();
@@ -74,8 +78,8 @@ router.post('/sessions/join', async (req, res) => {
 
 router.get('/active-sessions', async (req, res) => {
   try {
-    // List all sessions for now
-    const active = await db.select().from(sessions);
+    // Only return active sessions
+    const active = await db.select().from(sessions).where(eq(sessions.status, 'active'));
     res.json(active);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch sessions' });
@@ -86,9 +90,9 @@ router.get('/sessions/:sessionId/state', async (req, res) => {
   try {
     const { sessionId } = req.params;
     
-    const session = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    const session = await db.select().from(sessions).where(and(eq(sessions.id, sessionId), eq(sessions.status, 'active'))).limit(1);
     if (session.length === 0) {
-      return res.status(404).json({ error: 'Session not found' });
+      return res.status(404).json({ error: 'Session not found or inactive' });
     }
 
     const queue = await db.select({
