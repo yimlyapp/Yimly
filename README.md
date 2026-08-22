@@ -4,14 +4,33 @@ A lightweight, self-hosted karaoke media server and web application. Yimly index
 
 ---
 
-## Production Deployment (Docker)
+## Production Deployment (Docker & Cloudflare Tunnel)
 
-Yimly is pre-configured with Docker and Docker Compose for production deployment on Windows, Linux, and macOS servers.
+Yimly is pre-configured with Docker and Docker Compose for production deployment, securely integrated with the external Cloudflare Docker network (`cloudflared_bridge`).
+
+### Network Architecture & Routing
+
+```text
+Public Domain
+    ↓
+Cloudflare Tunnel
+    ↓
+cloudflared_bridge (External Docker Network)
+    ↓
+Yimly (Network Alias: yimly)
+    ↓
+http://yimly:3000
+```
+
+* **Cloudflare Tunnel Target:** Configure your Cloudflare Tunnel service target to `http://yimly:3000`.
+* **External Network:** Yimly attaches to the existing external Docker network `cloudflared_bridge` with the network alias `yimly`. No host ports are published; internal traffic is routed securely via Docker bridge networking.
+* **WebSockets:** Real-time WebSocket connections for lyrics synchronization and queue management operate seamlessly through the Cloudflare public domain.
 
 ### Prerequisites
 
 * [Docker Desktop](https://www.docker.com/products/docker-desktop/) (with Docker Compose)
 * [Git](https://git-scm.com/)
+* External Cloudflare network `cloudflared_bridge` pre-created by infrastructure.
 
 ---
 
@@ -23,8 +42,6 @@ Yimly is pre-configured with Docker and Docker Compose for production deployment
    cd yimly
    ```
 
-   *If using a private GitHub repository, ensure your Git credentials or SSH key are configured (e.g. Git Credential Manager for Windows).*
-
 2. **Configure environment variables:**
    Copy `.env.example` to `.env` and configure your settings:
    ```bash
@@ -32,7 +49,6 @@ Yimly is pre-configured with Docker and Docker Compose for production deployment
    ```
    Edit `.env` and set a strong `JWT_SECRET`:
    ```env
-   PORT=3000
    JWT_SECRET=your_long_random_secret_here
    DATA_PATH=./data
    MEDIA_PATH=./media
@@ -46,13 +62,14 @@ Yimly is pre-configured with Docker and Docker Compose for production deployment
 
    This script will:
    * Verify Docker & Docker Compose
+   * Verify the existence of the external `cloudflared_bridge` network
    * Create `./data` and `./media` directories (preserving any existing data)
    * Build the Docker image
-   * Start the container in detached mode
-   * Verify the `/health` endpoint
+   * Start the container in detached mode on `cloudflared_bridge`
+   * Verify container health status
 
 4. **Access the application:**
-   Open [http://localhost:3000](http://localhost:3000) in your web browser.
+   * Access Yimly securely via your configured Cloudflare Tunnel domain.
    * On first run, create your initial Administrator account.
 
 ---
@@ -72,7 +89,7 @@ Or double-click `update-yimly.bat` in File Explorer.
 2. Rebuilds the Docker image (`docker compose build`)
 3. Restarts the container with minimal downtime (`docker compose up -d`)
 4. Cleans up obsolete build artifacts safely (`docker image prune -f`)
-5. Verifies server health via `/health`
+5. Verifies container health
 
 > **Note on Data Safety:** The update script **never** deletes or resets your SQLite database (`./data/yimly.db`) or media library (`./media`).
 
@@ -83,16 +100,17 @@ Or double-click `update-yimly.bat` in File Explorer.
 To deploy or update on Linux/macOS:
 
 ```bash
-# First time deployment
+# First time deployment (ensure cloudflared_bridge network exists)
+docker network inspect cloudflared_bridge
 mkdir -p data media
 cp .env.example .env
 # Edit .env and configure JWT_SECRET
-docker compose up -d --build
+docker compose -f compose.yaml up -d --build
 
 # Updating
 git pull
-docker compose build
-docker compose up -d
+docker compose -f compose.yaml build
+docker compose -f compose.yaml up -d
 docker image prune -f
 ```
 
@@ -109,7 +127,7 @@ yimly/
 │   ├── Artist - Title (Instrumental).mp3
 │   └── Artist - Title.lrc
 ├── Dockerfile             # Multi-stage production container definition
-├── docker-compose.yml     # Compose configuration
+├── compose.yaml           # Authoritative Docker Compose configuration
 ├── deploy-yimly.bat       # Windows initial deployment script
 ├── update-yimly.bat       # Windows 1-click update script
 ├── .env                   # Local secrets (git-ignored)

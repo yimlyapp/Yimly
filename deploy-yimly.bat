@@ -11,8 +11,8 @@ echo.
 :: Step 1: Change directory to project root
 cd /d "%~dp0"
 
-:: Step 2: Check prerequisites
-echo [1/5] Checking Docker prerequisites...
+:: Step 2: Check Docker prerequisites
+echo [1/6] Checking Docker prerequisites...
 where docker >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Docker is not installed or not found in PATH.
@@ -38,8 +38,22 @@ if %ERRORLEVEL% neq 0 (
 echo Docker is available.
 echo.
 
-:: Step 3: Create persistent directories safely
-echo [2/5] Preparing persistent directories...
+:: Step 3: Verify external Cloudflare network exists
+echo [2/6] Verifying external Cloudflare network 'cloudflared_bridge'...
+docker network inspect cloudflared_bridge >nul 2>&1
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] External Docker network 'cloudflared_bridge' does not exist.
+    echo Please ensure the Cloudflare tunnel infrastructure and 'cloudflared_bridge' network are set up.
+    echo Manual Cloudflare network setup is required before deploying Yimly.
+    echo.
+    pause
+    exit /b 1
+)
+echo External network 'cloudflared_bridge' verified.
+echo.
+
+:: Step 4: Create persistent directories safely
+echo [3/6] Preparing persistent directories...
 if not exist "data" (
     mkdir data
     echo Created persistent directory: .\data
@@ -55,16 +69,15 @@ if not exist "media" (
 )
 echo.
 
-:: Step 4: Check environment configuration
-echo [3/5] Checking environment configuration...
+:: Step 5: Check environment configuration
+echo [4/6] Checking environment configuration...
 if not exist ".env" (
     if exist ".env.example" (
         copy /y ".env.example" ".env" >nul
         echo Created .env from .env.example with default values.
         echo [NOTE] Remember to customize JWT_SECRET in .env for production.
     ) else (
-        echo PORT=3000 > .env
-        echo JWT_SECRET=yimly_production_secret_change_me >> .env
+        echo JWT_SECRET=yimly_production_secret_change_me > .env
         echo DATA_PATH=./data >> .env
         echo MEDIA_PATH=./media >> .env
         echo Created default .env file.
@@ -74,9 +87,9 @@ if not exist ".env" (
 )
 echo.
 
-:: Step 5: Build and start Yimly container
-echo [4/5] Building and launching Yimly with Docker Compose...
-docker compose up -d --build
+:: Step 6: Build and start Yimly container
+echo [5/6] Building and launching Yimly with Docker Compose...
+docker compose -f compose.yaml up -d --build
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Failed to build or start Docker container.
     echo Check Docker Desktop is running and view the error above.
@@ -86,24 +99,22 @@ if %ERRORLEVEL% neq 0 (
 )
 echo.
 
-:: Step 6: Wait for health check
-echo [5/5] Verifying service health...
+:: Step 7: Verify container health using Docker
+echo [6/6] Verifying container health status...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$attempts = 0; $max = 30; $healthy = $false;" ^
-    "Write-Host 'Waiting for Yimly to start...';" ^
+    "Write-Host 'Waiting for Yimly container health check...';" ^
     "while ($attempts -lt $max) {" ^
-    "  try {" ^
-    "    $res = Invoke-RestMethod -Uri 'http://localhost:3000/health' -TimeoutSec 2 -ErrorAction Stop;" ^
-    "    if ($res.status -eq 'ok') { $healthy = $true; break }" ^
-    "  } catch {}" ^
-    "  Start-Sleep -Seconds 1;" ^
+    "  $status = (docker inspect --format='{{json .State.Health.Status}}' yimly 2>$null) -replace '\"','';" ^
+    "  if ($status -eq 'healthy') { $healthy = $true; break }" ^
+    "  Start-Sleep -Seconds 2;" ^
     "  $attempts++;" ^
     "}" ^
     "if ($healthy) {" ^
-    "  Write-Host 'Yimly server is healthy and responding!' -ForegroundColor Green;" ^
+    "  Write-Host 'Yimly container is healthy and operational on cloudflared_bridge!' -ForegroundColor Green;" ^
     "  exit 0;" ^
     "} else {" ^
-    "  Write-Host 'Yimly container started, but health endpoint is still initializing.' -ForegroundColor Yellow;" ^
+    "  Write-Host 'Container is running (checking status via docker compose ps).' -ForegroundColor Yellow;" ^
     "  exit 0;" ^
     "}"
 
@@ -112,12 +123,18 @@ echo ========================================
 echo        YIMLY DEPLOYMENT COMPLETE
 echo ========================================
 echo.
-docker compose ps
+docker compose -f compose.yaml ps
 echo.
-echo Yimly is running at: http://localhost:3000
+echo Yimly Networking Summary:
+echo - Compose Service: yimly
+echo - Docker Network: cloudflared_bridge (external)
+echo - Network Alias: yimly
+echo - Internal Port: 3000
+echo - Published Host Ports: None (Securely bridged via Cloudflare Tunnel)
+echo - Cloudflare Tunnel Target: http://yimly:3000
 echo.
 echo First time setup:
-echo 1. Open http://localhost:3000 in your browser
+echo 1. Access Yimly via your Cloudflare Tunnel public domain
 echo 2. Complete the First-Run Setup to create your Administrator account
 echo 3. Place your MP3 and LRC files into .\media
 echo 4. Go to Settings in Yimly to add and scan the '/media' folder

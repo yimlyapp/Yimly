@@ -6,8 +6,12 @@ services:
     image: yimly:latest
     container_name: yimly
     restart: unless-stopped
-    ports:
-      - "${PORT:-3000}:3000"
+    expose:
+      - "3000"
+    networks:
+      cloudflared_bridge:
+        aliases:
+          - yimly
     environment:
       - NODE_ENV=production
       - PORT=3000
@@ -24,3 +28,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+networks:
+  cloudflared_bridge:
+    external: true
