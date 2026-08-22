@@ -101,22 +101,35 @@ echo.
 
 :: Step 7: Verify container health using Docker
 echo [6/6] Verifying container health status...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$attempts = 0; $max = 30; $healthy = $false;" ^
-    "Write-Host 'Waiting for Yimly container health check...';" ^
-    "while ($attempts -lt $max) {" ^
-    "  $status = (docker inspect --format='{{json .State.Health.Status}}' yimly 2>$null) -replace '\"','';" ^
-    "  if ($status -eq 'healthy') { $healthy = $true; break }" ^
-    "  Start-Sleep -Seconds 2;" ^
-    "  $attempts++;" ^
-    "}" ^
-    "if ($healthy) {" ^
-    "  Write-Host 'Yimly container is healthy and operational on cloudflared_bridge!' -ForegroundColor Green;" ^
-    "  exit 0;" ^
-    "} else {" ^
-    "  Write-Host 'Container is running (checking status via docker compose ps).' -ForegroundColor Yellow;" ^
-    "  exit 0;" ^
-    "}"
+set "HEALTHY=0"
+set "ELAPSED=0"
+
+:HEALTH_LOOP
+if !ELAPSED! geq 60 goto HEALTH_FAILED
+
+set /a "ELAPSED+=5"
+echo Waiting for Yimly health... !ELAPSED!s
+timeout /t 5 >nul
+
+for /f "delims=" %%s in ('docker inspect --format="{{.State.Health.Status}}" yimly 2^>nul') do (
+    if "%%s"=="healthy" (
+        set "HEALTHY=1"
+        goto HEALTH_PASSED
+    )
+    if "%%s"=="unhealthy" (
+        goto HEALTH_FAILED
+    )
+)
+goto HEALTH_LOOP
+
+:HEALTH_FAILED
+echo Yimly health check: FAILED
+docker compose -f compose.yaml ps
+docker compose -f compose.yaml logs --tail=100 yimly
+exit /b 1
+
+:HEALTH_PASSED
+echo Yimly health check: HEALTHY
 
 echo.
 echo ========================================

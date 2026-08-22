@@ -8,11 +8,8 @@ echo         YIMLY UPDATE
 echo ========================================
 echo.
 
-:: Step 1: Change to script directory
-cd /d "%~dp0"
-
-:: [1/6] Checking repository and Docker...
-echo [1/6] Checking repository and Docker...
+:: [1/5] Checking repository...
+echo [1/5] Checking repository...
 where git >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Git is not installed or not found in PATH.
@@ -44,25 +41,19 @@ if %ERRORLEVEL% neq 0 (
     )
 )
 
-echo Repository and Docker verified.
-echo.
-
-:: [2/6] Verifying external Cloudflare network exists...
-echo [2/6] Verifying external Cloudflare network 'cloudflared_bridge'...
 docker network inspect cloudflared_bridge >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] External Docker network 'cloudflared_bridge' does not exist.
-    echo Please ensure the Cloudflare tunnel infrastructure and 'cloudflared_bridge' network are set up.
     echo Manual Cloudflare network setup is required.
     echo.
     pause
     exit /b 1
 )
-echo External network 'cloudflared_bridge' verified.
+echo Repository and Docker verified.
 echo.
 
-:: [3/6] Pulling latest GitHub changes...
-echo [3/6] Pulling latest GitHub changes...
+:: [2/5] Pulling latest GitHub changes...
+echo [2/5] Pulling latest GitHub changes...
 git pull
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Failed to pull changes from remote GitHub repository.
@@ -73,8 +64,8 @@ if %ERRORLEVEL% neq 0 (
 )
 echo.
 
-:: [4/6] Rebuilding Docker image...
-echo [4/6] Rebuilding Docker image...
+:: [3/5] Rebuilding Docker image...
+echo [3/5] Rebuilding Docker image...
 docker compose -f compose.yaml build --pull
 if %ERRORLEVEL% neq 0 (
     echo [WARNING] Build with --pull had a notice, attempting standard build...
@@ -89,9 +80,8 @@ if %ERRORLEVEL% neq 0 (
 )
 echo.
 
-:: [5/6] Restarting Yimly...
-echo [5/6] Restarting Yimly...
-:: Recreate containers without destroying data volumes
+:: [4/5] Restarting Yimly...
+echo [4/5] Restarting Yimly...
 docker compose -f compose.yaml up -d
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Failed to restart Docker containers.
@@ -100,30 +90,41 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-:: Safely prune dangling images from previous builds without touching volumes or active images
 docker image prune -f >nul 2>&1
 echo Container restarted successfully.
 echo.
 
-:: [6/6] Checking container health...
-echo [6/6] Checking container health status...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$attempts = 0; $max = 30; $healthy = $false;" ^
-    "Write-Host 'Waiting for Yimly container health check...';" ^
-    "while ($attempts -lt $max) {" ^
-    "  $status = (docker inspect --format='{{json .State.Health.Status}}' yimly 2>$null) -replace '\"','';" ^
-    "  if ($status -eq 'healthy') { $healthy = $true; break }" ^
-    "  Start-Sleep -Seconds 2;" ^
-    "  $attempts++;" ^
-    "}" ^
-    "if ($healthy) {" ^
-    "  Write-Host 'Health check passed: Yimly container is healthy and online.' -ForegroundColor Green;" ^
-    "  exit 0;" ^
-    "} else {" ^
-    "  Write-Host 'Service is running (checking status via docker compose ps).' -ForegroundColor Yellow;" ^
-    "  exit 0;" ^
-    "}"
+:: [5/5] Checking health...
+echo [5/5] Checking health...
+set "HEALTHY=0"
+set "ELAPSED=0"
 
+:HEALTH_LOOP
+if !ELAPSED! geq 60 goto HEALTH_FAILED
+
+set /a "ELAPSED+=5"
+echo Waiting for Yimly health... !ELAPSED!s
+timeout /t 5 >nul
+
+for /f "delims=" %%s in ('docker inspect --format="{{.State.Health.Status}}" yimly 2^>nul') do (
+    if "%%s"=="healthy" (
+        set "HEALTHY=1"
+        goto HEALTH_PASSED
+    )
+    if "%%s"=="unhealthy" (
+        goto HEALTH_FAILED
+    )
+)
+goto HEALTH_LOOP
+
+:HEALTH_FAILED
+echo Yimly health check: FAILED
+docker compose -f compose.yaml ps
+docker compose -f compose.yaml logs --tail=100 yimly
+exit /b 1
+
+:HEALTH_PASSED
+echo Yimly health check: HEALTHY
 echo.
 echo ========================================
 echo Yimly update complete.
@@ -133,10 +134,10 @@ docker compose -f compose.yaml ps
 echo.
 echo Yimly Networking Summary:
 echo - Compose Service: yimly
-echo - Docker Network: cloudflared_bridge (external)
+echo - Docker Network: cloudflared_bridge
 echo - Network Alias: yimly
 echo - Internal Port: 3000
-echo - Published Host Ports: None (Securely bridged via Cloudflare Tunnel)
+echo - Published Host Ports: None
 echo - Cloudflare Tunnel Target: http://yimly:3000
 echo.
 pause
