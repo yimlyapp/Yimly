@@ -30,6 +30,7 @@ export default function RoomSession() {
   const [showLyricsModal, setShowLyricsModal] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
+  const restorePositionRef = useRef<{ time: number, playing: boolean } | null>(null);
   const isHost = session?.hostId === user?.id;
 
   const fetchState = async () => {
@@ -91,6 +92,12 @@ export default function RoomSession() {
             break;
           case 'VARIANT_CHANGED':
             setVariant(msg.payload.variant);
+            if (msg.payload.position !== undefined) {
+              setCurrentTime(msg.payload.position);
+            }
+            if (msg.payload.playing !== undefined) {
+              setPlaying(msg.payload.playing);
+            }
             break;
           case 'OFFSET_CHANGED':
             setLyricOffset(msg.payload.offset);
@@ -182,10 +189,24 @@ export default function RoomSession() {
       alert('Instrumental version not available for this song.');
       return;
     }
+    
+    const currentPos = audioRef.current ? audioRef.current.currentTime : currentTime;
+    const wasPlaying = playing;
+    
     const newVariant = variant === 'original' ? 'instrumental' : 'original';
     setVariant(newVariant);
+    
+    restorePositionRef.current = { time: currentPos, playing: wasPlaying };
+    
     if (ws) {
-      ws.send(JSON.stringify({ type: 'VARIANT_CHANGED', payload: { variant: newVariant } }));
+      ws.send(JSON.stringify({ 
+        type: 'VARIANT_CHANGED', 
+        payload: { 
+          variant: newVariant,
+          position: currentPos,
+          playing: wasPlaying
+        } 
+      }));
     }
   };
 
@@ -324,6 +345,16 @@ export default function RoomSession() {
               onLoadedMetadata={() => {
                 if (audioRef.current) {
                   setDuration(audioRef.current.duration);
+                  
+                  if (restorePositionRef.current) {
+                    audioRef.current.currentTime = restorePositionRef.current.time;
+                    if (restorePositionRef.current.playing) {
+                      audioRef.current.play().catch(err => console.log('Autoplay prevented:', err));
+                    } else {
+                      audioRef.current.pause();
+                    }
+                    restorePositionRef.current = null;
+                  }
                 }
               }}
               onEnded={handleSongEnded}

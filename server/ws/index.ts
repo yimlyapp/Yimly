@@ -124,7 +124,16 @@ export function setupWebSockets(wss: WebSocketServer) {
             break;
           case 'VARIANT_CHANGED':
             room.variant = data.payload.variant;
-            broadcastToRoom(sessionId, { type: 'VARIANT_CHANGED', payload: { variant: room.variant } });
+            if (data.payload.position !== undefined) room.position = data.payload.position;
+            if (data.payload.playing !== undefined) room.playing = data.payload.playing;
+            broadcastToRoom(sessionId, { 
+              type: 'VARIANT_CHANGED', 
+              payload: { 
+                variant: room.variant,
+                position: room.position,
+                playing: room.playing
+              } 
+            });
             break;
           case 'OFFSET_CHANGED':
             room.lyricOffset = data.payload.offset;
