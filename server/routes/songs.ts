@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
-import { songs, artists, lyrics } from '../db/schema.js';
+import { songs, artists, albums, lyrics } from '../db/schema.js';
 import { eq, like, or } from 'drizzle-orm';
 import { requireAuth } from '../middleware/auth.js';
 import fs from 'fs';
@@ -15,14 +15,21 @@ router.get('/', async (req, res) => {
       title: songs.title,
       artist: artists.name,
       artistId: songs.artistId,
+      album: albums.title,
+      albumId: songs.albumId,
+      duration: songs.duration,
+      variant: songs.variant,
+      genre: songs.genre,
+      year: songs.year,
+      trackNumber: songs.trackNumber,
       hasLrc: lyrics.id
     })
     .from(songs)
     .leftJoin(artists, eq(songs.artistId, artists.id))
+    .leftJoin(albums, eq(songs.albumId, albums.id))
     .leftJoin(lyrics, eq(songs.id, lyrics.songId))
-    .limit(100);
+    .limit(500);
 
-    // Grouping boolean hasLrc
     const formatted = allSongs.map(s => ({
       ...s,
       hasLrc: !!s.hasLrc
@@ -40,24 +47,73 @@ router.get('/search', async (req, res) => {
     if (!q) return res.json([]);
 
     const searchStr = `%${q}%`;
-    const searchResults = await db.select({
+    const searchSongs = await db.select({
       id: songs.id,
       title: songs.title,
       artist: artists.name,
+      album: albums.title,
     })
     .from(songs)
     .leftJoin(artists, eq(songs.artistId, artists.id))
+    .leftJoin(albums, eq(songs.albumId, albums.id))
     .where(
       or(
         like(songs.title, searchStr),
-        like(artists.name, searchStr)
+        like(artists.name, searchStr),
+        like(albums.title, searchStr),
+        like(songs.mainAudioPath, searchStr)
       )
     )
     .limit(20);
 
-    res.json(searchResults);
+    const formatted = searchSongs.map(s => ({
+      type: 'song',
+      ...s
+    }));
+
+    res.json(formatted);
   } catch (error) {
     res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+router.get('/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const songRec = await db.select({
+      id: songs.id,
+      title: songs.title,
+      artistId: songs.artistId,
+      artist: artists.name,
+      albumId: songs.albumId,
+      album: albums.title,
+      duration: songs.duration,
+      variant: songs.variant,
+      genre: songs.genre,
+      year: songs.year,
+      trackNumber: songs.trackNumber,
+      discNumber: songs.discNumber,
+      mainAudioPath: songs.mainAudioPath,
+      instrumentalAudioPath: songs.instrumentalAudioPath,
+      hasInstrumental: songs.instrumentalAudioPath,
+      hasLrc: lyrics.id,
+    })
+    .from(songs)
+    .leftJoin(artists, eq(songs.artistId, artists.id))
+    .leftJoin(albums, eq(songs.albumId, albums.id))
+    .leftJoin(lyrics, eq(songs.id, lyrics.songId))
+    .where(eq(songs.id, id))
+    .limit(1);
+
+    if (songRec.length === 0) return res.status(404).json({ error: 'Song not found' });
+
+    res.json({
+      ...songRec[0],
+      hasLrc: !!songRec[0].hasLrc,
+      hasInstrumental: !!songRec[0].hasInstrumental
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch song details' });
   }
 });
 

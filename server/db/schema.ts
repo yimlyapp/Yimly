@@ -37,12 +37,15 @@ export const libraries = sqliteTable('libraries', {
 export const artists = sqliteTable('artists', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull().unique(),
+  artworkPath: text('artwork_path'),
 });
 
 export const albums = sqliteTable('albums', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   artistId: integer('artist_id').references(() => artists.id).notNull(),
   title: text('title').notNull(),
+  year: integer('year'),
+  artworkPath: text('artwork_path'),
 });
 
 export const songs = sqliteTable('songs', {
@@ -54,6 +57,13 @@ export const songs = sqliteTable('songs', {
   mainAudioPath: text('main_audio_path').notNull(),
   instrumentalAudioPath: text('instrumental_audio_path'),
   duration: integer('duration'), // seconds
+  trackNumber: integer('track_number'),
+  discNumber: integer('disc_number'),
+  genre: text('genre'),
+  year: integer('year'),
+  variant: text('variant').notNull().default('original'),
+  fileSize: integer('file_size'),
+  format: text('format'),
 });
 
 export const lyrics = sqliteTable('lyrics', {

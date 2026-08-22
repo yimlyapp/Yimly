@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
-import { libraries, songs, artists } from '../db/schema.js';
+import { libraries, songs, artists, albums } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { scanLibrary } from '../lib/scanner.js';
@@ -67,10 +67,11 @@ router.get('/stats', async (req, res) => {
   try {
     const songCountResult = await db.select({ count: sql<number>`count(*)` }).from(songs);
     const artistCountResult = await db.select({ count: sql<number>`count(*)` }).from(artists);
+    const albumCountResult = await db.select({ count: sql<number>`count(*)` }).from(albums);
     res.json({ 
       songs: songCountResult[0].count, 
       artists: artistCountResult[0].count, 
-      albums: 0 
+      albums: albumCountResult[0].count 
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch stats' });
