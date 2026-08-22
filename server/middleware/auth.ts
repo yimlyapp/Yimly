@@ -1,0 +1,53 @@
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+import { db } from '../db/index.js';
+import { users } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_for_dev';
+
+export interface AuthenticatedRequest extends Request {
+  user?: {
+    id: number;
+    username: string;
+    role: string;
+  };
+}
+
+export const requireAuth = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  console.log(`[AUTH] authenticated-user request to ${req.originalUrl}`);
+  const token = req.cookies.yimly_token || req.headers.authorization?.split(' ')[1];
+
+  if (!token) {
+    console.log(`[AUTH] authenticated-user failure: No token found. Cookies present: ${Object.keys(req.cookies || {})}`);
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const userResult = await db.select({
+      id: users.id,
+      username: users.username,
+      role: users.role
+    }).from(users).where(eq(users.id, decoded.id)).limit(1);
+
+    if (userResult.length === 0) {
+      console.log(`[AUTH] authenticated-user failure: User not found in DB`);
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    console.log(`[AUTH] authenticated-user success: user ${userResult[0].username} authenticated`);
+    req.user = userResult[0];
+    next();
+  } catch (error) {
+    console.log(`[AUTH] authenticated-user failure: JWT verify failed - ${(error as Error).message}`);
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+};
+
+export const requireAdmin = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  if (req.user?.role !== 'administrator') {
+    return res.status(403).json({ error: 'Forbidden. Administrator access required.' });
+  }
+  next();
+};

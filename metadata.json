@@ -1,0 +1,6 @@
+{
+  "name": "Yimly",
+  "description": "A lightweight, self-hosted karaoke media server and web application.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

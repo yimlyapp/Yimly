@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1787360339586,
+      "tag": "0000_tired_ben_grimm",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787360524936,
+      "tag": "0001_perpetual_skreet",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787360595346,
+      "tag": "0002_cynical_quentin_quire",
+      "breakpoints": true
+    }
+  ]
+}
