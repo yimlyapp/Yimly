@@ -17,6 +17,7 @@ services:
       - PORT=3000
       - JWT_SECRET=${JWT_SECRET:-yimly_production_secure_secret_change_me}
       - DATA_DIR=/app/data
+      - C:/DockerApps/downtify/downloads:/hortify
     volumes:
       # Persistent SQLite database and configuration (never wiped on rebuild)
       - ${DATA_PATH:-./data}:/app/data
