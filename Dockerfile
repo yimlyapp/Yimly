@@ -33,6 +33,9 @@ RUN npm install --omit=dev --ignore-scripts
 # Copy compiled backend and frontend from builder
 COPY --from=builder /app/dist ./dist
 
+# Copy database migrations for production migration runner
+COPY --from=builder /app/server/db/migrations ./server/db/migrations
+
 # Create persistent mount points
 RUN mkdir -p /app/data /media
 
