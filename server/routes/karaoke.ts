@@ -5,6 +5,8 @@ import { eq, and, asc, or } from 'drizzle-orm';
 import { requireAuth } from '../middleware/auth.js';
 import crypto from 'crypto';
 import { notifyQueueUpdate } from '../ws/index.js';
+import { formatArtistDisplay } from '../lib/artist-utils.js';
+import { getSongArtistsMap } from './songs.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -195,10 +197,18 @@ router.get('/sessions/:sessionId/state', async (req, res) => {
     .where(eq(queueItems.sessionId, sessionId))
     .orderBy(asc(queueItems.position));
 
-    const formattedQueue = queue.map(q => ({
-      ...q,
-      hasArtwork: !!q.artworkPath,
-    }));
+    const songIds = queue.map(q => q.songId);
+    const artistsMap = await getSongArtistsMap(songIds);
+
+    const formattedQueue = queue.map(q => {
+      const trackArtists = artistsMap.get(q.songId) || (q.artistName ? [{ id: 0, name: q.artistName }] : []);
+      return {
+        ...q,
+        artistName: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : q.artistName),
+        artists: trackArtists,
+        hasArtwork: !!q.artworkPath,
+      };
+    });
 
     res.json({ session: session[0], queue: formattedQueue });
   } catch (error) {

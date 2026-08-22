@@ -74,6 +74,13 @@ export const lyrics = sqliteTable('lyrics', {
   lrcPath: text('lrc_path').notNull(),
 });
 
+export const songArtists = sqliteTable('song_artists', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  songId: integer('song_id').references(() => songs.id).notNull(),
+  artistId: integer('artist_id').references(() => artists.id).notNull(),
+  position: integer('position').notNull().default(0),
+});
+
 export const queueItems = sqliteTable('queue_items', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   sessionId: text('session_id').references(() => sessions.id).notNull(),

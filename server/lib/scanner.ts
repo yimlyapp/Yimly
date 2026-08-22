@@ -3,9 +3,10 @@ import fsSync from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { db } from '../db/index.js';
-import { libraries, artists, albums, songs, lyrics } from '../db/schema.js';
-import { eq, and, isNull, isNotNull } from 'drizzle-orm';
+import { libraries, artists, albums, songs, lyrics, songArtists } from '../db/schema.js';
+import { eq, and, isNull, isNotNull, inArray, sql } from 'drizzle-orm';
 import * as mm from 'music-metadata';
+import { parseArtists, getOrCreateArtist, syncSongArtists, normalizeMultiArtistsInDatabase } from './artist-utils.js';
 
 // Setup artwork cache directory
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
@@ -76,7 +77,8 @@ export async function saveEmbeddedArtwork(picture: mm.IPicture): Promise<string>
 }
 
 interface ScannedMediaItem {
-  artist: string;
+  artists: string[];
+  albumArtist?: string;
   album: string;
   title: string;
   mainAudio?: string;
@@ -93,9 +95,63 @@ interface ScannedMediaItem {
   artworkPath?: string;
 }
 
+const SUPPORTED_AUDIO_EXTS = new Set([
+  '.mp3',
+  '.flac',
+  '.m4a',
+  '.mp4',
+  '.aac',
+  '.ogg',
+  '.oga',
+  '.opus',
+  '.wav',
+  '.wave',
+  '.wma',
+  '.aiff',
+  '.aif',
+  '.webm',
+]);
+
+/**
+ * Normalizes a base filename for matching (trims whitespace and lowercases).
+ */
+function normalizeBaseName(base: string): string {
+  return base.trim().toLowerCase();
+}
+
+/**
+ * Normalizes title/filename by removing variant tags like (Instrumental), (Karaoke), etc.
+ */
+function cleanVariantFromBaseName(base: string): string {
+  return base.replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim().toLowerCase();
+}
+
 export async function scanLibrary(libraryId: number, dirPath: string) {
   const songsMap = new Map<string, ScannedMediaItem>();
   const foundFilePaths = new Set<string>();
+
+  // Collect audio tracks and LRC files by directory
+  interface DiscoveredAudio {
+    fullPath: string;
+    filename: string;
+    ext: string;
+    baseName: string;
+    cleanBaseName: string;
+    dir: string;
+    songKey: string;
+  }
+
+  interface DiscoveredLrc {
+    fullPath: string;
+    filename: string;
+    baseName: string;
+    cleanBaseName: string;
+    dir: string;
+  }
+
+  const audioList: DiscoveredAudio[] = [];
+  // Map directory path -> Array of discovered LRC files
+  const dirLrcMap = new Map<string, DiscoveredLrc[]>();
 
   async function walk(currentPath: string) {
     if (!fsSync.existsSync(currentPath)) return;
@@ -105,19 +161,20 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
       if (entry.isDirectory()) {
         await walk(fullPath);
       } else if (entry.isFile()) {
-        await processFile(fullPath, entry.name);
+        await processFile(fullPath, entry.name, currentPath);
       }
     }
   }
 
-  async function processFile(fullPath: string, filename: string) {
+  async function processFile(fullPath: string, filename: string, dir: string) {
     const ext = path.extname(filename).toLowerCase();
-    const baseName = path.basename(filename, ext);
+    const baseName = path.basename(filename, path.extname(filename));
 
-    if (ext === '.mp3') {
+    if (SUPPORTED_AUDIO_EXTS.has(ext)) {
       foundFilePaths.add(fullPath);
       let title = baseName;
-      let artist = 'Unknown Artist';
+      let parsedArtists: string[] = [];
+      let albumArtist: string | undefined = undefined;
       let album = 'Unknown Album';
       let duration = 0;
       let trackNumber: number | undefined = undefined;
@@ -125,7 +182,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
       let genre: string | undefined = undefined;
       let year: number | undefined = undefined;
       let fileSize = 0;
-      let format = 'mp3';
+      let format = ext.replace('.', '');
       let variant = 'original';
       let artworkFilename: string | undefined = undefined;
 
@@ -145,11 +202,20 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
         if (common.title) {
           title = common.title.trim();
         }
-        if (common.artist) {
-          artist = common.artist.trim();
+
+        // Multi-artist metadata parsing: support semicolon separated artists, common.artists array, common.artist string
+        if (common.artists && common.artists.length > 0) {
+          parsedArtists = parseArtists(common.artist, common.artists);
+        } else if (common.artist) {
+          parsedArtists = parseArtists(common.artist);
         } else if (common.albumartist) {
-          artist = common.albumartist.trim();
+          parsedArtists = parseArtists(common.albumartist);
         }
+
+        if (common.albumartist) {
+          albumArtist = common.albumartist.trim();
+        }
+
         if (common.album) {
           album = common.album.trim();
         }
@@ -166,7 +232,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
           year = common.year;
         }
 
-        // Extract embedded front cover picture if present in MP3
+        // Extract embedded front cover picture if present
         if (common.picture && common.picture.length > 0) {
           const selectedPic = selectFrontCover(common.picture);
           if (selectedPic) {
@@ -174,7 +240,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
           }
         }
       } catch (err) {
-        // Fallback to filename parsing if ID3 reading fails
+        // Fallback to filename parsing if metadata reading fails
         console.warn(`Failed to read metadata for ${filename}, using filename fallbacks:`, err);
       }
 
@@ -189,12 +255,18 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
       // Filename pattern fallback: "Artist - Title"
       const match = baseName.match(/^(.*?)\s*-\s*(.*?)(?:\s*\((Instrumental|Karaoke|Vocals|Backing)\))?$/i);
       if (match) {
-        if (artist === 'Unknown Artist' && match[1]) {
-          artist = match[1].trim();
+        if (parsedArtists.length === 0 || (parsedArtists.length === 1 && parsedArtists[0] === 'Unknown Artist')) {
+          if (match[1]) {
+            parsedArtists = parseArtists(match[1]);
+          }
         }
         if (title === baseName && match[2]) {
           title = match[2].trim();
         }
+      }
+
+      if (parsedArtists.length === 0) {
+        parsedArtists = ['Unknown Artist'];
       }
 
       // Clean base title for grouping main and instrumental versions of the same song
@@ -202,11 +274,13 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
         .replace(/\s*\((instrumental|karaoke|vocals|backing version)\)\s*/gi, '')
         .trim();
 
-      const key = `${artist.toLowerCase()}|${cleanTitle.toLowerCase()}`;
+      const normalizedArtistsKey = parsedArtists.map(a => a.toLowerCase()).sort().join(';');
+      const key = `${normalizedArtistsKey}|${cleanTitle.toLowerCase()}`;
 
       if (!songsMap.has(key)) {
         songsMap.set(key, {
-          artist,
+          artists: parsedArtists,
+          albumArtist,
           album,
           title: cleanTitle,
           variant,
@@ -238,65 +312,114 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
         if (fileSize) songInfo.fileSize = fileSize;
         if (format) songInfo.format = format;
       }
+
+      audioList.push({
+        fullPath,
+        filename,
+        ext,
+        baseName,
+        cleanBaseName: cleanVariantFromBaseName(baseName),
+        dir,
+        songKey: key,
+      });
     } else if (ext === '.lrc') {
       foundFilePaths.add(fullPath);
-      // Associate .lrc with matching base song name
-      const lrcKey = baseName.replace(/\s*\((instrumental|karaoke|vocals|backing version)\)\s*/gi, '').toLowerCase();
-      let matched = false;
-      
-      for (const [key, songInfo] of songsMap.entries()) {
-        const cleanTitle = songInfo.title.toLowerCase();
-        // If the LRC filename contains the title, it's a good match
-        if (lrcKey.includes(cleanTitle)) {
-          songInfo.lrc = fullPath;
-          matched = true;
-          break;
-        }
+      const lrcItem: DiscoveredLrc = {
+        fullPath,
+        filename,
+        baseName,
+        cleanBaseName: cleanVariantFromBaseName(baseName),
+        dir,
+      };
+      if (!dirLrcMap.has(dir)) {
+        dirLrcMap.set(dir, []);
       }
-      
-      // If not matched, try looser match
-      if (!matched) {
-        for (const [key, songInfo] of songsMap.entries()) {
-          if (key.includes(lrcKey) || lrcKey.includes(songInfo.title.toLowerCase())) {
-            songInfo.lrc = fullPath;
-            break;
-          }
-        }
-      }
+      dirLrcMap.get(dir)!.push(lrcItem);
     }
   }
 
   await walk(dirPath);
 
+  // Match LRC files to songs using filesystem path and base filename
+  for (const audio of audioList) {
+    const songInfo = songsMap.get(audio.songKey);
+    if (!songInfo || songInfo.lrc) continue;
+
+    const dirLrcs = dirLrcMap.get(audio.dir);
+    if (!dirLrcs || dirLrcs.length === 0) continue;
+
+    const normAudioBase = normalizeBaseName(audio.baseName);
+    const cleanAudioBase = audio.cleanBaseName;
+
+    // 1. Exact base filename match (case-insensitive & whitespace trimmed)
+    // e.g., "Song Name.mp3" <-> "Song Name.lrc" or "song name.lrc"
+    const exactMatch = dirLrcs.find(lrc => normalizeBaseName(lrc.baseName) === normAudioBase);
+    if (exactMatch) {
+      songInfo.lrc = exactMatch.fullPath;
+      continue;
+    }
+
+    // 2. Cleaned base filename match (without variant suffix like Instrumental)
+    const cleanMatch = dirLrcs.find(lrc => lrc.cleanBaseName === cleanAudioBase);
+    if (cleanMatch) {
+      songInfo.lrc = cleanMatch.fullPath;
+      continue;
+    }
+
+    // 3. Match against song's clean title if title appears as exact base filename in same dir
+    const songTitleNorm = normalizeBaseName(songInfo.title);
+    const titleMatch = dirLrcs.find(lrc => normalizeBaseName(lrc.baseName) === songTitleNorm || lrc.cleanBaseName === songTitleNorm);
+    if (titleMatch) {
+      songInfo.lrc = titleMatch.fullPath;
+      continue;
+    }
+  }
+
+  // Fallback for any unmatched LRCs: if LRC is elsewhere or loose matching is needed
+  for (const [dir, dirLrcs] of dirLrcMap.entries()) {
+    for (const lrc of dirLrcs) {
+      const lrcBaseNorm = normalizeBaseName(lrc.baseName);
+      const lrcClean = lrc.cleanBaseName;
+
+      for (const songInfo of songsMap.values()) {
+        if (songInfo.lrc) continue;
+        const songTitleNorm = normalizeBaseName(songInfo.title);
+
+        // If LRC filename contains or matches title
+        if (lrcBaseNorm === songTitleNorm || lrcClean === songTitleNorm || (songTitleNorm.length > 3 && lrcClean.includes(songTitleNorm))) {
+          songInfo.lrc = lrc.fullPath;
+          break;
+        }
+      }
+    }
+  }
+
   // Sync with Database
   for (const song of songsMap.values()) {
     if (!song.mainAudio && !song.instrumentalAudio) continue;
 
-    // 1. Upsert Artist
-    let artistRec = await db.select().from(artists).where(eq(artists.name, song.artist)).limit(1);
-    let artistId: number;
-    if (artistRec.length === 0) {
-      const inserted = await db.insert(artists).values({
-        name: song.artist,
-        artworkPath: song.artworkPath || null,
-      }).returning();
-      artistId = inserted[0].id;
-    } else {
-      artistId = artistRec[0].id;
-      if (song.artworkPath && !artistRec[0].artworkPath) {
-        await db.update(artists).set({ artworkPath: song.artworkPath }).where(eq(artists.id, artistId));
-      }
+    // 1. Upsert all Artists (independent entities)
+    const artistIds: number[] = [];
+    for (const artistName of song.artists) {
+      const aId = await getOrCreateArtist(artistName, song.artworkPath);
+      artistIds.push(aId);
     }
+    const primaryArtistId = artistIds[0] || (await getOrCreateArtist('Unknown Artist', song.artworkPath));
 
     // 2. Upsert Album
     let albumId: number | null = null;
     if (song.album) {
+      let albumArtistId = primaryArtistId;
+      if (song.albumArtist) {
+        albumArtistId = await getOrCreateArtist(song.albumArtist, song.artworkPath);
+      }
+
       let albumRec = await db.select().from(albums).where(
-        and(eq(albums.artistId, artistId), eq(albums.title, song.album))
+        and(eq(albums.artistId, albumArtistId), eq(albums.title, song.album))
       ).limit(1);
       if (albumRec.length === 0) {
         const inserted = await db.insert(albums).values({
-          artistId,
+          artistId: albumArtistId,
           title: song.album,
           year: song.year,
           artworkPath: song.artworkPath || null,
@@ -314,15 +437,21 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     }
 
     // 3. Upsert Song
-    const existingSong = await db.select().from(songs).where(
-      and(eq(songs.artistId, artistId), eq(songs.title, song.title), eq(songs.libraryId, libraryId))
+    let existingSong = await db.select().from(songs).where(
+      and(eq(songs.libraryId, libraryId), eq(songs.artistId, primaryArtistId), eq(songs.title, song.title))
     ).limit(1);
+
+    if (existingSong.length === 0 && song.mainAudio) {
+      existingSong = await db.select().from(songs).where(
+        and(eq(songs.libraryId, libraryId), eq(songs.mainAudioPath, song.mainAudio))
+      ).limit(1);
+    }
 
     let songId: number;
     if (existingSong.length === 0) {
       const inserted = await db.insert(songs).values({
         libraryId,
-        artistId,
+        artistId: primaryArtistId,
         albumId,
         title: song.title,
         mainAudioPath: song.mainAudio || song.instrumentalAudio!,
@@ -341,6 +470,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     } else {
       songId = existingSong[0].id;
       await db.update(songs).set({
+        artistId: primaryArtistId,
         albumId: albumId || existingSong[0].albumId,
         mainAudioPath: song.mainAudio || existingSong[0].mainAudioPath,
         instrumentalAudioPath: song.instrumentalAudio || existingSong[0].instrumentalAudioPath,
@@ -355,7 +485,10 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
       }).where(eq(songs.id, songId));
     }
 
-    // 4. Upsert Lyrics (.lrc)
+    // 4. Sync many-to-many relationship in song_artists
+    await syncSongArtists(songId, artistIds);
+
+    // 5. Upsert Lyrics (.lrc)
     if (song.lrc) {
       const existingLrc = await db.select().from(lyrics).where(eq(lyrics.songId, songId)).limit(1);
       if (existingLrc.length === 0) {
@@ -377,10 +510,15 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     if (!mainExists && !instExists) {
       // Remove associated lyrics first
       await db.delete(lyrics).where(eq(lyrics.songId, dbSong.id));
+      // Remove song_artists relationships
+      await db.delete(songArtists).where(eq(songArtists.songId, dbSong.id));
       // Remove song record
       await db.delete(songs).where(eq(songs.id, dbSong.id));
     }
   }
+
+  // Clean up any obsolete semicolon-separated artist records from previous legacy scans
+  await normalizeMultiArtistsInDatabase();
 
   // Backfill any albums without artwork from their child songs
   const albumsWithoutArtwork = await db.select().from(albums).where(isNull(albums.artworkPath));
@@ -394,15 +532,27 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     }
   }
 
-  // Backfill any artists without artwork from their songs
+  // Backfill any artists without artwork from their songs (via song_artists or songs table)
   const artistsWithoutArtwork = await db.select().from(artists).where(isNull(artists.artworkPath));
   for (const art of artistsWithoutArtwork) {
-    const songWithArtwork = await db.select({ artworkPath: songs.artworkPath })
+    // Check songs linked to this artist via song_artists
+    const songArtistMatch = await db.select({ artworkPath: songs.artworkPath })
+      .from(songArtists)
+      .innerJoin(songs, eq(songArtists.songId, songs.id))
+      .where(and(eq(songArtists.artistId, art.id), isNotNull(songs.artworkPath)))
+      .limit(1);
+
+    if (songArtistMatch.length > 0 && songArtistMatch[0].artworkPath) {
+      await db.update(artists).set({ artworkPath: songArtistMatch[0].artworkPath }).where(eq(artists.id, art.id));
+      continue;
+    }
+
+    const directSongMatch = await db.select({ artworkPath: songs.artworkPath })
       .from(songs)
       .where(and(eq(songs.artistId, art.id), isNotNull(songs.artworkPath)))
       .limit(1);
-    if (songWithArtwork.length > 0 && songWithArtwork[0].artworkPath) {
-      await db.update(artists).set({ artworkPath: songWithArtwork[0].artworkPath }).where(eq(artists.id, art.id));
+    if (directSongMatch.length > 0 && directSongMatch[0].artworkPath) {
+      await db.update(artists).set({ artworkPath: directSongMatch[0].artworkPath }).where(eq(artists.id, art.id));
     }
   }
 

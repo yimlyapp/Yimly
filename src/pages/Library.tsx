@@ -156,6 +156,35 @@ export default function Library() {
     return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
   };
 
+  const renderArtistLinks = (item: any) => {
+    if (item.artists && Array.isArray(item.artists) && item.artists.length > 0) {
+      return (
+        <span className="inline-flex items-center flex-wrap gap-x-1">
+          {item.artists.map((art: any, i: number) => (
+            <span key={art.id || i} className="inline-flex items-center">
+              {art.id ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openArtist(art.id);
+                  }}
+                  className="text-zinc-300 hover:text-[#FF4FA3] hover:underline transition-colors text-left"
+                >
+                  {art.name}
+                </button>
+              ) : (
+                <span className="text-zinc-300">{art.name}</span>
+              )}
+              {i < item.artists.length - 1 && <span className="text-zinc-500 mr-0.5">,</span>}
+            </span>
+          ))}
+        </span>
+      );
+    }
+    return <span className="text-zinc-300">{item.artist || 'Unknown Artist'}</span>;
+  };
+
   // -----------------------------------------------------------------
   // VIEW: Selected Artist Drill-down
   // -----------------------------------------------------------------
@@ -491,7 +520,9 @@ export default function Library() {
                       </div>
                       <span className="truncate">{item.title || item.name}</span>
                     </td>
-                    <td className="px-5 py-3.5 text-zinc-400 text-xs">{item.artist || item.album || '—'}</td>
+                    <td className="px-5 py-3.5 text-zinc-400 text-xs">
+                      {item.type === 'song' ? renderArtistLinks(item) : (item.artist || item.album || '—')}
+                    </td>
                     <td className="px-5 py-3.5 text-right">
                       {item.type === 'artist' && (
                         <button onClick={() => openArtist(item.id)} className="px-3 py-1.5 bg-white/5 hover:bg-white/15 text-white rounded-lg text-xs font-medium">View</button>
@@ -652,7 +683,9 @@ export default function Library() {
                             </span>
                           )}
                         </td>
-                        <td className="px-5 py-3.5 text-zinc-300 text-xs truncate max-w-xs" title={song.artist}>{song.artist || 'Unknown Artist'}</td>
+                        <td className="px-5 py-3.5 text-zinc-300 text-xs truncate max-w-xs" title={song.artist}>
+                          {renderArtistLinks(song)}
+                        </td>
                         <td className="px-5 py-3.5 text-zinc-400 text-xs truncate max-w-xs" title={song.album}>{song.album || '—'}</td>
                         <td className="px-5 py-3.5 text-zinc-400 text-xs font-mono">{formatDuration(song.duration)}</td>
                         <td className="px-5 py-3.5 text-zinc-400 text-xs capitalize">{song.variant}</td>

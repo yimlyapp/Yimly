@@ -119,6 +119,33 @@ export async function setupDatabase() {
     // Column already exists, safe to ignore
   }
 
+  // Ensure song_artists table exists (backward compatibility safety)
+  try {
+    await sqlite.execute(`
+      CREATE TABLE IF NOT EXISTS song_artists (
+        id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+        song_id integer NOT NULL,
+        artist_id integer NOT NULL,
+        position integer DEFAULT 0 NOT NULL,
+        FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE,
+        FOREIGN KEY (artist_id) REFERENCES artists(id) ON DELETE CASCADE
+      );
+    `);
+    await sqlite.execute('CREATE INDEX IF NOT EXISTS song_artists_song_id_idx ON song_artists (song_id);');
+    await sqlite.execute('CREATE INDEX IF NOT EXISTS song_artists_artist_id_idx ON song_artists (artist_id);');
+  } catch (e) {
+    // Table/indices already exist, safe to ignore
+  }
+
+  // Normalize multi-artist metadata and backfill song_artists
+  try {
+    const { normalizeMultiArtistsInDatabase } = await import('../lib/artist-utils.js');
+    await normalizeMultiArtistsInDatabase();
+    console.log('Multi-artist metadata normalized.');
+  } catch (err) {
+    console.error('Failed to normalize multi-artist metadata:', err);
+  }
+
   // Cleanup any sessions that were left active when the server last shut down/crashed
   try {
     await db.update(schema.sessions).set({ status: 'closed' }).where(eq(schema.sessions.status, 'active'));

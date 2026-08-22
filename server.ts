@@ -74,9 +74,11 @@ import karaokeRoutes from './server/routes/karaoke.js';
 app.use('/api/karaoke', karaokeRoutes);
 
 // Global Search endpoint
-import { artists, albums, songs } from './server/db/schema.js';
-import { eq, like, or } from 'drizzle-orm';
+import { artists, albums, songs, songArtists } from './server/db/schema.js';
+import { eq, like, or, inArray } from 'drizzle-orm';
 import { requireAuth } from './server/middleware/auth.js';
+import { formatArtistDisplay } from './server/lib/artist-utils.js';
+import { getSongArtistsMap } from './server/routes/songs.js';
 
 app.get('/api/search', requireAuth, async (req, res) => {
   try {
@@ -84,10 +86,20 @@ app.get('/api/search', requireAuth, async (req, res) => {
     if (!q) return res.json([]);
 
     const searchStr = `%${q}%`;
+
+    // Find song IDs where any linked artist matches search
+    const matchingArtistSongIds = await db.select({ songId: songArtists.songId })
+      .from(songArtists)
+      .innerJoin(artists, eq(songArtists.artistId, artists.id))
+      .where(like(artists.name, searchStr));
+
+    const songIdsFromArtists = matchingArtistSongIds.map(r => r.songId);
+
     const foundSongs = await db.select({
       id: songs.id,
       title: songs.title,
       artist: artists.name,
+      artistId: songs.artistId,
       album: albums.title,
       artworkPath: songs.artworkPath,
       albumArtworkPath: albums.artworkPath,
@@ -95,8 +107,18 @@ app.get('/api/search', requireAuth, async (req, res) => {
     .from(songs)
     .leftJoin(artists, eq(songs.artistId, artists.id))
     .leftJoin(albums, eq(songs.albumId, albums.id))
-    .where(or(like(songs.title, searchStr), like(songs.mainAudioPath, searchStr)))
-    .limit(10);
+    .where(
+      or(
+        like(songs.title, searchStr),
+        like(artists.name, searchStr),
+        like(songs.mainAudioPath, searchStr),
+        songIdsFromArtists.length > 0 ? inArray(songs.id, songIdsFromArtists) : undefined
+      )
+    )
+    .limit(15);
+
+    const songIds = foundSongs.map(s => s.id);
+    const artistsMap = await getSongArtistsMap(songIds);
 
     const foundArtists = await db.select({
       id: artists.id,
@@ -121,7 +143,16 @@ app.get('/api/search', requireAuth, async (req, res) => {
     res.json([
       ...foundArtists.map(a => ({ type: 'artist', hasArtwork: !!a.artworkPath, ...a })),
       ...foundAlbums.map(al => ({ type: 'album', hasArtwork: !!al.artworkPath, ...al })),
-      ...foundSongs.map(s => ({ type: 'song', hasArtwork: !!s.artworkPath || !!s.albumArtworkPath, ...s })),
+      ...foundSongs.map(s => {
+        const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
+        return {
+          type: 'song',
+          ...s,
+          artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : s.artist),
+          artists: trackArtists,
+          hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
+        };
+      }),
     ]);
   } catch (error) {
     res.status(500).json({ error: 'Global search failed' });

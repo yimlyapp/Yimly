@@ -3,6 +3,8 @@ import { db } from '../db/index.js';
 import { albums, artists, songs, lyrics } from '../db/schema.js';
 import { eq, sql, isNotNull, and } from 'drizzle-orm';
 import { requireAuth } from '../middleware/auth.js';
+import { formatArtistDisplay } from '../lib/artist-utils.js';
+import { getSongArtistsMap } from './songs.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -57,6 +59,7 @@ router.get('/:id', async (req, res) => {
     const albumSongs = await db.select({
       id: songs.id,
       title: songs.title,
+      artistId: songs.artistId,
       trackNumber: songs.trackNumber,
       discNumber: songs.discNumber,
       duration: songs.duration,
@@ -68,14 +71,22 @@ router.get('/:id', async (req, res) => {
     .leftJoin(lyrics, eq(songs.id, lyrics.songId))
     .where(eq(songs.albumId, albumId));
 
+    const songIds = albumSongs.map(s => s.id);
+    const artistsMap = await getSongArtistsMap(songIds);
+
     res.json({
       ...albumRec[0],
       hasArtwork: !!albumRec[0].artworkPath,
-      songs: albumSongs.map(s => ({
-        ...s,
-        hasArtwork: !!s.artworkPath || !!albumRec[0].artworkPath,
-        hasLrc: !!s.hasLrc
-      })),
+      songs: albumSongs.map(s => {
+        const trackArtists = artistsMap.get(s.id) || (albumRec[0].artist ? [{ id: albumRec[0].artistId, name: albumRec[0].artist }] : []);
+        return {
+          ...s,
+          artist: formatArtistDisplay(trackArtists),
+          artists: trackArtists,
+          hasArtwork: !!s.artworkPath || !!albumRec[0].artworkPath,
+          hasLrc: !!s.hasLrc
+        };
+      }),
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch album details' });

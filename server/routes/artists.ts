@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
-import { artists, albums, songs, lyrics } from '../db/schema.js';
-import { eq, sql, isNotNull, and } from 'drizzle-orm';
+import { artists, albums, songs, lyrics, songArtists } from '../db/schema.js';
+import { eq, sql, isNotNull, and, or, inArray } from 'drizzle-orm';
 import { requireAuth } from '../middleware/auth.js';
+import { formatArtistDisplay } from '../lib/artist-utils.js';
+import { getSongArtistsMap } from './songs.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -15,7 +17,11 @@ router.get('/', async (req, res) => {
       id: artists.id,
       name: artists.name,
       artworkPath: artists.artworkPath,
-      songCount: sql<number>`(select count(*) from songs where songs.artist_id = artists.id)`,
+      songCount: sql<number>`(
+        select count(distinct s.id) from songs s 
+        left join song_artists sa on sa.song_id = s.id 
+        where s.artist_id = artists.id or sa.artist_id = artists.id
+      )`,
       albumCount: sql<number>`(select count(*) from albums where albums.artist_id = artists.id)`,
     }).from(artists);
 
@@ -39,9 +45,18 @@ router.get('/:id', async (req, res) => {
     if (artistRec.length === 0) return res.status(404).json({ error: 'Artist not found' });
 
     const artistAlbums = await db.select().from(albums).where(eq(albums.artistId, artistId));
+
+    // Get all songs associated with this artist either directly or via song_artists
+    const songIdRecords = await db.select({ songId: songArtists.songId })
+      .from(songArtists)
+      .where(eq(songArtists.artistId, artistId));
+
+    const songIdsFromJoin = songIdRecords.map(r => r.songId);
+
     const artistSongs = await db.select({
       id: songs.id,
       title: songs.title,
+      artistId: songs.artistId,
       albumId: songs.albumId,
       duration: songs.duration,
       variant: songs.variant,
@@ -50,7 +65,23 @@ router.get('/:id', async (req, res) => {
     })
     .from(songs)
     .leftJoin(lyrics, eq(songs.id, lyrics.songId))
-    .where(eq(songs.artistId, artistId));
+    .where(
+      or(
+        eq(songs.artistId, artistId),
+        songIdsFromJoin.length > 0 ? inArray(songs.id, songIdsFromJoin) : undefined
+      )
+    );
+
+    // Deduplicate songs by id
+    const uniqueSongsMap = new Map<number, typeof artistSongs[0]>();
+    for (const s of artistSongs) {
+      if (!uniqueSongsMap.has(s.id)) {
+        uniqueSongsMap.set(s.id, s);
+      }
+    }
+    const uniqueSongs = Array.from(uniqueSongsMap.values());
+    const allSongIds = uniqueSongs.map(s => s.id);
+    const artistsMap = await getSongArtistsMap(allSongIds);
 
     res.json({
       ...artistRec[0],
@@ -59,11 +90,16 @@ router.get('/:id', async (req, res) => {
         ...alb,
         hasArtwork: !!alb.artworkPath,
       })),
-      songs: artistSongs.map(s => ({
-        ...s,
-        hasArtwork: !!s.artworkPath || !!artistRec[0].artworkPath,
-        hasLrc: !!s.hasLrc
-      })),
+      songs: uniqueSongs.map(s => {
+        const trackArtists = artistsMap.get(s.id) || [{ id: artistRec[0].id, name: artistRec[0].name }];
+        return {
+          ...s,
+          artist: formatArtistDisplay(trackArtists),
+          artists: trackArtists,
+          hasArtwork: !!s.artworkPath || !!artistRec[0].artworkPath,
+          hasLrc: !!s.hasLrc
+        };
+      }),
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch artist details' });
@@ -91,6 +127,18 @@ router.get('/:id/artwork', async (req, res) => {
         .limit(1);
       if (albumWithArt.length > 0 && albumWithArt[0].artworkPath) {
         artworkFilename = albumWithArt[0].artworkPath;
+      }
+    }
+
+    if (!artworkFilename) {
+      // Check via song_artists
+      const songArtistArt = await db.select({ artworkPath: songs.artworkPath })
+        .from(songArtists)
+        .innerJoin(songs, eq(songArtists.songId, songs.id))
+        .where(and(eq(songArtists.artistId, artistId), isNotNull(songs.artworkPath)))
+        .limit(1);
+      if (songArtistArt.length > 0 && songArtistArt[0].artworkPath) {
+        artworkFilename = songArtistArt[0].artworkPath;
       }
     }
 

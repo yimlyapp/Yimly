@@ -1,13 +1,42 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
-import { songs, artists, albums, lyrics } from '../db/schema.js';
-import { eq, like, or } from 'drizzle-orm';
+import { songs, artists, albums, lyrics, songArtists } from '../db/schema.js';
+import { eq, like, or, inArray, asc } from 'drizzle-orm';
 import { requireAuth } from '../middleware/auth.js';
+import { formatArtistDisplay } from '../lib/artist-utils.js';
 import fs from 'fs';
 import path from 'path';
 
 const router = Router();
 router.use(requireAuth);
+
+/**
+ * Helper to fetch and map multiple artists for a list of song IDs
+ */
+export async function getSongArtistsMap(songIds: number[]) {
+  const map = new Map<number, Array<{ id: number; name: string }>>();
+  if (songIds.length === 0) return map;
+
+  const records = await db.select({
+    songId: songArtists.songId,
+    artistId: artists.id,
+    artistName: artists.name,
+    position: songArtists.position,
+  })
+  .from(songArtists)
+  .innerJoin(artists, eq(songArtists.artistId, artists.id))
+  .where(inArray(songArtists.songId, songIds))
+  .orderBy(asc(songArtists.position));
+
+  for (const r of records) {
+    if (!map.has(r.songId)) {
+      map.set(r.songId, []);
+    }
+    map.get(r.songId)!.push({ id: r.artistId, name: r.artistName });
+  }
+
+  return map;
+}
 
 router.get('/', async (req, res) => {
   try {
@@ -33,11 +62,19 @@ router.get('/', async (req, res) => {
     .leftJoin(lyrics, eq(songs.id, lyrics.songId))
     .limit(500);
 
-    const formatted = allSongs.map(s => ({
-      ...s,
-      hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
-      hasLrc: !!s.hasLrc
-    }));
+    const songIds = allSongs.map(s => s.id);
+    const artistsMap = await getSongArtistsMap(songIds);
+
+    const formatted = allSongs.map(s => {
+      const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
+      return {
+        ...s,
+        artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : s.artist),
+        artists: trackArtists,
+        hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
+        hasLrc: !!s.hasLrc
+      };
+    });
 
     res.json(formatted);
   } catch (error) {
@@ -51,11 +88,22 @@ router.get('/search', async (req, res) => {
     if (!q) return res.json([]);
 
     const searchStr = `%${q}%`;
+
+    // Find song IDs where any linked artist matches search
+    const matchingArtistSongIds = await db.select({ songId: songArtists.songId })
+      .from(songArtists)
+      .innerJoin(artists, eq(songArtists.artistId, artists.id))
+      .where(like(artists.name, searchStr));
+
+    const songIdsFromArtists = matchingArtistSongIds.map(r => r.songId);
+
     const searchSongs = await db.select({
       id: songs.id,
       title: songs.title,
       artist: artists.name,
+      artistId: songs.artistId,
       album: albums.title,
+      albumId: songs.albumId,
       artworkPath: songs.artworkPath,
       albumArtworkPath: albums.artworkPath,
     })
@@ -67,16 +115,25 @@ router.get('/search', async (req, res) => {
         like(songs.title, searchStr),
         like(artists.name, searchStr),
         like(albums.title, searchStr),
-        like(songs.mainAudioPath, searchStr)
+        like(songs.mainAudioPath, searchStr),
+        songIdsFromArtists.length > 0 ? inArray(songs.id, songIdsFromArtists) : undefined
       )
     )
-    .limit(20);
+    .limit(30);
 
-    const formatted = searchSongs.map(s => ({
-      type: 'song',
-      hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
-      ...s
-    }));
+    const songIds = searchSongs.map(s => s.id);
+    const artistsMap = await getSongArtistsMap(songIds);
+
+    const formatted = searchSongs.map(s => {
+      const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
+      return {
+        type: 'song',
+        ...s,
+        artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : s.artist),
+        artists: trackArtists,
+        hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
+      };
+    });
 
     res.json(formatted);
   } catch (error) {
@@ -116,8 +173,13 @@ router.get('/:id', async (req, res) => {
 
     if (songRec.length === 0) return res.status(404).json({ error: 'Song not found' });
 
+    const artistsMap = await getSongArtistsMap([id]);
+    const trackArtists = artistsMap.get(id) || (songRec[0].artist ? [{ id: songRec[0].artistId, name: songRec[0].artist }] : []);
+
     res.json({
       ...songRec[0],
+      artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : songRec[0].artist),
+      artists: trackArtists,
       hasArtwork: !!songRec[0].artworkPath || !!songRec[0].albumArtworkPath,
       hasLrc: !!songRec[0].hasLrc,
       hasInstrumental: !!songRec[0].hasInstrumental
@@ -203,12 +265,59 @@ router.get('/:id/lyrics', async (req, res) => {
     const id = parseInt(req.params.id);
     const lrc = await db.select().from(lyrics).where(eq(lyrics.songId, id)).limit(1);
     
-    if (lrc.length === 0 || !fs.existsSync(lrc[0].lrcPath)) {
-      return res.status(404).json({ error: 'Lyrics not found' });
+    if (lrc.length > 0 && fs.existsSync(lrc[0].lrcPath)) {
+      const content = await fs.promises.readFile(lrc[0].lrcPath, 'utf-8');
+      return res.type('text/plain').send(content);
     }
 
-    const content = await fs.promises.readFile(lrc[0].lrcPath, 'utf-8');
-    res.type('text/plain').send(content);
+    // On-demand filesystem discovery if not yet indexed in database
+    const song = await db.select().from(songs).where(eq(songs.id, id)).limit(1);
+    if (song.length > 0) {
+      const audioPath = song[0].mainAudioPath || song[0].instrumentalAudioPath;
+      if (audioPath && fs.existsSync(audioPath)) {
+        const dir = path.dirname(audioPath);
+        const audioExt = path.extname(audioPath);
+        const audioBase = path.basename(audioPath, audioExt);
+        const cleanBase = audioBase.replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim();
+
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+        const lrcFiles = entries.filter(e => e.isFile() && e.name.toLowerCase().endsWith('.lrc')).map(e => e.name);
+
+        // 1. Direct base match (e.g. Song.mp3 -> Song.lrc or song.lrc)
+        const exactLrc = lrcFiles.find(name => {
+          const lrcBase = name.slice(0, -4);
+          return lrcBase.trim().toLowerCase() === audioBase.trim().toLowerCase();
+        });
+
+        // 2. Clean variant match
+        const cleanLrc = lrcFiles.find(name => {
+          const lrcBase = name.slice(0, -4).replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim();
+          return lrcBase.toLowerCase() === cleanBase.toLowerCase();
+        });
+
+        // 3. Title match
+        const titleNorm = song[0].title.trim().toLowerCase();
+        const titleLrc = lrcFiles.find(name => {
+          const lrcBase = name.slice(0, -4).trim().toLowerCase();
+          return lrcBase === titleNorm;
+        });
+
+        const targetLrcName = exactLrc || cleanLrc || titleLrc;
+        if (targetLrcName) {
+          const matchedPath = path.join(dir, targetLrcName);
+          // Persist match to database for future queries
+          if (lrc.length === 0) {
+            await db.insert(lyrics).values({ songId: id, lrcPath: matchedPath });
+          } else {
+            await db.update(lyrics).set({ lrcPath: matchedPath }).where(eq(lyrics.id, lrc[0].id));
+          }
+          const content = await fs.promises.readFile(matchedPath, 'utf-8');
+          return res.type('text/plain').send(content);
+        }
+      }
+    }
+
+    return res.status(404).json({ error: 'Lyrics not found' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch lyrics' });
   }
