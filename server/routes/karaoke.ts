@@ -64,7 +64,7 @@ router.post('/sessions', async (req, res) => {
 
 router.post('/sessions/join', async (req, res) => {
   try {
-    const { roomCode } = req.body;
+    const { roomCode, displayName, username } = req.body;
     if (!roomCode) {
       return res.status(400).json({ error: 'Room code is required' });
     }
@@ -89,11 +89,29 @@ router.post('/sessions/join', async (req, res) => {
       return res.status(404).json({ error: 'Room not found or inactive' });
     }
 
+    let userId = user?.id || null;
+    const requestedName = (displayName || username || '').trim();
+    if (!userId && requestedName) {
+      const existingUser = await db.select().from(users).where(eq(users.username, requestedName)).limit(1);
+      if (existingUser.length > 0) {
+        userId = existingUser[0].id;
+      } else {
+        const newGuest = await db.insert(users).values({
+          username: requestedName,
+          password: crypto.randomBytes(16).toString('hex'),
+          role: 'user',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }).returning();
+        userId = newGuest[0]?.id || null;
+      }
+    }
+
     const controllerId = crypto.randomUUID();
     await db.insert(controllers).values({
       id: controllerId,
       sessionId: session[0].id,
-      userId: user?.id || null,
+      userId: userId,
       device: device,
       lastSeenTime: new Date(),
     });
@@ -188,12 +206,14 @@ router.get('/sessions/:sessionId/state', async (req, res) => {
       songTitle: songs.title,
       artistName: artists.name,
       userId: queueItems.userId,
+      userName: users.username,
       songId: songs.id,
       artworkPath: songs.artworkPath,
     })
     .from(queueItems)
     .innerJoin(songs, eq(queueItems.songId, songs.id))
     .innerJoin(artists, eq(songs.artistId, artists.id))
+    .leftJoin(users, eq(queueItems.userId, users.id))
     .where(eq(queueItems.sessionId, sessionId))
     .orderBy(asc(queueItems.position));
 

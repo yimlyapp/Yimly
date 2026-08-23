@@ -1,13 +1,15 @@
 import { useState, useEffect, FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Play, LogIn, Users, Mic, Radio, Sparkles, ArrowRight, Disc, RefreshCw } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Play, LogIn, Users, Mic, Radio, Sparkles, ArrowRight, Disc, RefreshCw, User } from 'lucide-react';
 
 export default function Rooms() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [joinCode, setJoinCode] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const fetchActiveSessions = () => {
     fetch('/api/karaoke/active-sessions')
@@ -18,7 +20,11 @@ export default function Rooms() {
 
   useEffect(() => {
     fetchActiveSessions();
-  }, []);
+    const codeParam = searchParams.get('code');
+    if (codeParam) {
+      setJoinCode(codeParam);
+    }
+  }, [searchParams]);
 
   const createRoom = async () => {
     setLoading(true);
@@ -45,7 +51,10 @@ export default function Rooms() {
       const res = await fetch('/api/karaoke/sessions/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomCode: cleanCode })
+        body: JSON.stringify({ 
+          roomCode: cleanCode,
+          displayName: displayName.trim() || undefined
+        })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to join room');
@@ -124,18 +133,35 @@ export default function Rooms() {
           </p>
 
           <form onSubmit={joinRoom} className="w-full max-w-xs space-y-3">
-            <input
-              type="text"
-              placeholder="e.g. 435 288"
-              value={joinCode}
-              onChange={(e) => setJoinCode(e.target.value)}
-              className="w-full px-4 py-3 bg-[#0A0B10] border border-white/15 rounded-xl text-center text-xl font-mono tracking-widest text-white placeholder-zinc-600 focus:outline-none focus:border-[#FF4FA3] focus:ring-1 focus:ring-[#FF4FA3] transition-all uppercase"
-              maxLength={7}
-            />
+            <div className="space-y-1 text-left">
+              <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider pl-1">Room Code</label>
+              <input
+                type="text"
+                placeholder="e.g. 435 288"
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value)}
+                className="w-full px-4 py-2.5 bg-[#0A0B10] border border-white/15 rounded-xl text-center text-lg font-mono tracking-widest text-white placeholder-zinc-600 focus:outline-none focus:border-[#FF4FA3] focus:ring-1 focus:ring-[#FF4FA3] transition-all uppercase"
+                maxLength={7}
+                required
+              />
+            </div>
+            
+            <div className="space-y-1 text-left">
+              <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider pl-1">Your Name / Device (Optional)</label>
+              <input
+                type="text"
+                placeholder="e.g. Robin, Sarah"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                className="w-full px-4 py-2.5 bg-[#0A0B10] border border-white/15 rounded-xl text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-[#FF4FA3] focus:ring-1 focus:ring-[#FF4FA3] transition-all"
+                maxLength={30}
+              />
+            </div>
+
             <button
               type="submit"
               disabled={loading || !joinCode}
-              className="w-full py-3 px-6 bg-white/10 hover:bg-white/20 text-white font-semibold rounded-xl border border-white/10 transition-all flex items-center justify-center gap-2 disabled:opacity-40"
+              className="w-full py-3 px-6 bg-white/10 hover:bg-white/20 text-white font-semibold rounded-xl border border-white/10 transition-all flex items-center justify-center gap-2 disabled:opacity-40 mt-2"
             >
               <span>Join Room</span>
               <ArrowRight className="w-4 h-4" />
