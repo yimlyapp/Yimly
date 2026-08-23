@@ -12,7 +12,6 @@ interface RoomState {
   lyricOffset: number; // in ms
   clients: Set<WebSocket>;
   hostClient: WebSocket | null;
-  hostDisconnectTimeout: NodeJS.Timeout | null;
 }
 
 const activeRooms = new Map<string, RoomState>();
@@ -77,20 +76,14 @@ export function setupWebSockets(wss: WebSocketServer) {
         lyricOffset: 0,
         clients: new Set(),
         hostClient: null,
-        hostDisconnectTimeout: null,
       });
     }
 
     const room = activeRooms.get(sessionId)!;
     room.clients.add(ws);
 
-    // Cancel cleanup if host reconnects
     if (isHost) {
       room.hostClient = ws;
-      if (room.hostDisconnectTimeout) {
-        clearTimeout(room.hostDisconnectTimeout);
-        room.hostDisconnectTimeout = null;
-      }
     }
 
     // Send initial state
@@ -172,38 +165,24 @@ export function setupWebSockets(wss: WebSocketServer) {
 
     ws.on('close', () => {
       room.clients.delete(ws);
-      
       if (isHost && room.hostClient === ws) {
-        if (room.hostDisconnectTimeout) {
-          clearTimeout(room.hostDisconnectTimeout);
-        }
-        
-        // 10 second grace period
-        room.hostDisconnectTimeout = setTimeout(async () => {
-          try {
-            await db.update(sessions).set({ status: 'closed' }).where(eq(sessions.id, sessionId));
-            
-            // Delete all queue items for the closed session
-            await db.delete(queueItems).where(eq(queueItems.sessionId, sessionId));
-
-            // Notify remaining clients and close them
-            for (const client of room.clients) {
-              if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify({ type: 'SESSION_CLOSED' }));
-                client.close(1000, 'Session closed by host');
-              }
-            }
-            activeRooms.delete(sessionId);
-          } catch (e) {
-            console.error('Failed to cleanup session', e);
-          }
-        }, 10000);
-      } else if (room.clients.size === 0 && !room.hostDisconnectTimeout) {
-        // Just in case
-        activeRooms.delete(sessionId);
+        room.hostClient = null;
       }
     });
   });
+}
+
+export function closeSessionWS(sessionId: string) {
+  const room = activeRooms.get(sessionId);
+  if (room) {
+    for (const client of room.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify({ type: 'SESSION_CLOSED' }));
+        client.close(1000, 'Session closed by host');
+      }
+    }
+    activeRooms.delete(sessionId);
+  }
 }
 
 async function advanceQueue(sessionId: string, room: RoomState & { isAdvancing?: boolean }) {

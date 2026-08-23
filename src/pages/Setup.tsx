@@ -27,7 +27,14 @@ export default function Setup({ onComplete }: { onComplete: () => void }) {
       });
 
       if (!res.ok) {
-        const data = await res.json();
+        let data: any = {};
+        if (res.headers.get('content-type')?.includes('application/json')) {
+          try {
+            data = await res.json();
+          } catch (e) {
+            console.error('Failed to parse setup response', e);
+          }
+        }
         throw new Error(data.error || 'Failed to complete setup');
       }
 

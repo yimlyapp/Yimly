@@ -31,8 +31,8 @@ export default function Library() {
     try {
       // 1. Fetch stats
       const statsRes = await fetch('/api/libraries/stats');
-      if (!statsRes.ok) {
-        throw new Error(`Failed to fetch stats (status ${statsRes.status})`);
+      if (!statsRes.ok || !statsRes.headers.get('content-type')?.includes('application/json')) {
+        throw new Error(`Failed to fetch stats`);
       }
       const statsData = await statsRes.json();
       setStats(statsData);
@@ -40,8 +40,8 @@ export default function Library() {
       // 2. Fetch tab data
       const endpoint = tab === 'artists' ? '/api/artists' : tab === 'albums' ? '/api/albums' : '/api/songs';
       const dataRes = await fetch(endpoint);
-      if (!dataRes.ok) {
-        throw new Error(`Failed to fetch ${tab} (status ${dataRes.status})`);
+      if (!dataRes.ok || !dataRes.headers.get('content-type')?.includes('application/json')) {
+        throw new Error(`Failed to fetch ${tab}`);
       }
       const data = await dataRes.json();
 

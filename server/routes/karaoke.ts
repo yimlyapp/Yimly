@@ -4,7 +4,7 @@ import { sessions, controllers, queueItems, songs, artists, users } from '../db/
 import { eq, and, asc, or } from 'drizzle-orm';
 import { requireAuth } from '../middleware/auth.js';
 import crypto from 'crypto';
-import { notifyQueueUpdate } from '../ws/index.js';
+import { notifyQueueUpdate, closeSessionWS } from '../ws/index.js';
 import { formatArtistDisplay } from '../lib/artist-utils.js';
 import { getSongArtistsMap } from './songs.js';
 
@@ -22,9 +22,14 @@ router.post('/sessions', async (req, res) => {
     
     // Close previous sessions hosted by this user to prevent stale sessions
     if (user?.id) {
-      await db.update(sessions)
-        .set({ status: 'closed' })
+      const oldActive = await db.select().from(sessions)
         .where(and(eq(sessions.hostId, user.id), eq(sessions.status, 'active')));
+      
+      for (const oldSess of oldActive) {
+        await db.update(sessions).set({ status: 'closed' }).where(eq(sessions.id, oldSess.id));
+        await db.delete(queueItems).where(eq(queueItems.sessionId, oldSess.id));
+        closeSessionWS(oldSess.id);
+      }
     }
       
     const sessionId = crypto.randomUUID();
@@ -133,6 +138,20 @@ router.get('/active-sessions', async (req, res) => {
   }
 });
 
+// Explicitly End Session Endpoint
+router.post('/sessions/:sessionId/end', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    await db.update(sessions).set({ status: 'closed' }).where(eq(sessions.id, sessionId));
+    await db.delete(queueItems).where(eq(queueItems.sessionId, sessionId));
+    closeSessionWS(sessionId);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Failed to end session:', error);
+    res.status(500).json({ error: 'Failed to end session' });
+  }
+});
+
 // Validate Room & Controller Endpoint
 router.get('/sessions/:sessionId/validate', async (req, res) => {
   try {
@@ -170,11 +189,20 @@ router.get('/sessions/:sessionId/validate', async (req, res) => {
         });
       }
 
+      let guestUsername = 'Guest';
+      if (controller[0].userId) {
+        const u = await db.select().from(users).where(eq(users.id, controller[0].userId)).limit(1);
+        if (u.length > 0) {
+          guestUsername = u[0].username;
+        }
+      }
+
       return res.json({
         valid: true,
         role: 'guest',
         session: session[0],
-        controller: controller[0]
+        controller: controller[0],
+        guestUsername
       });
     }
 

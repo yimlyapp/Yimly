@@ -16,15 +16,21 @@ import Users from './pages/Users.tsx';
 import Library from './pages/Library.tsx';
 import Rooms from './pages/Rooms.tsx';
 import RoomSession from './pages/RoomSession.tsx';
+import Join from './pages/Join.tsx';
 
 export default function App() {
   const [setupStatus, setSetupStatus] = useState<boolean | null>(null);
 
   useEffect(() => {
     fetch('/api/setup/status')
-      .then(res => res.json())
-      .then(data => setSetupStatus(data.isSetup))
-      .catch(console.error);
+      .then(async res => {
+        if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+          return await res.json();
+        }
+        return { isSetup: true };
+      })
+      .then(data => setSetupStatus(data?.isSetup ?? true))
+      .catch(() => setSetupStatus(true));
   }, []);
 
   if (setupStatus === null) {
@@ -44,7 +50,8 @@ export default function App() {
             <Route path="/setup" element={<Navigate to="/login" replace />} />
             <Route path="/login" element={<Login />} />
             
-            {/* Public Karaoke Room - Validated Session Route */}
+            {/* Dedicated Guest Join Route & Public Karaoke Room */}
+            <Route path="/join" element={<Join />} />
             <Route path="/rooms/:sessionId" element={<RoomSession />} />
 
             <Route path="/" element={<Layout />}>

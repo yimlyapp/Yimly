@@ -19,9 +19,13 @@ export default function Home() {
           fetch('/api/songs')
         ]);
 
-        if (statsRes.ok) setStats(await statsRes.json());
-        if (sessionsRes.ok) setActiveSessions(await sessionsRes.json());
-        if (songsRes.ok) {
+        if (statsRes.ok && statsRes.headers.get('content-type')?.includes('application/json')) {
+          setStats(await statsRes.json());
+        }
+        if (sessionsRes.ok && sessionsRes.headers.get('content-type')?.includes('application/json')) {
+          setActiveSessions(await sessionsRes.json());
+        }
+        if (songsRes.ok && songsRes.headers.get('content-type')?.includes('application/json')) {
           const songsData = await songsRes.json();
           if (Array.isArray(songsData)) {
             setFeaturedSongs(songsData.slice(0, 8));

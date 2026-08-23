@@ -2,11 +2,12 @@ import { useState, useEffect, useRef, ChangeEvent } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import QRCode from 'qrcode';
+import GuestRoom from '../components/GuestRoom';
 import { 
   Play, Pause, SkipForward, RotateCcw, Mic, Music, 
   FileText, ArrowLeft, Plus, Radio, Check, AlertCircle, 
   User, Library as LibraryIcon, Search, X, RefreshCw,
-  Maximize2, Minimize2
+  Maximize2, Minimize2, MoreVertical, Info, LogOut
 } from 'lucide-react';
 
 interface LyricLine {
@@ -37,6 +38,7 @@ export default function RoomSession() {
 
   const [validationStatus, setValidationStatus] = useState<ValidationStatus>('loading');
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [guestUsername, setGuestUsername] = useState<string>('');
 
   const [session, setSession] = useState<any>(null);
   const [queue, setQueue] = useState<any[]>([]);
@@ -54,6 +56,11 @@ export default function RoomSession() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
   const [isRestartingSession, setIsRestartingSession] = useState(false);
+
+  // Overflow menu and modals state (Host Only)
+  const [showOverflowMenu, setShowOverflowMenu] = useState(false);
+  const [showEndSessionModal, setShowEndSessionModal] = useState(false);
+  const [showSessionInfoModal, setShowSessionInfoModal] = useState(false);
 
   // Library modal search & songs (for Guest Controller)
   const [availableSongs, setAvailableSongs] = useState<SongItem[]>([]);
@@ -89,7 +96,7 @@ export default function RoomSession() {
   useEffect(() => {
     if (session?.roomCode) {
       const cleanCode = String(session.roomCode).replace(/\s+/g, '');
-      const joinUrl = `${window.location.origin}/rooms?code=${cleanCode}`;
+      const joinUrl = `${window.location.origin}/join?session=${cleanCode}`;
       QRCode.toDataURL(joinUrl, {
         width: 320,
         margin: 1,
@@ -121,12 +128,22 @@ export default function RoomSession() {
         });
 
         const res = await fetch(`/api/karaoke/sessions/${sessionId}/validate?${query.toString()}`);
-        const data = await res.json();
+        let data: any = {};
+        if (res.headers.get('content-type')?.includes('application/json')) {
+          try {
+            data = await res.json();
+          } catch (e) {
+            console.error('Failed to parse validation JSON response:', e);
+          }
+        }
 
         if (!isMounted) return;
 
         if (res.ok && data.valid) {
           setSession(data.session);
+          if (data.guestUsername) {
+            setGuestUsername(data.guestUsername);
+          }
           setValidationStatus('valid');
         } else {
           if (data.code === 'ROOM_NOT_FOUND' || res.status === 404) {
@@ -249,8 +266,15 @@ export default function RoomSession() {
   useEffect(() => {
     if (currentSong?.songId) {
       fetch(`/api/songs/${currentSong.songId}`)
-        .then(res => res.json())
-        .then(data => setCurrentSongDetails(data))
+        .then(async res => {
+          if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+            return await res.json();
+          }
+          return null;
+        })
+        .then(data => {
+          if (data) setCurrentSongDetails(data);
+        })
         .catch(err => console.error('Failed to fetch song details:', err));
 
       fetch(`/api/songs/${currentSong.songId}/lyrics`)
@@ -274,7 +298,12 @@ export default function RoomSession() {
   useEffect(() => {
     if (showLibrary) {
       fetch('/api/songs')
-        .then(res => res.json())
+        .then(async res => {
+          if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+            return await res.json();
+          }
+          return [];
+        })
         .then(data => setAvailableSongs(Array.isArray(data) ? data : []))
         .catch(err => console.error('Failed to load songs:', err));
     }
@@ -298,6 +327,31 @@ export default function RoomSession() {
     return result.sort((a, b) => a.time - b.time);
   }
 
+  // Explicitly End Session (Host Only)
+  const handleExplicitEndSession = async () => {
+    setShowEndSessionModal(false);
+    if (!sessionId) return;
+    try {
+      await fetch(`/api/karaoke/sessions/${sessionId}/end`, { method: 'POST' });
+    } catch (e) {
+      console.error('Failed to end session:', e);
+    }
+    if (ws) {
+      ws.close();
+      setWs(null);
+    }
+    if (audioRef.current) {
+      audioRef.current.pause();
+    }
+    setPlaying(false);
+    setCurrentTime(0);
+    setLyrics([]);
+    setCurrentSongDetails(null);
+    setQueue([]);
+    setSession(null);
+    setValidationStatus('expired');
+  };
+
   // Start New Real Karaoke Session (Host Only)
   const handleStartNewSession = async () => {
     if (!isHost || isRestartingSession) return;
@@ -316,10 +370,18 @@ export default function RoomSession() {
       setQueue([]);
 
       const res = await fetch('/api/karaoke/sessions', { method: 'POST' });
-      const newSession = await res.json();
+      let newSession: any = {};
+      if (res.headers.get('content-type')?.includes('application/json')) {
+        try {
+          newSession = await res.json();
+        } catch (e) {
+          console.error('Failed to parse new session response', e);
+        }
+      }
       if (!res.ok) throw new Error(newSession.error || 'Failed to create session');
 
       setSession(newSession);
+      setValidationStatus('valid');
       navigate(`/rooms/${newSession.id}?role=host`, { replace: true });
     } catch (err) {
       console.error('Failed to start new session:', err);
@@ -474,48 +536,87 @@ export default function RoomSession() {
   }
 
   // -------------------------------------------------------------
-  // Render: Error / Not Found / Expired / Invalid Controller States
+  // Render: Guest Room Experience
+  // -------------------------------------------------------------
+  if (!isHost) {
+    return (
+      <GuestRoom
+        sessionId={sessionId!}
+        roomCode={session?.roomCode || ''}
+        guestUsername={guestUsername}
+        controllerId={controllerId || ''}
+        queue={queue}
+        onRefreshState={fetchState}
+        isSessionClosed={validationStatus !== 'valid' || session?.status === 'closed'}
+      />
+    );
+  }
+
+  // -------------------------------------------------------------
+  // Render: Host Room - No Active Session View
+  // -------------------------------------------------------------
+  if (isHost && (validationStatus !== 'valid' || !session || session.status === 'closed')) {
+    return (
+      <div className="min-h-screen bg-[#08090E] text-white flex flex-col items-center justify-center p-6 font-sans select-none relative overflow-hidden">
+        {/* Ambient Top Glow */}
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-[#FF4FA3]/10 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="w-full max-w-md bg-[#12131D] border border-white/10 rounded-3xl p-8 shadow-2xl text-center relative z-10">
+          <div className="w-16 h-16 rounded-2xl bg-[#FF4FA3]/15 border border-[#FF4FA3]/30 flex items-center justify-center mx-auto mb-5 text-[#FF4FA3] shadow-lg shadow-[#FF4FA3]/20">
+            <Mic className="w-8 h-8" />
+          </div>
+
+          <div className="text-[11px] font-extrabold uppercase tracking-widest text-[#FF4FA3] mb-1">
+            HOST ROOM
+          </div>
+
+          <h2 className="text-2xl md:text-3xl font-black text-white mb-2 tracking-tight">
+            No Active Session
+          </h2>
+
+          <p className="text-xs text-zinc-400 mb-8 leading-relaxed max-w-xs mx-auto">
+            Start a new session to host karaoke, display your room QR code, and sync lyrics live with guests.
+          </p>
+
+          <button
+            onClick={handleStartNewSession}
+            disabled={isRestartingSession}
+            className="w-full py-4 bg-[#FF4FA3] hover:bg-[#ff69b2] text-white font-bold text-base rounded-xl transition-all shadow-lg shadow-[#FF4FA3]/25 flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-5 h-5 ${isRestartingSession ? 'animate-spin' : ''}`} />
+            <span>{isRestartingSession ? 'Creating Session...' : 'Start New Session'}</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // -------------------------------------------------------------
+  // Render: Guest Room - Error / Not Found / Expired States
   // -------------------------------------------------------------
   if (validationStatus !== 'valid') {
     return (
-      <div className="min-h-screen bg-[#08090E] text-white flex flex-col items-center justify-center p-6 font-sans">
+      <div className="min-h-screen bg-[#08090E] text-white flex flex-col items-center justify-center p-6 font-sans select-none">
         <div className="w-full max-w-md bg-[#12131D] border border-white/10 rounded-3xl p-8 shadow-2xl text-center">
           <div className="w-16 h-16 rounded-2xl bg-red-950/50 border border-red-500/30 text-red-400 flex items-center justify-center mx-auto mb-5">
             <AlertCircle className="w-8 h-8" />
           </div>
 
-          <span className="inline-block px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-red-500/15 text-red-400 border border-red-500/25 mb-3">
-            {validationStatus === 'not_found' && 'Room Not Found'}
-            {validationStatus === 'expired' && 'Room Expired'}
-            {validationStatus === 'invalid_controller' && 'Guest Access Rejected'}
-            {validationStatus === 'error' && 'Connection Error'}
-          </span>
-
           <h2 className="text-2xl font-bold text-white mb-2">
-            {validationStatus === 'not_found' && 'Room Does Not Exist'}
-            {validationStatus === 'expired' && 'Session Has Ended'}
-            {validationStatus === 'invalid_controller' && 'Invalid Controller'}
-            {validationStatus === 'error' && 'Unable to Join'}
+            This room is no longer available.
           </h2>
 
           <p className="text-xs text-zinc-400 mb-8 leading-relaxed">
-            {errorMessage || 'Please check the room URL or room code and try again.'}
+            Please ask the host for an active room QR code or link to join.
           </p>
 
           <div className="flex flex-col gap-3">
             <button
-              onClick={() => navigate('/rooms')}
+              onClick={() => navigate('/join')}
               className="w-full py-3.5 bg-[#FF4FA3] hover:bg-[#ff69b2] text-white font-semibold rounded-xl transition-all shadow-lg shadow-[#FF4FA3]/25 flex items-center justify-center gap-2"
             >
               <Mic className="w-4 h-4" />
-              <span>Join Another Room</span>
-            </button>
-            <button
-              onClick={() => window.location.reload()}
-              className="w-full py-3 bg-white/5 hover:bg-white/10 text-zinc-300 font-medium rounded-xl transition-colors flex items-center justify-center gap-2 text-xs"
-            >
-              <RefreshCw className="w-4 h-4" />
-              <span>Retry Connection</span>
+              <span>Join A Room</span>
             </button>
           </div>
         </div>
@@ -652,9 +753,9 @@ export default function RoomSession() {
             </button>
           ) : (
             <button 
-              onClick={() => navigate('/rooms')}
+              onClick={() => navigate(session?.roomCode ? `/join?session=${session.roomCode.replace(/\s+/g, '')}` : '/join')}
               className="p-2 hover:bg-white/5 rounded-xl text-zinc-400 hover:text-white transition-colors shrink-0"
-              title="Back to Rooms"
+              title="Re-join / Change Name"
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
@@ -721,6 +822,60 @@ export default function RoomSession() {
           >
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
           </button>
+
+          {/* Overflow Menu Button [ ⋮ ] (Host Only) */}
+          {isHost && (
+            <div className="relative">
+              <button
+                onClick={() => setShowOverflowMenu(!showOverflowMenu)}
+                className="p-2 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white rounded-xl transition-colors border border-white/10"
+                title="Session Options"
+              >
+                <MoreVertical className="w-4 h-4" />
+              </button>
+
+              {/* Overflow Dropdown Menu */}
+              <AnimatePresence>
+                {showOverflowMenu && (
+                  <>
+                    <div 
+                      className="fixed inset-0 z-40" 
+                      onClick={() => setShowOverflowMenu(false)} 
+                    />
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.95, y: -5 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95, y: -5 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute right-0 mt-2 w-48 bg-[#12131D] border border-white/10 rounded-2xl shadow-2xl py-2 z-50 overflow-hidden text-sm"
+                    >
+                      <button
+                        onClick={() => {
+                          setShowOverflowMenu(false);
+                          setShowSessionInfoModal(true);
+                        }}
+                        className="w-full px-4 py-2.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 flex items-center gap-2.5 transition-colors font-medium"
+                      >
+                        <Info className="w-4 h-4 text-zinc-400" />
+                        <span>Session Info</span>
+                      </button>
+                      <div className="border-t border-white/5 my-1" />
+                      <button
+                        onClick={() => {
+                          setShowOverflowMenu(false);
+                          setShowEndSessionModal(true);
+                        }}
+                        className="w-full px-4 py-2.5 text-left text-red-400 hover:text-red-300 hover:bg-red-500/10 flex items-center gap-2.5 transition-colors font-semibold"
+                      >
+                        <LogOut className="w-4 h-4 text-red-400" />
+                        <span>End Session</span>
+                      </button>
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
         </div>
       </header>
 
@@ -1024,6 +1179,87 @@ export default function RoomSession() {
           </aside>
         )}
       </div>
+
+      {/* Confirmation Modal: End Session */}
+      <AnimatePresence>
+        {showEndSessionModal && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="w-full max-w-sm bg-[#12131D] border border-white/10 rounded-3xl p-6 shadow-2xl text-center relative overflow-hidden"
+            >
+              <div className="w-12 h-12 rounded-2xl bg-red-500/15 border border-red-500/30 text-red-400 flex items-center justify-center mx-auto mb-4">
+                <LogOut className="w-6 h-6" />
+              </div>
+
+              <h3 className="text-xl font-bold text-white mb-2">End this session?</h3>
+              <p className="text-xs text-zinc-400 leading-relaxed mb-6">
+                All guests will be disconnected and the queue will be cleared.
+              </p>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setShowEndSessionModal(false)}
+                  className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-zinc-300 font-semibold text-sm rounded-xl transition-colors border border-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleExplicitEndSession}
+                  className="flex-1 py-3 bg-red-600 hover:bg-red-500 text-white font-bold text-sm rounded-xl transition-all shadow-lg shadow-red-600/25"
+                >
+                  End Session
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Info Modal: Session Info */}
+      <AnimatePresence>
+        {showSessionInfoModal && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="w-full max-w-sm bg-[#12131D] border border-white/10 rounded-3xl p-6 shadow-2xl text-center relative overflow-hidden"
+            >
+              <div className="w-10 h-10 rounded-2xl bg-[#FF4FA3]/15 border border-[#FF4FA3]/30 text-[#FF4FA3] flex items-center justify-center mx-auto mb-3">
+                <Info className="w-5 h-5" />
+              </div>
+
+              <h3 className="text-lg font-bold text-white mb-1">Session Info</h3>
+              <p className="text-xs text-zinc-400 mb-4">Active Karaoke Session Details</p>
+
+              <div className="bg-[#08090E] border border-white/10 rounded-2xl p-4 text-left space-y-3 mb-6 text-xs">
+                <div className="flex justify-between items-center">
+                  <span className="text-zinc-500 font-medium">Room Code:</span>
+                  <span className="font-mono font-bold text-white text-sm">{session?.roomCode}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-zinc-500 font-medium">Status:</span>
+                  <span className="text-[#FF4FA3] font-bold uppercase tracking-wider text-[11px]">ACTIVE</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-zinc-500 font-medium">Queue Length:</span>
+                  <span className="text-zinc-300 font-semibold">{queue.length} items</span>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setShowSessionInfoModal(false)}
+                className="w-full py-3 bg-[#FF4FA3] hover:bg-[#ff69b2] text-white font-bold text-sm rounded-xl transition-all shadow-lg shadow-[#FF4FA3]/25"
+              >
+                Close
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

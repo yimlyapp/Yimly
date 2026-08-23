@@ -22,7 +22,14 @@ export default function Login() {
       });
 
       if (!res.ok) {
-        const data = await res.json();
+        let data: any = {};
+        if (res.headers.get('content-type')?.includes('application/json')) {
+          try {
+            data = await res.json();
+          } catch (e) {
+            console.error('Failed to parse login response', e);
+          }
+        }
         throw new Error(data.error || 'Login failed');
       }
 

@@ -11,9 +11,12 @@ export default function Layout() {
 
   useEffect(() => {
     fetch('/api/auth/me')
-      .then(res => {
+      .then(async res => {
         if (!res.ok) throw new Error('Not authenticated');
-        return res.json();
+        if (res.headers.get('content-type')?.includes('application/json')) {
+          return await res.json();
+        }
+        throw new Error('Invalid auth response');
       })
       .then(data => {
         setUser(data.user);

@@ -13,7 +13,12 @@ export default function Rooms() {
 
   const fetchActiveSessions = () => {
     fetch('/api/karaoke/active-sessions')
-      .then(res => res.json())
+      .then(async res => {
+        if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+          return await res.json();
+        }
+        return [];
+      })
       .then(data => setSessions(Array.isArray(data) ? data : []))
       .catch(err => console.error('Failed to load active rooms:', err));
   };
@@ -22,16 +27,23 @@ export default function Rooms() {
     fetchActiveSessions();
     const codeParam = searchParams.get('code');
     if (codeParam) {
-      setJoinCode(codeParam);
+      navigate(`/join?session=${codeParam}`, { replace: true });
     }
-  }, [searchParams]);
+  }, [searchParams, navigate]);
 
   const createRoom = async () => {
     setLoading(true);
     setError('');
     try {
       const res = await fetch('/api/karaoke/sessions', { method: 'POST' });
-      const data = await res.json();
+      let data: any = {};
+      if (res.headers.get('content-type')?.includes('application/json')) {
+        try {
+          data = await res.json();
+        } catch (e) {
+          console.error('Failed to parse create room response', e);
+        }
+      }
       if (!res.ok) throw new Error(data.error || 'Failed to create room');
       navigate(`/rooms/${data.id}?role=host`);
     } catch (err: any) {
@@ -56,7 +68,14 @@ export default function Rooms() {
           displayName: displayName.trim() || undefined
         })
       });
-      const data = await res.json();
+      let data: any = {};
+      if (res.headers.get('content-type')?.includes('application/json')) {
+        try {
+          data = await res.json();
+        } catch (e) {
+          console.error('Failed to parse join response', e);
+        }
+      }
       if (!res.ok) throw new Error(data.error || 'Failed to join room');
       navigate(`/rooms/${data.sessionId}?role=guest&controllerId=${data.controllerId}`);
     } catch (err: any) {
