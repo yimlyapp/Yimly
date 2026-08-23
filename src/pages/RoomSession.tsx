@@ -4,6 +4,13 @@ import { motion, AnimatePresence } from 'motion/react';
 import QRCode from 'qrcode';
 import GuestRoom from '../components/GuestRoom';
 import { 
+  getLyricsSettings, 
+  LyricsAppearanceSettings, 
+  applyTextCase, 
+  getFontFamilyClass, 
+  getAlignmentClass 
+} from '../utils/lyricsSettings';
+import { 
   Play, Pause, SkipForward, RotateCcw, Mic, Music, 
   FileText, ArrowLeft, Plus, Radio, Check, AlertCircle, 
   User, Library as LibraryIcon, Search, X, RefreshCw,
@@ -51,7 +58,24 @@ export default function RoomSession() {
   const [variant, setVariant] = useState<'original' | 'instrumental'>('original');
   const [lyricOffset, setLyricOffset] = useState<number>(0); // in ms
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
+  const [lyricsSettings, setLyricsSettings] = useState<LyricsAppearanceSettings>(getLyricsSettings);
   const [currentSongDetails, setCurrentSongDetails] = useState<any>(null);
+
+  useEffect(() => {
+    const handleSettingsChange = (e: any) => {
+      if (e.detail) {
+        setLyricsSettings(e.detail);
+      } else {
+        setLyricsSettings(getLyricsSettings());
+      }
+    };
+    window.addEventListener('yimly_lyrics_settings_changed', handleSettingsChange);
+    window.addEventListener('storage', handleSettingsChange);
+    return () => {
+      window.removeEventListener('yimly_lyrics_settings_changed', handleSettingsChange);
+      window.removeEventListener('storage', handleSettingsChange);
+    };
+  }, []);
   const [showLibrary, setShowLibrary] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
@@ -880,31 +904,40 @@ export default function RoomSession() {
       </header>
 
       {/* Main Container */}
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* Main Stage: Vertically Top-Aligned, Horizontally Centered */}
-        <main className="flex-1 flex flex-col justify-between relative overflow-hidden bg-gradient-to-b from-[#0B0C14] via-[#08090E] to-[#08090E]">
+      <div className="flex-1 flex overflow-hidden relative w-full h-full">
+        {/* Main Stage: Vertically Top-Aligned, Horizontally Centered inside Lyrics Area */}
+        <main className="h-full flex flex-col justify-between relative overflow-hidden bg-gradient-to-b from-[#0B0C14] via-[#08090E] to-[#08090E] landscape:w-[80%] portrait:w-full w-full shrink-0 transition-all">
           {/* Subtle Ambient Glow */}
           <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[550px] h-[550px] bg-[#FF4FA3]/5 rounded-full blur-[140px] pointer-events-none" />
 
-          {/* Top-Aligned Lyrics Stage (Dominant ~80% width in landscape, full screen in portrait) */}
-          <div className="w-full flex-1 flex flex-col items-center justify-start pt-6 sm:pt-10 md:pt-14 lg:pt-16 px-4 sm:px-8 z-10 overflow-hidden lg:pr-72 xl:pr-80">
+          {/* Top-Aligned Lyrics Stage (Dominant 80% width in landscape, 100% full screen in portrait) */}
+          <div className="w-full flex-1 flex flex-col justify-start pt-6 sm:pt-10 md:pt-14 lg:pt-16 px-4 sm:px-8 z-10 overflow-hidden">
             {currentSong ? (
               lyrics.length > 0 ? (
-                /* Hortify 3-Zone Karaoke Lyric Display (Top-aligned, Centered, No Boxes) */
-                <div className="w-full max-w-4xl mx-auto flex flex-col items-center text-center space-y-4 sm:space-y-6 md:space-y-8 select-none">
-                  {/* Zone 1: Previous Lyric (Faded) */}
-                  <div className="min-h-[2.5rem] md:min-h-[3.5rem] flex items-center justify-center w-full">
+                /* 3-Zone Karaoke Lyric Display (Top-aligned, User-configurable Alignment & Appearance) */
+                <div className={`w-full max-w-4xl mx-auto flex flex-col space-y-4 sm:space-y-6 md:space-y-8 select-none ${getAlignmentClass(lyricsSettings.alignment)}`}>
+                  {/* Zone 1: Previous Lyric */}
+                  <div className={`min-h-[2.5rem] md:min-h-[3.5rem] flex items-center w-full ${
+                    lyricsSettings.alignment === 'left' ? 'justify-start' : lyricsSettings.alignment === 'right' ? 'justify-end' : 'justify-center'
+                  }`}>
                     <AnimatePresence mode="wait">
                       {prevLine ? (
                         <motion.p
                           key={`prev-${prevLine.time}-${prevLine.text}`}
                           initial={{ opacity: 0, y: -8 }}
-                          animate={{ opacity: 0.35, y: 0 }}
+                          animate={{ opacity: lyricsSettings.unhighlighted.opacity ?? 0.4, y: 0 }}
                           exit={{ opacity: 0, y: -8 }}
                           transition={{ duration: 0.25, ease: 'easeOut' }}
-                          className="text-zinc-400 text-sm sm:text-base md:text-xl lg:text-2xl font-medium tracking-wide"
+                          style={{
+                            fontSize: `${lyricsSettings.unhighlighted.size}px`,
+                            fontWeight: lyricsSettings.unhighlighted.weight,
+                            letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
+                            lineHeight: lyricsSettings.unhighlighted.lineSpacing,
+                            textAlign: lyricsSettings.alignment
+                          }}
+                          className={`${getFontFamilyClass(lyricsSettings.unhighlighted.font)} text-zinc-300 transition-all`}
                         >
-                          {prevLine.text}
+                          {applyTextCase(prevLine.text, lyricsSettings.unhighlighted.textCase)}
                         </motion.p>
                       ) : (
                         <div className="h-6" />
@@ -912,8 +945,10 @@ export default function RoomSession() {
                     </AnimatePresence>
                   </div>
 
-                  {/* Zone 2: Current Lyric (Large, Bold, Pink Highlight) */}
-                  <div className="min-h-[4rem] sm:min-h-[5.5rem] md:min-h-[7rem] flex items-center justify-center w-full px-2">
+                  {/* Zone 2: Current Lyric (Highlighted) */}
+                  <div className={`min-h-[4rem] sm:min-h-[5.5rem] md:min-h-[7rem] flex items-center w-full px-2 ${
+                    lyricsSettings.alignment === 'left' ? 'justify-start' : lyricsSettings.alignment === 'right' ? 'justify-end' : 'justify-center'
+                  }`}>
                     <AnimatePresence mode="wait">
                       {currLine ? (
                         <motion.p
@@ -922,9 +957,16 @@ export default function RoomSession() {
                           animate={{ opacity: 1, scale: 1, y: 0 }}
                           exit={{ opacity: 0, scale: 1.02, y: -8 }}
                           transition={{ duration: 0.25, ease: 'easeOut' }}
-                          className="text-[#FF4FA3] text-2xl sm:text-3xl md:text-4xl lg:text-5xl xl:text-6xl font-black tracking-tight leading-tight md:leading-snug drop-shadow-[0_0_35px_rgba(255,79,163,0.45)]"
+                          style={{
+                            fontSize: `${lyricsSettings.highlighted.size}px`,
+                            fontWeight: lyricsSettings.highlighted.weight,
+                            letterSpacing: `${lyricsSettings.highlighted.letterSpacing}px`,
+                            lineHeight: lyricsSettings.highlighted.lineSpacing,
+                            textAlign: lyricsSettings.alignment
+                          }}
+                          className={`${getFontFamilyClass(lyricsSettings.highlighted.font)} text-[#FF4FA3] drop-shadow-[0_0_35px_rgba(255,79,163,0.45)] transition-all`}
                         >
-                          {currLine.text || '♪ ♪ ♪'}
+                          {applyTextCase(currLine.text || '♪ ♪ ♪', lyricsSettings.highlighted.textCase)}
                         </motion.p>
                       ) : (
                         <p className="text-zinc-600 text-xl md:text-3xl font-bold">♪ ♪ ♪</p>
@@ -932,19 +974,28 @@ export default function RoomSession() {
                     </AnimatePresence>
                   </div>
 
-                  {/* Zone 3: Next Lyric (Faded Preview) */}
-                  <div className="min-h-[2.5rem] md:min-h-[3.5rem] flex items-center justify-center w-full">
+                  {/* Zone 3: Next Lyric */}
+                  <div className={`min-h-[2.5rem] md:min-h-[3.5rem] flex items-center w-full ${
+                    lyricsSettings.alignment === 'left' ? 'justify-start' : lyricsSettings.alignment === 'right' ? 'justify-end' : 'justify-center'
+                  }`}>
                     <AnimatePresence mode="wait">
                       {nextLine ? (
                         <motion.p
                           key={`next-${nextLine.time}-${nextLine.text}`}
                           initial={{ opacity: 0, y: 8 }}
-                          animate={{ opacity: 0.45, y: 0 }}
+                          animate={{ opacity: lyricsSettings.unhighlighted.opacity ?? 0.4, y: 0 }}
                           exit={{ opacity: 0, y: 8 }}
                           transition={{ duration: 0.25, ease: 'easeOut' }}
-                          className="text-zinc-300 text-sm sm:text-base md:text-xl lg:text-2xl font-medium tracking-wide"
+                          style={{
+                            fontSize: `${lyricsSettings.unhighlighted.size}px`,
+                            fontWeight: lyricsSettings.unhighlighted.weight,
+                            letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
+                            lineHeight: lyricsSettings.unhighlighted.lineSpacing,
+                            textAlign: lyricsSettings.alignment
+                          }}
+                          className={`${getFontFamilyClass(lyricsSettings.unhighlighted.font)} text-zinc-300 transition-all`}
                         >
-                          {nextLine.text}
+                          {applyTextCase(nextLine.text, lyricsSettings.unhighlighted.textCase)}
                         </motion.p>
                       ) : (
                         <div className="h-6" />
@@ -986,7 +1037,7 @@ export default function RoomSession() {
 
           {/* Centered Playback Controls & Timeline (Horizontally centered in lyrics area) */}
           {isHost ? (
-            <div className="w-full z-20 pb-4 sm:pb-6 px-4 lg:pr-72 xl:pr-80">
+            <div className="w-full z-20 pb-4 sm:pb-6 px-4">
               <div className="max-w-xl mx-auto flex flex-col items-center space-y-3">
                 {/* Timeline Progress Slider */}
                 {currentSong && (
@@ -1088,9 +1139,9 @@ export default function RoomSession() {
           )}
         </main>
 
-        {/* Floating Join Room / Queue Card (Landscape Only — Hidden in Portrait) */}
+        {/* Floating Join Room / Queue Card Area (Landscape = 20% width, Portrait = Hidden) */}
         {isHost && (
-          <aside className="hidden lg:flex flex-col absolute top-4 right-4 xl:top-6 xl:right-6 w-64 xl:w-72 max-h-[calc(100vh-6rem)] bg-[#12131D]/90 backdrop-blur-xl border border-white/10 rounded-3xl p-4 shadow-2xl z-30 pointer-events-auto select-none">
+          <aside className="hidden landscape:flex portrait:hidden flex-col h-full landscape:w-[20%] bg-[#12131D]/95 backdrop-blur-xl border-l border-white/10 p-4 shadow-2xl z-30 select-none overflow-y-auto shrink-0">
             {/* Join Room Section */}
             <div className="flex flex-col items-center">
               <h3 className="text-[11px] font-black uppercase tracking-widest text-zinc-300 mb-2.5">
