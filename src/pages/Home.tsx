@@ -1,6 +1,6 @@
 import { useEffect, useState, ReactNode } from 'react';
 import { useOutletContext, Link, useNavigate } from 'react-router-dom';
-import { Play, Mic, Radio, Users, Music, Disc, ChevronRight, Plus, Sparkles, Folder } from 'lucide-react';
+import { Play, Mic, Radio, Users, Music, Disc, ChevronRight, Plus, Sparkles, Folder, Download } from 'lucide-react';
 
 export default function Home() {
   const { user } = useOutletContext<{ user: any }>();
@@ -106,6 +106,14 @@ export default function Home() {
               <Mic className="w-5 h-5" />
               <span>Host Karaoke Room</span>
             </button>
+
+            <Link
+              to="/download"
+              className="px-6 py-3.5 bg-[#FF4FA3]/15 hover:bg-[#FF4FA3]/25 text-[#FF4FA3] font-semibold rounded-xl border border-[#FF4FA3]/30 transition-all flex items-center gap-2"
+            >
+              <Download className="w-5 h-5" />
+              <span>Download Music</span>
+            </Link>
 
             <Link
               to="/library"

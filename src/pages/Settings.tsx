@@ -2,7 +2,7 @@ import { useState, useEffect, FormEvent } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { 
   Plus, Folder, RefreshCw, Trash2, AlertCircle, HardDrive, 
-  ShieldCheck, Type, AlignLeft, AlignCenter, AlignRight, RotateCcw, Sparkles 
+  ShieldCheck, Type, AlignLeft, AlignCenter, AlignRight, RotateCcw, Sparkles, Download, Save, Check 
 } from 'lucide-react';
 import { 
   getLyricsSettings, 
@@ -29,11 +29,58 @@ export default function Settings() {
   const [lyricsSettings, setLyricsSettings] = useState<LyricsAppearanceSettings>(getLyricsSettings);
   const [activeTab, setActiveTab] = useState<'highlighted' | 'unhighlighted' | 'layout'>('highlighted');
 
+  // Downloader Settings State
+  const [dlSettings, setDlSettings] = useState({
+    libraryId: '',
+    format: 'mp3',
+    quality: '320k',
+    embedMetadata: true,
+    embedArtwork: true,
+    folderStructure: '{artist}/{album}/{track_number} - {title}',
+    playlistFolder: true,
+  });
+  const [savingDlSettings, setSavingDlSettings] = useState(false);
+  const [dlSavedMessage, setDlSavedMessage] = useState('');
+
   useEffect(() => {
-    if (user?.role === 'administrator') {
-      fetchLibraries();
+    fetchLibraries();
+    fetchDlSettings();
+  }, []);
+
+  const fetchDlSettings = async () => {
+    try {
+      const res = await fetch('/api/downloader/settings');
+      if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+        const data = await res.json();
+        setDlSettings(data);
+      }
+    } catch (e) {
+      console.error('Failed to fetch downloader settings:', e);
     }
-  }, [user]);
+  };
+
+  const saveDlSettings = async (e: FormEvent) => {
+    e.preventDefault();
+    setSavingDlSettings(true);
+    setDlSavedMessage('');
+    try {
+      const res = await fetch('/api/downloader/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dlSettings),
+      });
+      if (res.ok) {
+        setDlSavedMessage('Downloader settings saved successfully!');
+        setTimeout(() => setDlSavedMessage(''), 3000);
+      } else {
+        alert('Failed to save downloader settings.');
+      }
+    } catch (err) {
+      alert('Error saving downloader settings.');
+    } finally {
+      setSavingDlSettings(false);
+    }
+  };
 
   const fetchLibraries = async () => {
     try {
@@ -617,6 +664,141 @@ export default function Settings() {
             </div>
           )}
         </div>
+      </section>
+
+      {/* ========================================================= */}
+      {/* SECTION: DOWNLOAD MUSIC CONFIGURATION                     */}
+      {/* ========================================================= */}
+      <section className="space-y-6 pt-6 border-t border-white/10">
+        <div className="flex items-center justify-between border-b border-white/5 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-[#FF4FA3]/15 border border-[#FF4FA3]/30 text-[#FF4FA3] rounded-xl">
+              <Download className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-black text-white">Music Downloader Settings</h2>
+              <p className="text-xs text-zinc-400">Configure default save location, audio formats, bitrate quality, and metadata tagging</p>
+            </div>
+          </div>
+        </div>
+
+        <form onSubmit={saveDlSettings} className="bg-[#141622] border border-white/10 rounded-2xl p-6 space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Target Library Folder */}
+            <div className="space-y-2">
+              <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                Default Download Library
+              </label>
+              <select
+                value={dlSettings.libraryId}
+                onChange={(e) => setDlSettings({ ...dlSettings, libraryId: e.target.value })}
+                className="w-full bg-[#08090E] border border-white/10 rounded-xl px-4 py-3 text-xs text-white focus:outline-none focus:border-[#FF4FA3]"
+              >
+                {libraries.map((lib) => (
+                  <option key={lib.id} value={lib.id}>
+                    {lib.name} ({lib.path})
+                  </option>
+                ))}
+                {libraries.length === 0 && <option value="">No media libraries configured</option>}
+              </select>
+              <p className="text-[11px] text-zinc-500">
+                Downloaded tracks will be saved directly into this media library path and indexed automatically.
+              </p>
+            </div>
+
+            {/* Audio Format */}
+            <div className="space-y-2">
+              <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                Audio Output Format
+              </label>
+              <select
+                value={dlSettings.format}
+                onChange={(e) => setDlSettings({ ...dlSettings, format: e.target.value })}
+                className="w-full bg-[#08090E] border border-white/10 rounded-xl px-4 py-3 text-xs text-white focus:outline-none focus:border-[#FF4FA3] font-mono"
+              >
+                <option value="mp3">MP3 (Recommended for maximum compatibility)</option>
+                <option value="m4a">M4A (AAC Audio)</option>
+                <option value="flac">FLAC (Lossless Audio)</option>
+                <option value="wav">WAV (Uncompressed Waveform)</option>
+                <option value="opus">OPUS (High-efficiency Opus Audio)</option>
+              </select>
+            </div>
+
+            {/* Quality Bitrate */}
+            <div className="space-y-2">
+              <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                Default Audio Quality
+              </label>
+              <select
+                value={dlSettings.quality}
+                onChange={(e) => setDlSettings({ ...dlSettings, quality: e.target.value })}
+                className="w-full bg-[#08090E] border border-white/10 rounded-xl px-4 py-3 text-xs text-white focus:outline-none focus:border-[#FF4FA3] font-mono"
+              >
+                <option value="320k">320 kbps (High Quality Constant Bitrate)</option>
+                <option value="256k">256 kbps (Standard High Quality)</option>
+                <option value="192k">192 kbps (Medium Bitrate)</option>
+                <option value="128k">128 kbps (Compact Storage)</option>
+              </select>
+            </div>
+
+            {/* Folder Naming Pattern */}
+            <div className="space-y-2">
+              <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                Folder / File Naming Pattern
+              </label>
+              <input
+                type="text"
+                value={dlSettings.folderStructure}
+                onChange={(e) => setDlSettings({ ...dlSettings, folderStructure: e.target.value })}
+                placeholder="{artist}/{album}/{track_number} - {title}"
+                className="w-full bg-[#08090E] border border-white/10 rounded-xl px-4 py-3 text-xs text-white focus:outline-none focus:border-[#FF4FA3] font-mono"
+              />
+              <p className="text-[11px] text-zinc-500">
+                Variables: <code className="text-[#FF4FA3]">{'{artist}'}</code>, <code className="text-[#FF4FA3]">{'{album}'}</code>, <code className="text-[#FF4FA3]">{'{track_number}'}</code>, <code className="text-[#FF4FA3]">{'{title}'}</code>
+              </p>
+            </div>
+          </div>
+
+          {/* Toggle Switches */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-white/5">
+            <label className="flex items-center justify-between p-3.5 bg-[#08090E] border border-white/5 rounded-xl cursor-pointer">
+              <span className="text-xs font-semibold text-white">Embed ID3 Metadata Tags</span>
+              <input
+                type="checkbox"
+                checked={dlSettings.embedMetadata}
+                onChange={(e) => setDlSettings({ ...dlSettings, embedMetadata: e.target.checked })}
+                className="w-4 h-4 rounded text-[#FF4FA3] focus:ring-[#FF4FA3] accent-[#FF4FA3]"
+              />
+            </label>
+
+            <label className="flex items-center justify-between p-3.5 bg-[#08090E] border border-white/5 rounded-xl cursor-pointer">
+              <span className="text-xs font-semibold text-white">Embed High-Res Cover Artwork</span>
+              <input
+                type="checkbox"
+                checked={dlSettings.embedArtwork}
+                onChange={(e) => setDlSettings({ ...dlSettings, embedArtwork: e.target.checked })}
+                className="w-4 h-4 rounded text-[#FF4FA3] focus:ring-[#FF4FA3] accent-[#FF4FA3]"
+              />
+            </label>
+          </div>
+
+          <div className="flex items-center justify-between pt-2">
+            {dlSavedMessage && (
+              <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                <Check className="w-4 h-4" />
+                <span>{dlSavedMessage}</span>
+              </span>
+            )}
+            <button
+              type="submit"
+              disabled={savingDlSettings}
+              className="ml-auto px-6 py-2.5 bg-[#FF4FA3] hover:bg-[#ff69b2] text-white font-bold text-xs rounded-xl shadow-lg shadow-[#FF4FA3]/20 flex items-center gap-2 transition-all"
+            >
+              <Save className="w-4 h-4" />
+              <span>{savingDlSettings ? 'Saving...' : 'Save Downloader Settings'}</span>
+            </button>
+          </div>
+        </form>
       </section>
 
       {/* ========================================================= */}

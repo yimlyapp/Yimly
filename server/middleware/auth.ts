@@ -23,8 +23,13 @@ export const isPublicRoute = (req: Request): boolean => {
     return true;
   }
 
-  // Public Karaoke session validation, state query, and queueing for active room participants
-  if (/^\/api\/karaoke\/sessions\/[^\/]+\/(validate|state|queue)$/.test(url)) {
+  // Active sessions query
+  if (method === 'GET' && url === '/api/karaoke/active-sessions') {
+    return true;
+  }
+
+  // Public Karaoke session validation, state query, queueing, and ending for room participants
+  if (/^\/api\/karaoke\/sessions\/[^\/]+\/(validate|state|queue|end)$/.test(url)) {
     return true;
   }
 

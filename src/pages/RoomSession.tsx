@@ -95,6 +95,306 @@ export default function RoomSession() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const restorePositionRef = useRef<{ time: number, playing: boolean } | null>(null);
 
+  // -------------------------------------------------------------
+  // TV Remote / D-pad Navigation Focus Management
+  // -------------------------------------------------------------
+  const playButtonRef = useRef<HTMLButtonElement>(null);
+  const lastFocusedElementRef = useRef<HTMLElement | null>(null);
+  const lastFocusedTvIdRef = useRef<string | null>(null);
+  const initialFocusSetRef = useRef(false);
+
+  // Track last focused element ID
+  useEffect(() => {
+    const handleFocusIn = (e: FocusEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && target !== document.body) {
+        lastFocusedElementRef.current = target;
+        const tvId = target.getAttribute('data-tv-id');
+        if (tvId) {
+          lastFocusedTvIdRef.current = tvId;
+        }
+      }
+    };
+    window.addEventListener('focusin', handleFocusIn);
+    return () => window.removeEventListener('focusin', handleFocusIn);
+  }, []);
+
+  // Initial focus placement on Play button or primary action when Host room opens
+  useEffect(() => {
+    if (validationStatus === 'valid' && isHost) {
+      const focusPrimary = () => {
+        if (playButtonRef.current && !playButtonRef.current.hasAttribute('disabled')) {
+          playButtonRef.current.focus();
+          initialFocusSetRef.current = true;
+          return;
+        }
+        const candidate = document.querySelector<HTMLElement>(
+          '[data-tv-id="play-button"], [data-tv-id="start-session-button"], [data-tv-id="header-start-session-button"]'
+        );
+        if (candidate && !candidate.hasAttribute('disabled')) {
+          candidate.focus();
+          initialFocusSetRef.current = true;
+        }
+      };
+
+      const t1 = setTimeout(focusPrimary, 100);
+      const t2 = setTimeout(focusPrimary, 400);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
+    }
+  }, [validationStatus, isHost, session?.id, queue]);
+
+  // Focus recovery if focus lands back on body unexpectedly
+  useEffect(() => {
+    if (validationStatus === 'valid' && isHost) {
+      if (document.activeElement === document.body) {
+        if (lastFocusedTvIdRef.current) {
+          const prevEl = document.querySelector<HTMLElement>(`[data-tv-id="${lastFocusedTvIdRef.current}"]`);
+          if (prevEl && !prevEl.hasAttribute('disabled')) {
+            prevEl.focus();
+            return;
+          }
+        }
+        if (playButtonRef.current && !playButtonRef.current.hasAttribute('disabled')) {
+          playButtonRef.current.focus();
+        }
+      }
+    }
+  });
+
+  // Overlay Focus Traps and Restoration
+  useEffect(() => {
+    if (showEndSessionModal) {
+      const t = setTimeout(() => {
+        const cancelBtn = document.querySelector<HTMLElement>('[data-tv-id="end-session-cancel"]');
+        if (cancelBtn) cancelBtn.focus();
+      }, 50);
+      return () => clearTimeout(t);
+    }
+  }, [showEndSessionModal]);
+
+  useEffect(() => {
+    if (showSessionInfoModal) {
+      const t = setTimeout(() => {
+        const closeBtn = document.querySelector<HTMLElement>('[data-tv-id="session-info-close"]');
+        if (closeBtn) closeBtn.focus();
+      }, 50);
+      return () => clearTimeout(t);
+    }
+  }, [showSessionInfoModal]);
+
+  useEffect(() => {
+    if (showOverflowMenu) {
+      const t = setTimeout(() => {
+        const firstMenuItem = document.querySelector<HTMLElement>('[data-tv-id="menu-session-info"]');
+        if (firstMenuItem) firstMenuItem.focus();
+      }, 50);
+      return () => clearTimeout(t);
+    }
+  }, [showOverflowMenu]);
+
+  useEffect(() => {
+    if (showLibrary) {
+      const t = setTimeout(() => {
+        const searchInput = document.querySelector<HTMLElement>('[data-tv-id="library-search"]');
+        if (searchInput) searchInput.focus();
+      }, 50);
+      return () => clearTimeout(t);
+    }
+  }, [showLibrary]);
+
+  // Keydown Spatial & Back Key Handler for TV Remote / Keyboard
+  useEffect(() => {
+    if (!isHost) return;
+
+    const getFocusable = (container: HTMLElement | Document = document): HTMLElement[] => {
+      const selectors = [
+        'button:not([disabled])',
+        'input:not([disabled])',
+        'select:not([disabled])',
+        'textarea:not([disabled])',
+        '[tabindex]:not([tabindex="-1"]):not([disabled])',
+        'a[href]'
+      ].join(',');
+
+      return Array.from(container.querySelectorAll<HTMLElement>(selectors)).filter(el => {
+        if (el.offsetWidth === 0 || el.offsetHeight === 0) return false;
+        const style = window.getComputedStyle(el);
+        if (style.visibility === 'hidden' || style.display === 'none' || style.opacity === '0') return false;
+        return true;
+      });
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key;
+      const keyCode = e.keyCode;
+
+      const isDpad = key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight' ||
+                     keyCode === 38 || keyCode === 40 || keyCode === 37 || keyCode === 39;
+
+      const isSelect = key === 'Enter' || key === ' ' || key === 'Select' ||
+                       keyCode === 13 || keyCode === 32 || keyCode === 29443;
+
+      const isBack = key === 'Escape' || key === 'Backspace' || key === 'GoBack' ||
+                     keyCode === 27 || keyCode === 8 || keyCode === 10009 || keyCode === 461;
+
+      // 1. Handle TV Remote Back / Escape Key
+      if (isBack) {
+        if (showEndSessionModal) {
+          e.preventDefault();
+          setShowEndSessionModal(false);
+          lastFocusedElementRef.current?.focus();
+          return;
+        }
+        if (showSessionInfoModal) {
+          e.preventDefault();
+          setShowSessionInfoModal(false);
+          lastFocusedElementRef.current?.focus();
+          return;
+        }
+        if (showOverflowMenu) {
+          e.preventDefault();
+          setShowOverflowMenu(false);
+          lastFocusedElementRef.current?.focus();
+          return;
+        }
+        if (showLibrary) {
+          e.preventDefault();
+          setShowLibrary(false);
+          lastFocusedElementRef.current?.focus();
+          return;
+        }
+        // Return focus to Play button if somewhere else
+        const playBtn = playButtonRef.current || document.querySelector<HTMLElement>('[data-tv-id="play-button"]');
+        if (playBtn && document.activeElement !== playBtn && !playBtn.hasAttribute('disabled')) {
+          e.preventDefault();
+          playBtn.focus();
+          return;
+        }
+      }
+
+      // 2. Handle OK / Select Key when focus is on body or non-interactive container
+      if (isSelect) {
+        if (document.activeElement === document.body) {
+          e.preventDefault();
+          const playBtn = playButtonRef.current || document.querySelector<HTMLElement>('[data-tv-id="play-button"], [data-tv-id="start-session-button"]');
+          if (playBtn) {
+            playBtn.focus();
+            playBtn.click();
+          }
+          return;
+        }
+      }
+
+      // 3. Handle D-pad Spatial Navigation
+      if (isDpad) {
+        const activeEl = (document.activeElement as HTMLElement) || document.body;
+
+        // Allow range slider native left/right adjustment
+        if (activeEl.tagName === 'INPUT' && (activeEl as HTMLInputElement).type === 'range') {
+          if (key === 'ArrowLeft' || key === 'ArrowRight' || keyCode === 37 || keyCode === 39) {
+            return;
+          }
+        }
+
+        // Allow text input left/right cursor movement
+        if (activeEl.tagName === 'INPUT' && (activeEl as HTMLInputElement).type === 'text') {
+          if (key === 'ArrowLeft' || key === 'ArrowRight' || keyCode === 37 || keyCode === 39) {
+            return;
+          }
+        }
+
+        e.preventDefault();
+
+        // Determine container scope
+        let searchContainer: HTMLElement | Document = document;
+        if (showEndSessionModal || showSessionInfoModal || showLibrary || showOverflowMenu) {
+          const activeModal = document.querySelector<HTMLElement>('.fixed.inset-0, .absolute.right-0.z-50');
+          if (activeModal) {
+            searchContainer = activeModal;
+          }
+        }
+
+        const candidates = getFocusable(searchContainer);
+        if (candidates.length === 0) return;
+
+        if (activeEl === document.body || !searchContainer.contains(activeEl)) {
+          const defaultTarget = candidates.find(c => c.getAttribute('data-tv-id') === 'play-button') || candidates[0];
+          if (defaultTarget) defaultTarget.focus();
+          return;
+        }
+
+        const navCandidates = candidates.filter(c => c !== activeEl);
+        if (navCandidates.length === 0) return;
+
+        const activeRect = activeEl.getBoundingClientRect();
+        const activeCenterX = activeRect.left + activeRect.width / 2;
+        const activeCenterY = activeRect.top + activeRect.height / 2;
+
+        let bestCandidate: HTMLElement | null = null;
+        let minScore = Infinity;
+
+        const isRight = key === 'ArrowRight' || keyCode === 39;
+        const isLeft = key === 'ArrowLeft' || keyCode === 37;
+        const isDown = key === 'ArrowDown' || keyCode === 40;
+        const isUp = key === 'ArrowUp' || keyCode === 38;
+
+        for (const cand of navCandidates) {
+          const candRect = cand.getBoundingClientRect();
+          const candCenterX = candRect.left + candRect.width / 2;
+          const candCenterY = candRect.top + candRect.height / 2;
+
+          let isDirectionValid = false;
+          let score = Infinity;
+
+          if (isRight) {
+            if (candCenterX > activeCenterX + 2 || candRect.left >= activeRect.right - 5) {
+              isDirectionValid = true;
+              const dx = Math.max(0, candRect.left - activeRect.right);
+              const dy = Math.abs(candCenterY - activeCenterY);
+              score = dx + dy * 2.5;
+            }
+          } else if (isLeft) {
+            if (candCenterX < activeCenterX - 2 || candRect.right <= activeRect.left + 5) {
+              isDirectionValid = true;
+              const dx = Math.max(0, activeRect.left - candRect.right);
+              const dy = Math.abs(candCenterY - activeCenterY);
+              score = dx + dy * 2.5;
+            }
+          } else if (isDown) {
+            if (candCenterY > activeCenterY + 2 || candRect.top >= activeRect.bottom - 5) {
+              isDirectionValid = true;
+              const dy = Math.max(0, candRect.top - activeRect.bottom);
+              const dx = Math.abs(candCenterX - activeCenterX);
+              score = dy + dx * 2.5;
+            }
+          } else if (isUp) {
+            if (candCenterY < activeCenterY - 2 || candRect.bottom <= activeRect.top + 5) {
+              isDirectionValid = true;
+              const dy = Math.max(0, activeRect.top - candRect.bottom);
+              const dx = Math.abs(candCenterX - activeCenterX);
+              score = dy + dx * 2.5;
+            }
+          }
+
+          if (isDirectionValid && score < minScore) {
+            minScore = score;
+            bestCandidate = cand;
+          }
+        }
+
+        if (bestCandidate) {
+          bestCandidate.focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isHost, showEndSessionModal, showSessionInfoModal, showOverflowMenu, showLibrary]);
+
   // Fullscreen change listener
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -603,9 +903,10 @@ export default function RoomSession() {
           </p>
 
           <button
+            data-tv-id="start-session-button"
             onClick={handleStartNewSession}
             disabled={isRestartingSession}
-            className="w-full py-4 bg-[#FF4FA3] hover:bg-[#ff69b2] text-white font-bold text-base rounded-xl transition-all shadow-lg shadow-[#FF4FA3]/25 flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
+            className="w-full py-4 bg-[#FF4FA3] hover:bg-[#ff69b2] text-white font-bold text-base rounded-xl transition-all shadow-lg shadow-[#FF4FA3]/25 flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50 focus:outline-none focus:ring-4 focus:ring-[#FF4FA3] focus:ring-offset-2 focus:ring-offset-[#08090E]"
           >
             <RefreshCw className={`w-5 h-5 ${isRestartingSession ? 'animate-spin' : ''}`} />
             <span>{isRestartingSession ? 'Creating Session...' : 'Start New Session'}</span>
@@ -669,8 +970,9 @@ export default function RoomSession() {
                 </div>
               </div>
               <button 
+                data-tv-id="library-close"
                 onClick={() => setShowLibrary(false)}
-                className="p-2 text-zinc-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-xl transition-colors"
+                className="p-2 text-zinc-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-xl transition-colors focus:outline-none focus:ring-4 focus:ring-[#FF4FA3]"
                 title="Close"
               >
                 <X className="w-5 h-5" />
@@ -682,11 +984,12 @@ export default function RoomSession() {
               <div className="relative">
                 <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input 
+                  data-tv-id="library-search"
                   type="text"
                   placeholder="Search song title, artist, or album..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-[#08090E] border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-[#FF4FA3] focus:ring-1 focus:ring-[#FF4FA3]"
+                  className="w-full bg-[#08090E] border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-[#FF4FA3] focus:ring-2 focus:ring-[#FF4FA3]"
                 />
               </div>
             </div>
@@ -768,9 +1071,10 @@ export default function RoomSession() {
           {/* ↻ Start New Session Button */}
           {isHost ? (
             <button 
+              data-tv-id="header-start-session-button"
               onClick={handleStartNewSession}
               disabled={isRestartingSession}
-              className="p-2 bg-white/5 hover:bg-[#FF4FA3]/20 hover:text-[#FF4FA3] text-zinc-300 rounded-xl transition-all border border-white/10 flex items-center justify-center shrink-0"
+              className="p-2 bg-white/5 hover:bg-[#FF4FA3]/20 hover:text-[#FF4FA3] text-zinc-300 rounded-xl transition-all border border-white/10 flex items-center justify-center shrink-0 focus:outline-none focus:ring-4 focus:ring-[#FF4FA3] focus:ring-offset-2 focus:ring-offset-[#08090E]"
               title="Start New Session"
             >
               <RefreshCw className={`w-4 h-4 ${isRestartingSession ? 'animate-spin text-[#FF4FA3]' : ''}`} />
@@ -802,8 +1106,9 @@ export default function RoomSession() {
             <>
               {/* Instrumental Toggle in Top Navigation */}
               <button 
+                data-tv-id="inst-toggle-button"
                 onClick={handleToggleInstrumental}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all border ${
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all border focus:outline-none focus:ring-4 focus:ring-[#FF4FA3] focus:ring-offset-2 focus:ring-offset-[#08090E] ${
                   variant === 'instrumental' 
                     ? 'bg-[#FF4FA3] text-white border-[#FF4FA3] shadow-lg shadow-[#FF4FA3]/25' 
                     : 'bg-white/5 text-zinc-300 border-white/10 hover:bg-white/10'
@@ -818,8 +1123,9 @@ export default function RoomSession() {
               <div className="hidden sm:flex items-center gap-1 bg-[#08090E] px-2 py-1 rounded-xl border border-white/10 text-xs">
                 <span className="text-zinc-500 text-[11px] font-medium hidden md:inline pl-1">Offset</span>
                 <button 
+                  data-tv-id="offset-minus-button"
                   onClick={() => handleOffsetChange(-250)}
-                  className="px-1.5 py-0.5 bg-[#181926] hover:bg-[#222436] text-zinc-300 hover:text-white rounded text-[10px] font-semibold transition-colors"
+                  className="px-1.5 py-0.5 bg-[#181926] hover:bg-[#222436] text-zinc-300 hover:text-white rounded text-[10px] font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-[#FF4FA3]"
                   title="-250ms"
                 >
                   -250ms
@@ -828,8 +1134,9 @@ export default function RoomSession() {
                   {lyricOffset > 0 ? `+${lyricOffset}` : lyricOffset}ms
                 </span>
                 <button 
+                  data-tv-id="offset-plus-button"
                   onClick={() => handleOffsetChange(250)}
-                  className="px-1.5 py-0.5 bg-[#181926] hover:bg-[#222436] text-zinc-300 hover:text-white rounded text-[10px] font-semibold transition-colors"
+                  className="px-1.5 py-0.5 bg-[#181926] hover:bg-[#222436] text-zinc-300 hover:text-white rounded text-[10px] font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-[#FF4FA3]"
                   title="+250ms"
                 >
                   +250ms
@@ -840,8 +1147,9 @@ export default function RoomSession() {
 
           {/* Fullscreen Toggle Button */}
           <button
+            data-tv-id="fullscreen-toggle-button"
             onClick={toggleFullscreen}
-            className="p-2 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white rounded-xl transition-colors border border-white/10"
+            className="p-2 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white rounded-xl transition-colors border border-white/10 focus:outline-none focus:ring-4 focus:ring-[#FF4FA3] focus:ring-offset-2 focus:ring-offset-[#08090E]"
             title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
           >
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
@@ -851,8 +1159,9 @@ export default function RoomSession() {
           {isHost && (
             <div className="relative">
               <button
+                data-tv-id="overflow-menu-button"
                 onClick={() => setShowOverflowMenu(!showOverflowMenu)}
-                className="p-2 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white rounded-xl transition-colors border border-white/10"
+                className="p-2 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white rounded-xl transition-colors border border-white/10 focus:outline-none focus:ring-4 focus:ring-[#FF4FA3] focus:ring-offset-2 focus:ring-offset-[#08090E]"
                 title="Session Options"
               >
                 <MoreVertical className="w-4 h-4" />
@@ -874,22 +1183,24 @@ export default function RoomSession() {
                       className="absolute right-0 mt-2 w-48 bg-[#12131D] border border-white/10 rounded-2xl shadow-2xl py-2 z-50 overflow-hidden text-sm"
                     >
                       <button
+                        data-tv-id="menu-session-info"
                         onClick={() => {
                           setShowOverflowMenu(false);
                           setShowSessionInfoModal(true);
                         }}
-                        className="w-full px-4 py-2.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 flex items-center gap-2.5 transition-colors font-medium"
+                        className="w-full px-4 py-2.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 flex items-center gap-2.5 transition-colors font-medium focus:outline-none focus:bg-[#FF4FA3]/20 focus:text-white"
                       >
                         <Info className="w-4 h-4 text-zinc-400" />
                         <span>Session Info</span>
                       </button>
                       <div className="border-t border-white/5 my-1" />
                       <button
+                        data-tv-id="menu-end-session"
                         onClick={() => {
                           setShowOverflowMenu(false);
                           setShowEndSessionModal(true);
                         }}
-                        className="w-full px-4 py-2.5 text-left text-red-400 hover:text-red-300 hover:bg-red-500/10 flex items-center gap-2.5 transition-colors font-semibold"
+                        className="w-full px-4 py-2.5 text-left text-red-400 hover:text-red-300 hover:bg-red-500/10 flex items-center gap-2.5 transition-colors font-semibold focus:outline-none focus:bg-red-500/20 focus:text-red-300"
                       >
                         <LogOut className="w-4 h-4 text-red-400" />
                         <span>End Session</span>
@@ -1046,13 +1357,14 @@ export default function RoomSession() {
                       {formatTime(currentTime)}
                     </span>
                     <input
+                      data-tv-id="timeline-slider"
                       type="range"
                       min="0"
                       max={duration || 100}
                       step="0.1"
                       value={currentTime}
                       onChange={handleSeek}
-                      className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
+                      className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3] focus:outline-none focus:ring-2 focus:ring-[#FF4FA3]"
                     />
                     <span className="text-[11px] font-mono text-zinc-500 w-10">
                       {formatTime(duration)}
@@ -1063,27 +1375,31 @@ export default function RoomSession() {
                 {/* Bottom Controls: [ ↶ ] [ ▶ ] [ ⏭ ] */}
                 <div className="flex items-center gap-5">
                   <button 
+                    data-tv-id="restart-button"
                     onClick={handleRestart}
                     disabled={!currentSong}
-                    className="p-3 bg-[#181926] hover:bg-[#222436] text-white rounded-full transition-all disabled:opacity-30 border border-white/10 hover:scale-105 active:scale-95 shadow-md"
+                    className="p-3 bg-[#181926] hover:bg-[#222436] text-white rounded-full transition-all disabled:opacity-30 border border-white/10 hover:scale-105 active:scale-95 shadow-md focus:outline-none focus:ring-4 focus:ring-[#FF4FA3] focus:ring-offset-2 focus:ring-offset-[#08090E]"
                     title="Restart Track"
                   >
                     <RotateCcw className="w-5 h-5" />
                   </button>
                   
                   <button 
+                    ref={playButtonRef}
+                    data-tv-id="play-button"
                     onClick={togglePlay}
                     disabled={!currentSong}
-                    className="w-14 h-14 bg-white hover:bg-zinc-200 text-black rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-95 shadow-xl disabled:opacity-30"
+                    className="w-14 h-14 bg-white hover:bg-zinc-200 text-black rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-95 shadow-xl disabled:opacity-30 focus:outline-none focus:ring-4 focus:ring-[#FF4FA3] focus:ring-offset-2 focus:ring-offset-[#08090E] focus:scale-110 focus:shadow-[0_0_35px_rgba(255,79,163,0.9)]"
                     title={playing ? 'Pause' : 'Play'}
                   >
                     {playing ? <Pause className="w-6 h-6 fill-black" /> : <Play className="w-6 h-6 fill-black ml-0.5" />}
                   </button>
 
                   <button 
+                    data-tv-id="skip-button"
                     onClick={handleSkip}
                     disabled={!currentSong}
-                    className="p-3 bg-[#181926] hover:bg-[#222436] text-white rounded-full transition-all disabled:opacity-30 border border-white/10 hover:scale-105 active:scale-95 shadow-md"
+                    className="p-3 bg-[#181926] hover:bg-[#222436] text-white rounded-full transition-all disabled:opacity-30 border border-white/10 hover:scale-105 active:scale-95 shadow-md focus:outline-none focus:ring-4 focus:ring-[#FF4FA3] focus:ring-offset-2 focus:ring-offset-[#08090E]"
                     title="Skip Track"
                   >
                     <SkipForward className="w-5 h-5" />
@@ -1252,14 +1568,16 @@ export default function RoomSession() {
 
               <div className="flex items-center gap-3">
                 <button
+                  data-tv-id="end-session-cancel"
                   onClick={() => setShowEndSessionModal(false)}
-                  className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-zinc-300 font-semibold text-sm rounded-xl transition-colors border border-white/10"
+                  className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-zinc-300 font-semibold text-sm rounded-xl transition-colors border border-white/10 focus:outline-none focus:ring-4 focus:ring-[#FF4FA3]"
                 >
                   Cancel
                 </button>
                 <button
+                  data-tv-id="end-session-confirm"
                   onClick={handleExplicitEndSession}
-                  className="flex-1 py-3 bg-red-600 hover:bg-red-500 text-white font-bold text-sm rounded-xl transition-all shadow-lg shadow-red-600/25"
+                  className="flex-1 py-3 bg-red-600 hover:bg-red-500 text-white font-bold text-sm rounded-xl transition-all shadow-lg shadow-red-600/25 focus:outline-none focus:ring-4 focus:ring-red-400"
                 >
                   End Session
                 </button>
@@ -1302,8 +1620,9 @@ export default function RoomSession() {
               </div>
 
               <button
+                data-tv-id="session-info-close"
                 onClick={() => setShowSessionInfoModal(false)}
-                className="w-full py-3 bg-[#FF4FA3] hover:bg-[#ff69b2] text-white font-bold text-sm rounded-xl transition-all shadow-lg shadow-[#FF4FA3]/25"
+                className="w-full py-3 bg-[#FF4FA3] hover:bg-[#ff69b2] text-white font-bold text-sm rounded-xl transition-all shadow-lg shadow-[#FF4FA3]/25 focus:outline-none focus:ring-4 focus:ring-[#FF4FA3]"
               >
                 Close
               </button>

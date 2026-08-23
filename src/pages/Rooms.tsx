@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Play, LogIn, Users, Mic, Radio, Sparkles, ArrowRight, Disc, RefreshCw, User } from 'lucide-react';
+import { Play, LogIn, Users, Mic, Radio, Sparkles, ArrowRight, Disc, RefreshCw, User, LogOut, AlertCircle } from 'lucide-react';
 
 export default function Rooms() {
   const [sessions, setSessions] = useState<any[]>([]);
@@ -8,6 +8,12 @@ export default function Rooms() {
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // End Session state
+  const [sessionToEnd, setSessionToEnd] = useState<any | null>(null);
+  const [endingSession, setEndingSession] = useState(false);
+  const [endSessionError, setEndSessionError] = useState('');
+
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -30,6 +36,42 @@ export default function Rooms() {
       navigate(`/join?session=${codeParam}`, { replace: true });
     }
   }, [searchParams, navigate]);
+
+  const handleEndSession = async () => {
+    if (!sessionToEnd) return;
+    setEndingSession(true);
+    setEndSessionError('');
+
+    try {
+      const res = await fetch(`/api/karaoke/sessions/${sessionToEnd.id}/end`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      let data: any = {};
+      if (res.headers.get('content-type')?.includes('application/json')) {
+        try {
+          data = await res.json();
+        } catch (e) {
+          console.error('Failed to parse end session response', e);
+        }
+      }
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to terminate session on server');
+      }
+
+      // Success: Remove ended room from active rooms list and update state
+      setSessions((prev) => prev.filter((s) => s.id !== sessionToEnd.id));
+      setSessionToEnd(null);
+      fetchActiveSessions();
+    } catch (err: any) {
+      console.error('Failed to end session:', err);
+      setEndSessionError(err.message || 'Failed to end session. Please try again.');
+    } finally {
+      setEndingSession(false);
+    }
+  };
 
   const createRoom = async () => {
     setLoading(true);
@@ -202,12 +244,12 @@ export default function Rooms() {
           {sessions.map((s) => (
             <div
               key={s.id}
-              onClick={() => {
-                setJoinCode(s.roomCode);
-              }}
-              className="bg-[#141622] border border-white/5 hover:border-[#FF4FA3]/40 rounded-2xl p-5 flex items-center justify-between hover:bg-[#1A1C2C] transition-all cursor-pointer group"
+              className="bg-[#141622] border border-white/5 hover:border-[#FF4FA3]/40 rounded-2xl p-5 flex flex-col justify-between hover:bg-[#1A1C2C] transition-all group"
             >
-              <div>
+              <div 
+                onClick={() => setJoinCode(s.roomCode)}
+                className="cursor-pointer mb-4"
+              >
                 <div className="flex items-center gap-2 mb-1">
                   <span className="w-2 h-2 rounded-full bg-[#FF4FA3] animate-pulse" />
                   <span className="font-mono text-xl font-extrabold text-white tracking-widest group-hover:text-[#FF4FA3] transition-colors">
@@ -217,8 +259,28 @@ export default function Rooms() {
                 <div className="text-xs text-zinc-500">Host: {s.hostId}</div>
               </div>
 
-              <div className="px-3 py-1.5 rounded-lg bg-[#FF4FA3]/15 text-[#FF4FA3] text-xs font-semibold border border-[#FF4FA3]/25 group-hover:bg-[#FF4FA3] group-hover:text-white transition-colors">
-                Select
+              <div className="flex items-center justify-between gap-2 pt-3 border-t border-white/5">
+                <button
+                  type="button"
+                  onClick={() => setJoinCode(s.roomCode)}
+                  className="px-3 py-1.5 rounded-lg bg-[#FF4FA3]/15 text-[#FF4FA3] text-xs font-semibold border border-[#FF4FA3]/25 hover:bg-[#FF4FA3] hover:text-white transition-colors"
+                >
+                  Select Code
+                </button>
+
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEndSessionError('');
+                    setSessionToEnd(s);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-600 hover:text-white text-xs font-semibold border border-red-500/20 transition-all flex items-center gap-1.5"
+                  title="End Session"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>End Session</span>
+                </button>
               </div>
             </div>
           ))}
@@ -232,6 +294,82 @@ export default function Rooms() {
           )}
         </div>
       </div>
+
+      {/* End Session Confirmation Modal */}
+      {sessionToEnd && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#141622] border border-white/10 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl space-y-6 relative overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-red-500/15 border border-red-500/30 flex items-center justify-center shrink-0 text-red-400">
+                <LogOut className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-white">End Session?</h3>
+                <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
+                  Are you sure you want to terminate this live karaoke session? This action will close connections for all active participants.
+                </p>
+              </div>
+            </div>
+
+            {/* Room / Session Details */}
+            <div className="p-4 bg-[#08090E] border border-white/10 rounded-2xl space-y-2.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-zinc-400 font-medium">Room Code</span>
+                <span className="font-mono font-black text-white text-base tracking-widest">{sessionToEnd.roomCode}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-zinc-400 font-medium">Host ID</span>
+                <span className="text-zinc-200 font-semibold">{sessionToEnd.hostId}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-zinc-400 font-medium">Session ID</span>
+                <span className="font-mono text-zinc-500 text-[10px] truncate max-w-[180px]">{sessionToEnd.id}</span>
+              </div>
+            </div>
+
+            {/* Error Message Display */}
+            {endSessionError && (
+              <div className="p-3.5 bg-red-950/60 border border-red-500/40 rounded-xl text-red-300 text-xs flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                <span>{endSessionError}</span>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSessionToEnd(null);
+                  setEndSessionError('');
+                }}
+                disabled={endingSession}
+                className="flex-1 py-3 px-4 bg-white/5 hover:bg-white/10 text-zinc-300 font-semibold text-xs rounded-xl transition-colors border border-white/10 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleEndSession}
+                disabled={endingSession}
+                className="flex-1 py-3 px-4 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded-xl transition-all shadow-lg shadow-red-600/25 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {endingSession ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Ending...</span>
+                  </>
+                ) : (
+                  <>
+                    <LogOut className="w-4 h-4" />
+                    <span>End Session</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

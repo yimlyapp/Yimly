@@ -1,6 +1,6 @@
 import { useEffect, useState, ReactNode } from 'react';
 import { Outlet, useNavigate, NavLink, useLocation } from 'react-router-dom';
-import { Home, Music, Mic, Settings, Users, LogOut, Loader2, Disc, Menu, X, Radio } from 'lucide-react';
+import { Home, Music, Mic, Settings, Users, LogOut, Loader2, Disc, Menu, X, Radio, Download } from 'lucide-react';
 
 export default function Layout() {
   const [user, setUser] = useState<any>(null);
@@ -73,6 +73,7 @@ export default function Layout() {
             Menu
           </div>
           <NavItem to="/" icon={<Home className="w-4 h-4" />} label="Home" />
+          <NavItem to="/download" icon={<Download className="w-4 h-4" />} label="Download Music" />
           <NavItem to="/library" icon={<Music className="w-4 h-4" />} label="Library" />
           <NavItem to="/rooms" icon={<Radio className="w-4 h-4" />} label="Karaoke Rooms" badge="Live" />
 
@@ -137,6 +138,7 @@ export default function Layout() {
 
             <nav className="flex-1 py-6 space-y-2 overflow-y-auto">
               <NavItem to="/" icon={<Home className="w-5 h-5" />} label="Home" />
+              <NavItem to="/download" icon={<Download className="w-5 h-5" />} label="Download Music" />
               <NavItem to="/library" icon={<Music className="w-5 h-5" />} label="Library" />
               <NavItem to="/rooms" icon={<Radio className="w-5 h-5" />} label="Karaoke Rooms" />
 

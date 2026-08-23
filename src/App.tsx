@@ -17,6 +17,7 @@ import Library from './pages/Library.tsx';
 import Rooms from './pages/Rooms.tsx';
 import RoomSession from './pages/RoomSession.tsx';
 import Join from './pages/Join.tsx';
+import Download from './pages/Download.tsx';
 
 export default function App() {
   const [setupStatus, setSetupStatus] = useState<boolean | null>(null);
@@ -59,6 +60,7 @@ export default function App() {
               <Route path="settings" element={<Settings />} />
               <Route path="users" element={<Users />} />
               <Route path="library" element={<Library />} />
+              <Route path="download" element={<Download />} />
               <Route path="rooms" element={<Rooms />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />

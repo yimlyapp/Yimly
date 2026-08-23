@@ -73,6 +73,9 @@ app.use('/api/songs', songsRoutes);
 import karaokeRoutes from './server/routes/karaoke.js';
 app.use('/api/karaoke', karaokeRoutes);
 
+import downloaderRoutes from './server/routes/downloader.js';
+app.use('/api/downloader', downloaderRoutes);
+
 // Global Search endpoint
 import { artists, albums, songs, songArtists } from './server/db/schema.js';
 import { eq, like, or, inArray } from 'drizzle-orm';
