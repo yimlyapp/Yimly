@@ -2,7 +2,8 @@ import { useState, useEffect, FormEvent } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { 
   Plus, Folder, RefreshCw, Trash2, AlertCircle, HardDrive, 
-  ShieldCheck, Type, AlignLeft, AlignCenter, AlignRight, RotateCcw, Sparkles, Download, Save, Check 
+  ShieldCheck, Type, AlignLeft, AlignCenter, AlignRight, RotateCcw, Sparkles, Download, Save, Check,
+  Layers, Zap, Sliders, Eye
 } from 'lucide-react';
 import { 
   getLyricsSettings, 
@@ -11,7 +12,9 @@ import {
   LyricsAppearanceSettings, 
   applyTextCase, 
   getFontFamilyClass, 
-  getAlignmentClass 
+  getFontFamilyStyle,
+  getAlignmentClass,
+  LYRICS_FONT_OPTIONS
 } from '../utils/lyricsSettings';
 
 export default function Settings() {
@@ -189,56 +192,124 @@ export default function Settings() {
         </div>
 
         {/* Live Preview Box */}
-        <div className="bg-[#08090E] border border-white/10 rounded-2xl p-6 flex flex-col items-center justify-center min-h-[190px] shadow-2xl relative overflow-hidden">
+        <div className="bg-[#08090E] border border-white/10 rounded-2xl p-6 flex flex-col items-center justify-center min-h-[220px] shadow-2xl relative overflow-hidden">
           <div className="absolute top-3 left-4 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-[#FF4FA3]">
             <Sparkles className="w-3 h-3" />
             <span>LIVE PREVIEW</span>
           </div>
 
           <div className={`w-full flex flex-col my-auto space-y-2 max-w-xl ${getAlignmentClass(lyricsSettings.alignment)}`}>
-            {/* Previous Line (Unhighlighted) */}
-            <p
-              style={{
-                fontSize: `${lyricsSettings.unhighlighted.size}px`,
-                fontWeight: lyricsSettings.unhighlighted.weight,
-                letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
-                lineHeight: lyricsSettings.unhighlighted.lineSpacing,
-                opacity: lyricsSettings.unhighlighted.opacity ?? 0.4,
-                textAlign: lyricsSettings.alignment
-              }}
-              className={`${getFontFamilyClass(lyricsSettings.unhighlighted.font)} text-zinc-300 transition-all`}
-            >
-              {applyTextCase('Previous lyric', lyricsSettings.unhighlighted.textCase)}
-            </p>
+            {/* 2nd Previous Line (if 5 lines mode) */}
+            {(lyricsSettings.visibleLines ?? 3) === 5 && (
+              <p
+                style={{
+                  fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
+                  fontSize: `${Math.max(12, lyricsSettings.unhighlighted.size - 2)}px`,
+                  fontWeight: lyricsSettings.unhighlighted.weight,
+                  letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
+                  lineHeight: lyricsSettings.unhighlighted.lineSpacing,
+                  color: lyricsSettings.unhighlighted.color || '#d4d4d8',
+                  opacity: Math.max(0.15, (lyricsSettings.unhighlighted.opacity ?? 0.45) * 0.7),
+                  textAlign: lyricsSettings.alignment
+                }}
+                className="transition-all"
+              >
+                {applyTextCase('Earlier lyric line', lyricsSettings.unhighlighted.textCase)}
+              </p>
+            )}
 
-            {/* Current Line (Highlighted) */}
-            <p
-              style={{
-                fontSize: `${lyricsSettings.highlighted.size}px`,
-                fontWeight: lyricsSettings.highlighted.weight,
-                letterSpacing: `${lyricsSettings.highlighted.letterSpacing}px`,
-                lineHeight: lyricsSettings.highlighted.lineSpacing,
-                textAlign: lyricsSettings.alignment
-              }}
-              className={`${getFontFamilyClass(lyricsSettings.highlighted.font)} text-[#FF4FA3] drop-shadow-[0_0_25px_rgba(255,79,163,0.45)] transition-all`}
-            >
-              {applyTextCase('CURRENT LYRIC', lyricsSettings.highlighted.textCase)}
-            </p>
+            {/* Previous Line (if 3 or 5 lines mode) */}
+            {(lyricsSettings.visibleLines ?? 3) >= 3 && (
+              <p
+                style={{
+                  fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
+                  fontSize: `${lyricsSettings.unhighlighted.size}px`,
+                  fontWeight: lyricsSettings.unhighlighted.weight,
+                  letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
+                  lineHeight: lyricsSettings.unhighlighted.lineSpacing,
+                  color: lyricsSettings.unhighlighted.color || '#d4d4d8',
+                  opacity: lyricsSettings.unhighlighted.opacity ?? 0.45,
+                  textAlign: lyricsSettings.alignment
+                }}
+                className="transition-all"
+              >
+                {applyTextCase('Previous lyric line', lyricsSettings.unhighlighted.textCase)}
+              </p>
+            )}
 
-            {/* Next Line (Unhighlighted) */}
-            <p
-              style={{
-                fontSize: `${lyricsSettings.unhighlighted.size}px`,
-                fontWeight: lyricsSettings.unhighlighted.weight,
-                letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
-                lineHeight: lyricsSettings.unhighlighted.lineSpacing,
-                opacity: lyricsSettings.unhighlighted.opacity ?? 0.4,
-                textAlign: lyricsSettings.alignment
-              }}
-              className={`${getFontFamilyClass(lyricsSettings.unhighlighted.font)} text-zinc-300 transition-all`}
-            >
-              {applyTextCase('Next lyric', lyricsSettings.unhighlighted.textCase)}
-            </p>
+            {/* Current Line (Highlighted if enabled) */}
+            {lyricsSettings.highlightCurrentLine !== false ? (
+              <p
+                style={{
+                  fontFamily: getFontFamilyStyle(lyricsSettings.highlighted.font),
+                  fontSize: `${lyricsSettings.highlighted.size}px`,
+                  fontWeight: lyricsSettings.highlighted.weight,
+                  letterSpacing: `${lyricsSettings.highlighted.letterSpacing}px`,
+                  lineHeight: lyricsSettings.highlighted.lineSpacing,
+                  color: lyricsSettings.highlighted.color || '#FF4FA3',
+                  opacity: lyricsSettings.highlighted.opacity ?? 1.0,
+                  filter: `drop-shadow(0 0 25px ${(lyricsSettings.highlighted.color || '#FF4FA3')}73)`,
+                  textAlign: lyricsSettings.alignment
+                }}
+                className="transition-all"
+              >
+                {applyTextCase('CURRENT ACTIVE LYRIC', lyricsSettings.highlighted.textCase)}
+              </p>
+            ) : (
+              <p
+                style={{
+                  fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
+                  fontSize: `${lyricsSettings.highlighted.size}px`,
+                  fontWeight: lyricsSettings.unhighlighted.weight,
+                  letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
+                  lineHeight: lyricsSettings.unhighlighted.lineSpacing,
+                  color: lyricsSettings.unhighlighted.color || '#d4d4d8',
+                  opacity: lyricsSettings.unhighlighted.opacity ?? 0.45,
+                  textAlign: lyricsSettings.alignment
+                }}
+                className="transition-all"
+              >
+                {applyTextCase('CURRENT ACTIVE LYRIC', lyricsSettings.unhighlighted.textCase)}
+              </p>
+            )}
+
+            {/* Next Line (if 3 or 5 lines mode) */}
+            {(lyricsSettings.visibleLines ?? 3) >= 3 && (
+              <p
+                style={{
+                  fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
+                  fontSize: `${lyricsSettings.unhighlighted.size}px`,
+                  fontWeight: lyricsSettings.unhighlighted.weight,
+                  letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
+                  lineHeight: lyricsSettings.unhighlighted.lineSpacing,
+                  color: lyricsSettings.unhighlighted.color || '#d4d4d8',
+                  opacity: lyricsSettings.unhighlighted.opacity ?? 0.45,
+                  textAlign: lyricsSettings.alignment
+                }}
+                className="transition-all"
+              >
+                {applyTextCase('Next upcoming lyric', lyricsSettings.unhighlighted.textCase)}
+              </p>
+            )}
+
+            {/* 2nd Next Line (if 5 lines mode) */}
+            {(lyricsSettings.visibleLines ?? 3) === 5 && (
+              <p
+                style={{
+                  fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
+                  fontSize: `${Math.max(12, lyricsSettings.unhighlighted.size - 2)}px`,
+                  fontWeight: lyricsSettings.unhighlighted.weight,
+                  letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
+                  lineHeight: lyricsSettings.unhighlighted.lineSpacing,
+                  color: lyricsSettings.unhighlighted.color || '#d4d4d8',
+                  opacity: Math.max(0.15, (lyricsSettings.unhighlighted.opacity ?? 0.45) * 0.7),
+                  textAlign: lyricsSettings.alignment
+                }}
+                className="transition-all"
+              >
+                {applyTextCase('Later upcoming lyric', lyricsSettings.unhighlighted.textCase)}
+              </p>
+            )}
           </div>
         </div>
 
@@ -280,351 +351,506 @@ export default function Settings() {
         <div className="bg-[#12131D] border border-white/10 rounded-2xl p-5 md:p-6 shadow-xl">
           {/* TAB 1: CURRENT / HIGHLIGHTED SETTINGS */}
           {activeTab === 'highlighted' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Font */}
-              <div>
-                <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
-                  Font
-                </label>
-                <select
-                  value={lyricsSettings.highlighted.font}
-                  onChange={(e) =>
-                    updateSetting((prev) => ({
-                      ...prev,
-                      highlighted: { ...prev.highlighted, font: e.target.value }
-                    }))
-                  }
-                  className="w-full bg-[#08090E] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF4FA3]"
-                >
-                  <option value="system">Default / System</option>
-                  <option value="sans">Sans-Serif</option>
-                  <option value="serif">Serif</option>
-                  <option value="mono">Monospace</option>
-                  <option value="display">Display / Impact</option>
-                  <option value="rounded">Rounded</option>
-                </select>
-              </div>
-
-              {/* Weight */}
-              <div>
-                <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
-                  Weight
-                </label>
-                <select
-                  value={lyricsSettings.highlighted.weight}
-                  onChange={(e) =>
-                    updateSetting((prev) => ({
-                      ...prev,
-                      highlighted: { ...prev.highlighted, weight: e.target.value }
-                    }))
-                  }
-                  className="w-full bg-[#08090E] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF4FA3]"
-                >
-                  <option value="100">Thin (100)</option>
-                  <option value="300">Light (300)</option>
-                  <option value="400">Regular (400)</option>
-                  <option value="500">Medium (500)</option>
-                  <option value="600">Semi Bold (600)</option>
-                  <option value="700">Bold (700)</option>
-                  <option value="800">Extra Bold (800)</option>
-                  <option value="900">Black (900)</option>
-                </select>
-              </div>
-
-              {/* Size */}
-              <div>
-                <div className="flex justify-between items-center mb-2">
-                  <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
-                    Size
-                  </label>
-                  <span className="text-xs font-mono text-[#FF4FA3] font-bold">
-                    {lyricsSettings.highlighted.size}px
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="24"
-                  max="80"
-                  value={lyricsSettings.highlighted.size}
-                  onChange={(e) =>
-                    updateSetting((prev) => ({
-                      ...prev,
-                      highlighted: { ...prev.highlighted, size: Number(e.target.value) }
-                    }))
-                  }
-                  className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
-                />
-              </div>
-
-              {/* Text Case */}
-              <div>
-                <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
-                  Text Case
-                </label>
-                <select
-                  value={lyricsSettings.highlighted.textCase}
-                  onChange={(e) =>
-                    updateSetting((prev) => ({
-                      ...prev,
-                      highlighted: {
-                        ...prev.highlighted,
-                        textCase: e.target.value as any
+            <div className="space-y-6">
+              {/* Highlight Current Line Toggle & Color Banner */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-xl bg-[#08090E] border border-white/5 items-center">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-zinc-200 uppercase tracking-wider">
+                      Highlight Current Line
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updateSetting((prev) => ({
+                          ...prev,
+                          highlightCurrentLine: prev.highlightCurrentLine === false ? true : false
+                        }))
                       }
-                    }))
-                  }
-                  className="w-full bg-[#08090E] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF4FA3]"
-                >
-                  <option value="original">Original</option>
-                  <option value="lowercase">lowercase</option>
-                  <option value="uppercase">UPPERCASE</option>
-                  <option value="titlecase">Title Case</option>
-                </select>
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                        lyricsSettings.highlightCurrentLine !== false ? 'bg-[#FF4FA3]' : 'bg-white/20'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          lyricsSettings.highlightCurrentLine !== false ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-zinc-400">
+                    Apply accent glow, custom color, and display emphasis to the active lyric line.
+                  </p>
+                </div>
+
+                {/* Highlight Color Preset Picker */}
+                <div>
+                  <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
+                    Highlight Color
+                  </label>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {[
+                      { name: 'Neon Pink', hex: '#FF4FA3' },
+                      { name: 'Cyber Cyan', hex: '#00F5D4' },
+                      { name: 'Gold Yellow', hex: '#FFD166' },
+                      { name: 'Electric Purple', hex: '#A78BFA' },
+                      { name: 'Emerald', hex: '#10B981' },
+                      { name: 'Pure White', hex: '#FFFFFF' }
+                    ].map((col) => (
+                      <button
+                        key={col.hex}
+                        type="button"
+                        onClick={() =>
+                          updateSetting((prev) => ({
+                            ...prev,
+                            highlighted: { ...prev.highlighted, color: col.hex }
+                          }))
+                        }
+                        className={`w-7 h-7 rounded-full border-2 transition-transform ${
+                          (lyricsSettings.highlighted.color || '#FF4FA3').toLowerCase() === col.hex.toLowerCase()
+                            ? 'border-white scale-110 shadow-lg shadow-white/20'
+                            : 'border-transparent hover:scale-105 opacity-80 hover:opacity-100'
+                        }`}
+                        style={{ backgroundColor: col.hex }}
+                        title={col.name}
+                      />
+                    ))}
+                    <input
+                      type="color"
+                      value={lyricsSettings.highlighted.color || '#FF4FA3'}
+                      onChange={(e) =>
+                        updateSetting((prev) => ({
+                          ...prev,
+                          highlighted: { ...prev.highlighted, color: e.target.value }
+                        }))
+                      }
+                      className="w-7 h-7 rounded-lg cursor-pointer bg-transparent border-0"
+                      title="Custom Color"
+                    />
+                  </div>
+                </div>
               </div>
 
-              {/* Letter Spacing */}
-              <div>
-                <div className="flex justify-between items-center mb-2">
-                  <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
-                    Letter Spacing
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Font */}
+                <div>
+                  <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
+                    Font Family
                   </label>
-                  <span className="text-xs font-mono text-[#FF4FA3] font-bold">
-                    {lyricsSettings.highlighted.letterSpacing}px
-                  </span>
+                  <select
+                    value={lyricsSettings.highlighted.font}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        highlighted: { ...prev.highlighted, font: e.target.value }
+                      }))
+                    }
+                    className="w-full bg-[#08090E] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF4FA3]"
+                  >
+                    {LYRICS_FONT_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-                <input
-                  type="range"
-                  min="-4"
-                  max="12"
-                  value={lyricsSettings.highlighted.letterSpacing}
-                  onChange={(e) =>
-                    updateSetting((prev) => ({
-                      ...prev,
-                      highlighted: { ...prev.highlighted, letterSpacing: Number(e.target.value) }
-                    }))
-                  }
-                  className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
-                />
-              </div>
 
-              {/* Line Spacing */}
-              <div>
-                <div className="flex justify-between items-center mb-2">
-                  <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
-                    Line Spacing
+                {/* Weight */}
+                <div>
+                  <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
+                    Font Weight
                   </label>
-                  <span className="text-xs font-mono text-[#FF4FA3] font-bold">
-                    {lyricsSettings.highlighted.lineSpacing}x
-                  </span>
+                  <select
+                    value={lyricsSettings.highlighted.weight}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        highlighted: { ...prev.highlighted, weight: e.target.value }
+                      }))
+                    }
+                    className="w-full bg-[#08090E] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF4FA3]"
+                  >
+                    <option value="100">Thin (100)</option>
+                    <option value="300">Light (300)</option>
+                    <option value="400">Regular (400)</option>
+                    <option value="500">Medium (500)</option>
+                    <option value="600">Semi Bold (600)</option>
+                    <option value="700">Bold (700)</option>
+                    <option value="800">Extra Bold (800)</option>
+                    <option value="900">Black (900)</option>
+                  </select>
                 </div>
-                <input
-                  type="range"
-                  min="1.0"
-                  max="2.2"
-                  step="0.05"
-                  value={lyricsSettings.highlighted.lineSpacing}
-                  onChange={(e) =>
-                    updateSetting((prev) => ({
-                      ...prev,
-                      highlighted: { ...prev.highlighted, lineSpacing: Number(e.target.value) }
-                    }))
-                  }
-                  className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
-                />
+
+                {/* Size */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                      Font Size
+                    </label>
+                    <span className="text-xs font-mono text-[#FF4FA3] font-bold">
+                      {lyricsSettings.highlighted.size}px
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="24"
+                    max="80"
+                    value={lyricsSettings.highlighted.size}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        highlighted: { ...prev.highlighted, size: Number(e.target.value) }
+                      }))
+                    }
+                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
+                  />
+                </div>
+
+                {/* Opacity */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                      Opacity
+                    </label>
+                    <span className="text-xs font-mono text-[#FF4FA3] font-bold">
+                      {Math.round((lyricsSettings.highlighted.opacity ?? 1.0) * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.2"
+                    max="1.0"
+                    step="0.05"
+                    value={lyricsSettings.highlighted.opacity ?? 1.0}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        highlighted: { ...prev.highlighted, opacity: Number(e.target.value) }
+                      }))
+                    }
+                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
+                  />
+                </div>
+
+                {/* Text Case */}
+                <div>
+                  <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
+                    Text Case
+                  </label>
+                  <select
+                    value={lyricsSettings.highlighted.textCase}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        highlighted: {
+                          ...prev.highlighted,
+                          textCase: e.target.value as any
+                        }
+                      }))
+                    }
+                    className="w-full bg-[#08090E] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF4FA3]"
+                  >
+                    <option value="original">Original</option>
+                    <option value="lowercase">lowercase</option>
+                    <option value="uppercase">UPPERCASE</option>
+                    <option value="titlecase">Title Case</option>
+                  </select>
+                </div>
+
+                {/* Letter Spacing */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                      Letter Spacing
+                    </label>
+                    <span className="text-xs font-mono text-[#FF4FA3] font-bold">
+                      {lyricsSettings.highlighted.letterSpacing}px
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="-4"
+                    max="12"
+                    value={lyricsSettings.highlighted.letterSpacing}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        highlighted: { ...prev.highlighted, letterSpacing: Number(e.target.value) }
+                      }))
+                    }
+                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
+                  />
+                </div>
+
+                {/* Line Spacing */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                      Line Spacing (Height)
+                    </label>
+                    <span className="text-xs font-mono text-[#FF4FA3] font-bold">
+                      {lyricsSettings.highlighted.lineSpacing}x
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1.0"
+                    max="2.2"
+                    step="0.05"
+                    value={lyricsSettings.highlighted.lineSpacing}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        highlighted: { ...prev.highlighted, lineSpacing: Number(e.target.value) }
+                      }))
+                    }
+                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
+                  />
+                </div>
               </div>
             </div>
           )}
 
           {/* TAB 2: OTHER / UNHIGHLIGHTED SETTINGS */}
           {activeTab === 'unhighlighted' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Font */}
-              <div>
+            <div className="space-y-6">
+              {/* Unhighlighted Color Banner */}
+              <div className="p-4 rounded-xl bg-[#08090E] border border-white/5">
                 <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
-                  Font
+                  Inactive Lyric Color
                 </label>
-                <select
-                  value={lyricsSettings.unhighlighted.font}
-                  onChange={(e) =>
-                    updateSetting((prev) => ({
-                      ...prev,
-                      unhighlighted: { ...prev.unhighlighted, font: e.target.value }
-                    }))
-                  }
-                  className="w-full bg-[#08090E] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF4FA3]"
-                >
-                  <option value="system">Default / System</option>
-                  <option value="sans">Sans-Serif</option>
-                  <option value="serif">Serif</option>
-                  <option value="mono">Monospace</option>
-                  <option value="display">Display / Impact</option>
-                  <option value="rounded">Rounded</option>
-                </select>
-              </div>
-
-              {/* Weight */}
-              <div>
-                <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
-                  Weight
-                </label>
-                <select
-                  value={lyricsSettings.unhighlighted.weight}
-                  onChange={(e) =>
-                    updateSetting((prev) => ({
-                      ...prev,
-                      unhighlighted: { ...prev.unhighlighted, weight: e.target.value }
-                    }))
-                  }
-                  className="w-full bg-[#08090E] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF4FA3]"
-                >
-                  <option value="100">Thin (100)</option>
-                  <option value="300">Light (300)</option>
-                  <option value="400">Regular (400)</option>
-                  <option value="500">Medium (500)</option>
-                  <option value="600">Semi Bold (600)</option>
-                  <option value="700">Bold (700)</option>
-                  <option value="800">Extra Bold (800)</option>
-                  <option value="900">Black (900)</option>
-                </select>
-              </div>
-
-              {/* Size */}
-              <div>
-                <div className="flex justify-between items-center mb-2">
-                  <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
-                    Size
-                  </label>
-                  <span className="text-xs font-mono text-[#FF4FA3] font-bold">
-                    {lyricsSettings.unhighlighted.size}px
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="12"
-                  max="44"
-                  value={lyricsSettings.unhighlighted.size}
-                  onChange={(e) =>
-                    updateSetting((prev) => ({
-                      ...prev,
-                      unhighlighted: { ...prev.unhighlighted, size: Number(e.target.value) }
-                    }))
-                  }
-                  className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
-                />
-              </div>
-
-              {/* Opacity */}
-              <div>
-                <div className="flex justify-between items-center mb-2">
-                  <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
-                    Opacity
-                  </label>
-                  <span className="text-xs font-mono text-[#FF4FA3] font-bold">
-                    {Math.round((lyricsSettings.unhighlighted.opacity ?? 0.4) * 100)}%
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="0.10"
-                  max="1.0"
-                  step="0.05"
-                  value={lyricsSettings.unhighlighted.opacity ?? 0.4}
-                  onChange={(e) =>
-                    updateSetting((prev) => ({
-                      ...prev,
-                      unhighlighted: { ...prev.unhighlighted, opacity: Number(e.target.value) }
-                    }))
-                  }
-                  className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
-                />
-              </div>
-
-              {/* Text Case */}
-              <div>
-                <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
-                  Text Case
-                </label>
-                <select
-                  value={lyricsSettings.unhighlighted.textCase}
-                  onChange={(e) =>
-                    updateSetting((prev) => ({
-                      ...prev,
-                      unhighlighted: {
-                        ...prev.unhighlighted,
-                        textCase: e.target.value as any
+                <div className="flex items-center gap-2 flex-wrap">
+                  {[
+                    { name: 'Light Zinc', hex: '#d4d4d8' },
+                    { name: 'Pure White', hex: '#FFFFFF' },
+                    { name: 'Muted Slate', hex: '#94a3b8' },
+                    { name: 'Warm Sand', hex: '#fde68a' },
+                    { name: 'Muted Violet', hex: '#c4b5fd' }
+                  ].map((col) => (
+                    <button
+                      key={col.hex}
+                      type="button"
+                      onClick={() =>
+                        updateSetting((prev) => ({
+                          ...prev,
+                          unhighlighted: { ...prev.unhighlighted, color: col.hex }
+                        }))
                       }
-                    }))
-                  }
-                  className="w-full bg-[#08090E] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF4FA3]"
-                >
-                  <option value="original">Original</option>
-                  <option value="lowercase">lowercase</option>
-                  <option value="uppercase">UPPERCASE</option>
-                  <option value="titlecase">Title Case</option>
-                </select>
+                      className={`w-7 h-7 rounded-full border-2 transition-transform ${
+                        (lyricsSettings.unhighlighted.color || '#d4d4d8').toLowerCase() === col.hex.toLowerCase()
+                          ? 'border-white scale-110 shadow-lg shadow-white/20'
+                          : 'border-transparent hover:scale-105 opacity-80 hover:opacity-100'
+                      }`}
+                      style={{ backgroundColor: col.hex }}
+                      title={col.name}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={lyricsSettings.unhighlighted.color || '#d4d4d8'}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        unhighlighted: { ...prev.unhighlighted, color: e.target.value }
+                      }))
+                    }
+                    className="w-7 h-7 rounded-lg cursor-pointer bg-transparent border-0"
+                    title="Custom Color"
+                  />
+                </div>
               </div>
 
-              {/* Letter Spacing */}
-              <div>
-                <div className="flex justify-between items-center mb-2">
-                  <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
-                    Letter Spacing
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Font */}
+                <div>
+                  <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
+                    Font Family
                   </label>
-                  <span className="text-xs font-mono text-[#FF4FA3] font-bold">
-                    {lyricsSettings.unhighlighted.letterSpacing}px
-                  </span>
+                  <select
+                    value={lyricsSettings.unhighlighted.font}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        unhighlighted: { ...prev.unhighlighted, font: e.target.value }
+                      }))
+                    }
+                    className="w-full bg-[#08090E] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF4FA3]"
+                  >
+                    {LYRICS_FONT_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-                <input
-                  type="range"
-                  min="-4"
-                  max="12"
-                  value={lyricsSettings.unhighlighted.letterSpacing}
-                  onChange={(e) =>
-                    updateSetting((prev) => ({
-                      ...prev,
-                      unhighlighted: { ...prev.unhighlighted, letterSpacing: Number(e.target.value) }
-                    }))
-                  }
-                  className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
-                />
-              </div>
 
-              {/* Line Spacing */}
-              <div>
-                <div className="flex justify-between items-center mb-2">
-                  <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
-                    Line Spacing
+                {/* Weight */}
+                <div>
+                  <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
+                    Font Weight
                   </label>
-                  <span className="text-xs font-mono text-[#FF4FA3] font-bold">
-                    {lyricsSettings.unhighlighted.lineSpacing}x
-                  </span>
+                  <select
+                    value={lyricsSettings.unhighlighted.weight}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        unhighlighted: { ...prev.unhighlighted, weight: e.target.value }
+                      }))
+                    }
+                    className="w-full bg-[#08090E] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF4FA3]"
+                  >
+                    <option value="100">Thin (100)</option>
+                    <option value="300">Light (300)</option>
+                    <option value="400">Regular (400)</option>
+                    <option value="500">Medium (500)</option>
+                    <option value="600">Semi Bold (600)</option>
+                    <option value="700">Bold (700)</option>
+                    <option value="800">Extra Bold (800)</option>
+                    <option value="900">Black (900)</option>
+                  </select>
                 </div>
-                <input
-                  type="range"
-                  min="1.0"
-                  max="2.2"
-                  step="0.05"
-                  value={lyricsSettings.unhighlighted.lineSpacing}
-                  onChange={(e) =>
-                    updateSetting((prev) => ({
-                      ...prev,
-                      unhighlighted: { ...prev.unhighlighted, lineSpacing: Number(e.target.value) }
-                    }))
-                  }
-                  className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
-                />
+
+                {/* Size */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                      Font Size
+                    </label>
+                    <span className="text-xs font-mono text-[#FF4FA3] font-bold">
+                      {lyricsSettings.unhighlighted.size}px
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="12"
+                    max="44"
+                    value={lyricsSettings.unhighlighted.size}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        unhighlighted: { ...prev.unhighlighted, size: Number(e.target.value) }
+                      }))
+                    }
+                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
+                  />
+                </div>
+
+                {/* Opacity */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                      Opacity
+                    </label>
+                    <span className="text-xs font-mono text-[#FF4FA3] font-bold">
+                      {Math.round((lyricsSettings.unhighlighted.opacity ?? 0.45) * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.10"
+                    max="1.0"
+                    step="0.05"
+                    value={lyricsSettings.unhighlighted.opacity ?? 0.45}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        unhighlighted: { ...prev.unhighlighted, opacity: Number(e.target.value) }
+                      }))
+                    }
+                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
+                  />
+                </div>
+
+                {/* Text Case */}
+                <div>
+                  <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
+                    Text Case
+                  </label>
+                  <select
+                    value={lyricsSettings.unhighlighted.textCase}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        unhighlighted: {
+                          ...prev.unhighlighted,
+                          textCase: e.target.value as any
+                        }
+                      }))
+                    }
+                    className="w-full bg-[#08090E] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF4FA3]"
+                  >
+                    <option value="original">Original</option>
+                    <option value="lowercase">lowercase</option>
+                    <option value="uppercase">UPPERCASE</option>
+                    <option value="titlecase">Title Case</option>
+                  </select>
+                </div>
+
+                {/* Letter Spacing */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                      Letter Spacing
+                    </label>
+                    <span className="text-xs font-mono text-[#FF4FA3] font-bold">
+                      {lyricsSettings.unhighlighted.letterSpacing}px
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="-4"
+                    max="12"
+                    value={lyricsSettings.unhighlighted.letterSpacing}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        unhighlighted: { ...prev.unhighlighted, letterSpacing: Number(e.target.value) }
+                      }))
+                    }
+                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
+                  />
+                </div>
+
+                {/* Line Spacing */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                      Line Spacing (Height)
+                    </label>
+                    <span className="text-xs font-mono text-[#FF4FA3] font-bold">
+                      {lyricsSettings.unhighlighted.lineSpacing}x
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1.0"
+                    max="2.2"
+                    step="0.05"
+                    value={lyricsSettings.unhighlighted.lineSpacing}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        unhighlighted: { ...prev.unhighlighted, lineSpacing: Number(e.target.value) }
+                      }))
+                    }
+                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
+                  />
+                </div>
               </div>
             </div>
           )}
 
           {/* TAB 3: LAYOUT & TEXT ALIGNMENT SETTINGS */}
           {activeTab === 'layout' && (
-            <div className="space-y-6">
+            <div className="space-y-8">
+              {/* Text Alignment */}
               <div>
                 <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-3">
                   Text Alignment
                 </label>
                 <div className="grid grid-cols-3 gap-3 max-w-md">
                   <button
+                    type="button"
                     onClick={() =>
                       updateSetting((prev) => ({ ...prev, alignment: 'left' }))
                     }
@@ -639,6 +865,7 @@ export default function Settings() {
                   </button>
 
                   <button
+                    type="button"
                     onClick={() =>
                       updateSetting((prev) => ({ ...prev, alignment: 'center' }))
                     }
@@ -653,6 +880,7 @@ export default function Settings() {
                   </button>
 
                   <button
+                    type="button"
                     onClick={() =>
                       updateSetting((prev) => ({ ...prev, alignment: 'right' }))
                     }
@@ -666,9 +894,75 @@ export default function Settings() {
                     <span>Right</span>
                   </button>
                 </div>
-                <p className="text-xs text-zinc-500 mt-3">
-                  Controls the horizontal alignment of lyric text inside the lyrics area. The lyric block remains top-positioned.
+                <p className="text-xs text-zinc-500 mt-2">
+                  Controls horizontal alignment of lyric text. The lyrics block remains top-anchored.
                 </p>
+              </div>
+
+              {/* Visible Lines Count */}
+              <div>
+                <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-3">
+                  Visible Line Count
+                </label>
+                <div className="grid grid-cols-3 gap-3 max-w-md">
+                  {[
+                    { count: 1, label: '1 Line', desc: 'Current Only' },
+                    { count: 3, label: '3 Lines', desc: 'Prev / Current / Next' },
+                    { count: 5, label: '5 Lines', desc: 'Extended Context' }
+                  ].map((item) => (
+                    <button
+                      key={item.count}
+                      type="button"
+                      onClick={() =>
+                        updateSetting((prev) => ({ ...prev, visibleLines: item.count }))
+                      }
+                      className={`py-3 px-3 rounded-2xl border font-bold text-xs flex flex-col items-center gap-1 transition-all ${
+                        (lyricsSettings.visibleLines ?? 3) === item.count
+                          ? 'bg-[#FF4FA3] text-white border-[#FF4FA3] shadow-lg shadow-[#FF4FA3]/25'
+                          : 'bg-[#08090E] text-zinc-400 border-white/10 hover:text-white hover:border-white/20'
+                      }`}
+                    >
+                      <span className="text-sm font-black">{item.label}</span>
+                      <span className="text-[10px] font-normal opacity-80">{item.desc}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-zinc-500 mt-2">
+                  Controls how many lines of context are shown simultaneously on the Host Room screen.
+                </p>
+              </div>
+
+              {/* Transition / Animation Duration */}
+              <div>
+                <div className="flex justify-between items-center mb-2 max-w-md">
+                  <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                    Lyric Transition Speed
+                  </label>
+                  <span className="text-xs font-mono text-[#FF4FA3] font-bold">
+                    {lyricsSettings.animationDuration ?? 0.25}s
+                  </span>
+                </div>
+                <div className="max-w-md">
+                  <input
+                    type="range"
+                    min="0.05"
+                    max="0.80"
+                    step="0.05"
+                    value={lyricsSettings.animationDuration ?? 0.25}
+                    onChange={(e) =>
+                      updateSetting((prev) => ({
+                        ...prev,
+                        animationDuration: Number(e.target.value)
+                      }))
+                    }
+                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#FF4FA3]"
+                  />
+                  <div className="flex justify-between text-[10px] text-zinc-500 mt-1 font-mono">
+                    <span>Fast (0.05s)</span>
+                    <span>Standard (0.25s)</span>
+                    <span>Smooth (0.80s)</span>
+                  </div>
+                </div>
               </div>
             </div>
           )}

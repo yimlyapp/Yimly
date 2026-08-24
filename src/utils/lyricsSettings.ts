@@ -5,13 +5,17 @@ export interface LyricStyleSettings {
   letterSpacing: number; // in px, e.g. -1, 0, 1, 2
   lineSpacing: number; // line-height multiplier, e.g. 1.2
   textCase: 'original' | 'lowercase' | 'uppercase' | 'titlecase';
-  opacity?: number; // 0.1 to 1.0 (for unhighlighted)
+  opacity?: number; // 0.1 to 1.0 (for unhighlighted / highlighted)
+  color?: string; // hex color string, e.g. '#FF4FA3'
 }
 
 export interface LyricsAppearanceSettings {
   highlighted: LyricStyleSettings;
   unhighlighted: LyricStyleSettings;
   alignment: 'left' | 'center' | 'right';
+  visibleLines: number; // 1 | 3 | 5
+  highlightCurrentLine: boolean; // on / off
+  animationDuration: number; // in seconds, e.g. 0.25
 }
 
 export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
@@ -21,7 +25,9 @@ export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
     weight: '800',
     letterSpacing: -1,
     lineSpacing: 1.2,
-    textCase: 'original'
+    textCase: 'original',
+    opacity: 1.0,
+    color: '#FF4FA3'
   },
   unhighlighted: {
     font: 'system',
@@ -30,9 +36,13 @@ export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
     opacity: 0.45,
     letterSpacing: 0,
     lineSpacing: 1.4,
-    textCase: 'original'
+    textCase: 'original',
+    color: '#d4d4d8'
   },
-  alignment: 'center'
+  alignment: 'center',
+  visibleLines: 3,
+  highlightCurrentLine: true,
+  animationDuration: 0.25
 };
 
 const STORAGE_KEY = 'yimly_lyrics_appearance_settings_v1';
@@ -43,9 +53,18 @@ export function getLyricsSettings(): LyricsAppearanceSettings {
     if (saved) {
       const parsed = JSON.parse(saved);
       return {
-        highlighted: { ...DEFAULT_LYRICS_SETTINGS.highlighted, ...(parsed.highlighted || {}) },
-        unhighlighted: { ...DEFAULT_LYRICS_SETTINGS.unhighlighted, ...(parsed.unhighlighted || {}) },
-        alignment: parsed.alignment || DEFAULT_LYRICS_SETTINGS.alignment
+        highlighted: { 
+          ...DEFAULT_LYRICS_SETTINGS.highlighted, 
+          ...(parsed.highlighted || {}) 
+        },
+        unhighlighted: { 
+          ...DEFAULT_LYRICS_SETTINGS.unhighlighted, 
+          ...(parsed.unhighlighted || {}) 
+        },
+        alignment: parsed.alignment || DEFAULT_LYRICS_SETTINGS.alignment,
+        visibleLines: typeof parsed.visibleLines === 'number' ? parsed.visibleLines : DEFAULT_LYRICS_SETTINGS.visibleLines,
+        highlightCurrentLine: typeof parsed.highlightCurrentLine === 'boolean' ? parsed.highlightCurrentLine : DEFAULT_LYRICS_SETTINGS.highlightCurrentLine,
+        animationDuration: typeof parsed.animationDuration === 'number' ? parsed.animationDuration : DEFAULT_LYRICS_SETTINGS.animationDuration
       };
     }
   } catch (e) {
@@ -78,8 +97,89 @@ export function applyTextCase(text: string, textCase: string): string {
   }
 }
 
+export interface LyricFontOption {
+  value: string;
+  label: string;
+  fontFamily: string;
+}
+
+export const LYRICS_FONT_OPTIONS: LyricFontOption[] = [
+  {
+    value: 'system',
+    label: 'Default / System',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
+  },
+  {
+    value: 'huggable',
+    label: 'Huggable',
+    fontFamily: '"Huggable", "SF Pro Rounded", "Arial Rounded MT Bold", "Nunito", "Quicksand", system-ui, sans-serif'
+  },
+  {
+    value: 'super-sale',
+    label: 'Super Sale',
+    fontFamily: '"Super Sale", Impact, "Arial Black", "Trebuchet MS", system-ui, sans-serif'
+  },
+  {
+    value: 'sans',
+    label: 'Sans-Serif',
+    fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+  },
+  {
+    value: 'serif',
+    label: 'Serif',
+    fontFamily: 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif'
+  },
+  {
+    value: 'mono',
+    label: 'Monospace',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
+  },
+  {
+    value: 'display',
+    label: 'Display / Impact',
+    fontFamily: 'Impact, "Arial Black", "Trebuchet MS", sans-serif'
+  },
+  {
+    value: 'rounded',
+    label: 'Rounded',
+    fontFamily: '"SF Pro Rounded", "Arial Rounded MT Bold", "Nunito", "Quicksand", sans-serif'
+  }
+];
+
+export function getFontFamilyStyle(fontKey: string): string {
+  const normalized = (fontKey || '').toLowerCase().trim();
+  if (normalized === 'huggable') {
+    return '"Huggable", "SF Pro Rounded", "Arial Rounded MT Bold", "Nunito", "Quicksand", system-ui, sans-serif';
+  }
+  if (normalized === 'super sale' || normalized === 'super-sale' || normalized === 'supersale') {
+    return '"Super Sale", Impact, "Arial Black", "Trebuchet MS", system-ui, sans-serif';
+  }
+  switch (normalized) {
+    case 'sans':
+      return 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    case 'serif':
+      return 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif';
+    case 'mono':
+      return 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+    case 'display':
+      return 'Impact, "Arial Black", "Trebuchet MS", sans-serif';
+    case 'rounded':
+      return '"SF Pro Rounded", "Arial Rounded MT Bold", "Nunito", "Quicksand", sans-serif';
+    case 'system':
+    default:
+      return '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+  }
+}
+
 export function getFontFamilyClass(fontKey: string): string {
-  switch (fontKey) {
+  const normalized = (fontKey || '').toLowerCase().trim();
+  if (normalized === 'huggable') {
+    return 'font-["Huggable",sans-serif]';
+  }
+  if (normalized === 'super sale' || normalized === 'super-sale' || normalized === 'supersale') {
+    return 'font-["Super_Sale",sans-serif]';
+  }
+  switch (normalized) {
     case 'sans':
       return 'font-sans';
     case 'serif':
