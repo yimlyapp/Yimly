@@ -9,6 +9,13 @@ import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import NodeID3 from 'node-id3';
+import {
+  fetchLyrics,
+  saveLrcSidecar,
+  computeEffectiveLyricsProviders,
+  stripLrcTimestamps,
+  Lyrics,
+} from '../lib/lyrics.js';
 
 const execPromise = promisify(exec);
 const execFilePromise = promisify(execFile);
@@ -58,6 +65,7 @@ interface TrackJob {
   trackNumber?: number;
   discNumber?: number;
   releaseYear?: number;
+  duration?: number;
   artworkUrl?: string;
   sourceUrl?: string;
   status: 'queued' | 'searching' | 'downloading' | 'tagging' | 'completed' | 'failed';
@@ -75,6 +83,8 @@ interface DownloadJob {
   quality: string;
   embedMetadata: boolean;
   embedArtwork: boolean;
+  downloadLyrics: boolean;
+  lyricsProviders: string[];
   folderStructure: string;
   playlistFolder: boolean;
   playlistName?: string;
@@ -115,12 +125,34 @@ router.get('/settings', async (req, res) => {
     const allLibs = await db.select().from(libraries).limit(1);
     const defaultLibId = allLibs.length > 0 ? String(allLibs[0].id) : '1';
 
+    const rawDownloadLyrics = settingsMap.get('downloader_download_lyrics');
+    const rawLyricsProviders = settingsMap.get('downloader_lyrics_providers');
+
+    let parsedProviders = ['lrclib'];
+    if (rawLyricsProviders) {
+      try {
+        const parsed = JSON.parse(rawLyricsProviders);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          parsedProviders = parsed;
+        }
+      } catch (e) {
+        parsedProviders = [rawLyricsProviders];
+      }
+    }
+
+    const downloadLyrics = rawDownloadLyrics !== 'false';
+
     res.json({
       libraryId: settingsMap.get('downloader_library_id') || defaultLibId,
       format: settingsMap.get('downloader_format') || 'mp3',
       quality: settingsMap.get('downloader_quality') || '320k',
       embedMetadata: settingsMap.get('downloader_embed_metadata') !== 'false',
       embedArtwork: settingsMap.get('downloader_embed_artwork') !== 'false',
+      downloadLyrics,
+      lyricsProviders: parsedProviders,
+      // Compatibility keys matching Downtify naming
+      download_lyrics: downloadLyrics,
+      lyrics_providers: parsedProviders,
       folderStructure: settingsMap.get('downloader_folder_structure') || '{artist}/{album}/{track_number} - {title}',
       playlistFolder: settingsMap.get('downloader_playlist_folder') !== 'false',
     });
@@ -139,7 +171,15 @@ router.post('/settings', async (req, res) => {
       embedArtwork,
       folderStructure,
       playlistFolder,
+      downloadLyrics,
+      download_lyrics,
+      lyricsProviders,
+      lyrics_providers,
     } = req.body;
+
+    const finalDownloadLyrics = downloadLyrics ?? download_lyrics ?? true;
+    const finalLyricsProviders = lyricsProviders ?? lyrics_providers ?? ['lrclib'];
+    const providersArray = Array.isArray(finalLyricsProviders) ? finalLyricsProviders : [finalLyricsProviders];
 
     const pairs: [string, string][] = [
       ['downloader_library_id', String(libraryId ?? '')],
@@ -149,6 +189,8 @@ router.post('/settings', async (req, res) => {
       ['downloader_embed_artwork', String(embedArtwork ?? true)],
       ['downloader_folder_structure', String(folderStructure ?? '{artist}/{album}/{track_number} - {title}')],
       ['downloader_playlist_folder', String(playlistFolder ?? true)],
+      ['downloader_download_lyrics', String(finalDownloadLyrics)],
+      ['downloader_lyrics_providers', JSON.stringify(providersArray)],
     ];
 
     for (const [key, value] of pairs) {
@@ -473,6 +515,10 @@ router.post('/start', async (req, res) => {
       folderStructure = '{artist}/{album}/{track_number} - {title}',
       playlistFolder = true,
       playlistName,
+      downloadLyrics,
+      download_lyrics,
+      lyricsProviders,
+      lyrics_providers,
       tracks = [],
     } = req.body;
 
@@ -496,6 +542,29 @@ router.post('/start', async (req, res) => {
       }
     }
 
+    const allSettings = await db.select().from(settings);
+    const settingsMap = new Map(allSettings.map((s) => [s.key, s.value]));
+
+    const reqDlLyrics = downloadLyrics ?? download_lyrics;
+    const finalDownloadLyrics = reqDlLyrics !== undefined 
+      ? Boolean(reqDlLyrics) 
+      : settingsMap.get('downloader_download_lyrics') !== 'false';
+
+    const reqProviders = lyricsProviders ?? lyrics_providers;
+    let finalProviders: string[] = ['lrclib'];
+    if (reqProviders) {
+      finalProviders = Array.isArray(reqProviders) ? reqProviders : [reqProviders];
+    } else if (settingsMap.has('downloader_lyrics_providers')) {
+      try {
+        const parsed = JSON.parse(settingsMap.get('downloader_lyrics_providers')!);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          finalProviders = parsed;
+        }
+      } catch (e) {
+        finalProviders = ['lrclib'];
+      }
+    }
+
     const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const trackJobs: TrackJob[] = tracks.map((t: any, idx: number) => ({
       id: `tr_${idx}_${Math.random().toString(36).substring(2, 6)}`,
@@ -505,6 +574,7 @@ router.post('/start', async (req, res) => {
       trackNumber: t.trackNumber || idx + 1,
       discNumber: t.discNumber || 1,
       releaseYear: t.releaseYear,
+      duration: t.duration,
       artworkUrl: t.artworkUrl,
       sourceUrl: t.sourceUrl,
       status: 'queued',
@@ -521,6 +591,8 @@ router.post('/start', async (req, res) => {
       quality,
       embedMetadata,
       embedArtwork,
+      downloadLyrics: finalDownloadLyrics,
+      lyricsProviders: finalProviders,
       folderStructure,
       playlistFolder,
       playlistName,
@@ -600,6 +672,38 @@ async function processJobInBackground(job: DownloadJob) {
       track.status = 'downloading';
       track.progress = 30;
       job.updatedAt = Date.now();
+
+      // Determine lyrics providers and fetch lyrics in parallel/background
+      const effectiveLyricsProviders = computeEffectiveLyricsProviders(
+        job.downloadLyrics ?? true,
+        job.lyricsProviders ?? ['lrclib']
+      );
+
+      let fetchedLyrics: Lyrics | null = null;
+      if (effectiveLyricsProviders.length > 0) {
+        try {
+          console.log(`[Lyrics] Looking up lyrics for "${track.title}" by "${track.artist}" via [${effectiveLyricsProviders.join(', ')}]...`);
+          fetchedLyrics = await fetchLyrics(
+            {
+              title: track.title,
+              artists: [track.artist],
+              artist: track.artist,
+              album: track.album,
+              duration: track.duration,
+            },
+            effectiveLyricsProviders
+          );
+          if (fetchedLyrics?.synced) {
+            console.log(`[Lyrics] Found synced lyrics for "${track.title}"`);
+          } else if (fetchedLyrics?.plain) {
+            console.log(`[Lyrics] Found plain lyrics for "${track.title}"`);
+          } else {
+            console.log(`[Lyrics] No lyrics found on lrclib for "${track.title}"`);
+          }
+        } catch (lyricsErr) {
+          console.warn(`[Lyrics] Non-fatal error during lyrics fetch for "${track.title}":`, lyricsErr);
+        }
+      }
 
       // Create temporary working directory for intermediate files
       const tmpDir = path.join(process.cwd(), 'data', 'tmp_downloads');
@@ -682,6 +786,16 @@ async function processJobInBackground(job: DownloadJob) {
             };
           }
 
+          if (fetchedLyrics) {
+            const plainLyricsText = fetchedLyrics.plain || (fetchedLyrics.synced ? stripLrcTimestamps(fetchedLyrics.synced) : undefined);
+            if (plainLyricsText) {
+              tags.unsynchronisedLyrics = {
+                language: 'eng',
+                text: plainLyricsText,
+              };
+            }
+          }
+
           NodeID3.write(tags, downloadedAudioFile);
         } catch (e) {
           console.warn('Failed to write ID3 tags:', e);
@@ -715,6 +829,11 @@ async function processJobInBackground(job: DownloadJob) {
       // Move temp file to final library path
       fs.copyFileSync(downloadedAudioFile, finalDestFile);
       fs.unlinkSync(downloadedAudioFile);
+
+      // Save LRC sidecar if synced lyrics exist
+      if (fetchedLyrics?.synced) {
+        saveLrcSidecar(finalDestFile, fetchedLyrics.synced);
+      }
 
       track.progress = 100;
       track.status = 'completed';

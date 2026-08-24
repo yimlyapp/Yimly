@@ -36,6 +36,8 @@ export default function Settings() {
     quality: '320k',
     embedMetadata: true,
     embedArtwork: true,
+    downloadLyrics: true,
+    lyricsProviders: ['lrclib'],
     folderStructure: '{artist}/{album}/{track_number} - {title}',
     playlistFolder: true,
   });
@@ -766,7 +768,7 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Toggle Switches */}
+          {/* Toggle Switches & Lyrics Options */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-white/5">
             <label className="flex items-center justify-between p-3.5 bg-[#08090E] border border-white/5 rounded-xl cursor-pointer">
               <span className="text-xs font-semibold text-white">Embed ID3 Metadata Tags</span>
@@ -787,6 +789,37 @@ export default function Settings() {
                 className="w-4 h-4 rounded text-[#FF4FA3] focus:ring-[#FF4FA3] accent-[#FF4FA3]"
               />
             </label>
+
+            <label className="flex items-center justify-between p-3.5 bg-[#08090E] border border-white/5 rounded-xl cursor-pointer">
+              <div>
+                <span className="text-xs font-semibold text-white block">Download Synced Lyrics (.lrc)</span>
+                <span className="text-[11px] text-zinc-500 block">Fetch time-synced lyrics from LRCLIB and save sidecar .lrc files</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={dlSettings.downloadLyrics}
+                onChange={(e) => setDlSettings({ ...dlSettings, downloadLyrics: e.target.checked })}
+                className="w-4 h-4 rounded text-[#FF4FA3] focus:ring-[#FF4FA3] accent-[#FF4FA3]"
+              />
+            </label>
+
+            <div className={`p-3.5 bg-[#08090E] border border-white/5 rounded-xl space-y-2 transition-opacity ${!dlSettings.downloadLyrics ? 'opacity-40 pointer-events-none' : ''}`}>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-white">Lyrics Provider</span>
+                <span className="text-[10px] text-zinc-500 font-mono">only lrclib is active</span>
+              </div>
+              <select
+                disabled={!dlSettings.downloadLyrics}
+                value={dlSettings.lyricsProviders?.[0] || 'lrclib'}
+                onChange={(e) => setDlSettings({ ...dlSettings, lyricsProviders: [e.target.value] })}
+                className="w-full bg-[#141622] border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#FF4FA3] font-mono"
+              >
+                <option value="lrclib">lrclib (Active - https://lrclib.net)</option>
+                <option value="genius">genius (Legacy)</option>
+                <option value="musixmatch">musixmatch (Legacy)</option>
+                <option value="azlyrics">azlyrics (Legacy)</option>
+              </select>
+            </div>
           </div>
 
           <div className="flex items-center justify-between pt-2">

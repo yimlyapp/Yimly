@@ -63,6 +63,7 @@ export default function DownloadMusic() {
   const [selectedLibraryId, setSelectedLibraryId] = useState<number | string>('');
   const [format, setFormat] = useState('mp3');
   const [quality, setQuality] = useState('320k');
+  const [downloadLyrics, setDownloadLyrics] = useState(true);
 
   // Active Job state
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -120,6 +121,7 @@ export default function DownloadMusic() {
         if (settings.libraryId) setSelectedLibraryId(settings.libraryId);
         if (settings.format) setFormat(settings.format);
         if (settings.quality) setQuality(settings.quality);
+        if (settings.downloadLyrics !== undefined) setDownloadLyrics(Boolean(settings.downloadLyrics));
       }
     } catch (e) {
       console.error('Error fetching downloader settings', e);
@@ -201,6 +203,7 @@ export default function DownloadMusic() {
           libraryId: selectedLibraryId,
           format,
           quality,
+          downloadLyrics,
           playlistName: result.title,
           tracks: chosenTracks,
         }),
@@ -421,6 +424,19 @@ export default function DownloadMusic() {
                   <option value="192k">192kbps</option>
                   <option value="128k">128kbps</option>
                 </select>
+              </div>
+
+              {/* Lyrics Toggle */}
+              <div className="flex flex-col justify-end">
+                <label className="flex items-center gap-2 px-3 py-2 bg-[#141622] border border-white/10 rounded-xl cursor-pointer hover:border-white/20 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={downloadLyrics}
+                    onChange={(e) => setDownloadLyrics(e.target.checked)}
+                    className="w-4 h-4 rounded bg-[#08090E] border-white/20 text-[#FF4FA3] focus:ring-[#FF4FA3] accent-[#FF4FA3]"
+                  />
+                  <span className="text-xs font-semibold text-zinc-200">.lrc Lyrics</span>
+                </label>
               </div>
             </div>
 
