@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Music, Search, Plus, Check, ArrowLeft, User, ListMusic, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { filterSongs, SearchableSong } from '../lib/search-utils';
 
 interface QueueItem {
   id: number;
@@ -13,14 +14,7 @@ interface QueueItem {
   artworkPath?: string | null;
 }
 
-interface SongItem {
-  id: number;
-  title: string;
-  artist?: string;
-  album?: string;
-  duration?: number;
-  hasLrc?: boolean;
-}
+interface SongItem extends SearchableSong {}
 
 interface GuestRoomProps {
   sessionId: string;
@@ -104,14 +98,7 @@ export default function GuestRoom({
     }
   };
 
-  const filteredSongs = availableSongs.filter(s => {
-    const q = searchQuery.toLowerCase();
-    return (
-      s.title?.toLowerCase().includes(q) ||
-      s.artist?.toLowerCase().includes(q) ||
-      s.album?.toLowerCase().includes(q)
-    );
-  });
+  const filteredSongs = filterSongs(availableSongs, searchQuery);
 
   // -------------------------------------------------------------
   // Render: Session Ended State

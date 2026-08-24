@@ -18,21 +18,14 @@ import {
   User, Library as LibraryIcon, Search, X, RefreshCw,
   Maximize2, Minimize2, MoreVertical, Info, LogOut, QrCode
 } from 'lucide-react';
+import { filterSongs, SearchableSong } from '../lib/search-utils';
 
 interface LyricLine {
   time: number;
   text: string;
 }
 
-interface SongItem {
-  id: number;
-  title: string;
-  artist?: string;
-  album?: string;
-  duration?: number;
-  hasLrc?: boolean;
-  hasInstrumental?: boolean;
-}
+interface SongItem extends SearchableSong {}
 
 type ValidationStatus = 'loading' | 'valid' | 'not_found' | 'expired' | 'invalid_controller' | 'error';
 
@@ -1016,10 +1009,7 @@ export default function RoomSession() {
   const next2Line = focusIndex + 2 < lyrics.length ? lyrics[focusIndex + 2] : null;
   const animDuration = lyricsSettings.animationDuration ?? 0.25;
 
-  const filteredSongs = availableSongs.filter(s => {
-    const q = searchQuery.toLowerCase();
-    return s.title?.toLowerCase().includes(q) || s.artist?.toLowerCase().includes(q) || s.album?.toLowerCase().includes(q);
-  });
+  const filteredSongs = filterSongs(availableSongs, searchQuery);
 
   const formatTime = (secs: number) => {
     if (isNaN(secs) || secs < 0) return '0:00';

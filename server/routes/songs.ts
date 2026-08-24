@@ -54,16 +54,19 @@ router.get('/', async (req, res) => {
       trackNumber: songs.trackNumber,
       artworkPath: songs.artworkPath,
       albumArtworkPath: albums.artworkPath,
-      hasLrc: lyrics.id
     })
     .from(songs)
     .leftJoin(artists, eq(songs.artistId, artists.id))
-    .leftJoin(albums, eq(songs.albumId, albums.id))
-    .leftJoin(lyrics, eq(songs.id, lyrics.songId))
-    .limit(500);
+    .leftJoin(albums, eq(songs.albumId, albums.id));
 
     const songIds = allSongs.map(s => s.id);
     const artistsMap = await getSongArtistsMap(songIds);
+
+    // Fetch lyrics presence without joining on table to avoid duplicate rows
+    const lyricsList = songIds.length > 0
+      ? await db.select({ songId: lyrics.songId }).from(lyrics).where(inArray(lyrics.songId, songIds))
+      : [];
+    const lyricsSet = new Set(lyricsList.map(l => l.songId));
 
     const formatted = allSongs.map(s => {
       const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
@@ -72,7 +75,7 @@ router.get('/', async (req, res) => {
         artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : s.artist),
         artists: trackArtists,
         hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
-        hasLrc: !!s.hasLrc
+        hasLrc: lyricsSet.has(s.id)
       };
     });
 
