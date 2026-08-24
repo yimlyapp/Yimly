@@ -1391,14 +1391,30 @@ export default function RoomSession() {
       </header>
 
       {/* Main Container */}
-      <div className="flex-1 flex overflow-hidden relative w-full h-full">
-        {/* Main Stage: Vertically Top-Aligned, Horizontally Centered inside Lyrics Area */}
-        <main className="h-full flex flex-col justify-between relative overflow-hidden bg-gradient-to-b from-[#0B0C14] via-[#08090E] to-[#08090E] landscape:w-[80%] portrait:w-full w-full shrink-0 transition-all">
-          {/* Subtle Ambient Glow */}
-          <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[550px] h-[550px] bg-[#FF4FA3]/5 rounded-full blur-[140px] pointer-events-none" />
+      <div className="flex-1 flex overflow-hidden relative w-full h-full p-3 lg:p-4 gap-3 lg:gap-4">
+        {/* Main Stage: Lyrics Card Container */}
+        <main className="relative overflow-hidden rounded-2xl md:rounded-3xl bg-gradient-to-br from-[#171827] via-[#1b172a] to-[#141522] border border-white/10 shadow-xl flex-1 flex flex-col justify-between h-full min-h-0 min-w-0 transition-all select-none">
+          {/* Ambient Glow matching Homepage & Sidebar Feature Cards */}
+          <div className="absolute top-0 right-0 w-80 h-80 bg-[#FF4FA3]/10 rounded-full blur-3xl pointer-events-none -mr-16 -mt-16" />
+          <div className="absolute bottom-0 left-0 w-80 h-80 bg-[#FF4FA3]/5 rounded-full blur-3xl pointer-events-none -ml-16 -mb-16" />
 
-          {/* Top-Aligned Lyrics Stage (Dominant 80% width in landscape, 100% full screen in portrait) */}
-          <div className="w-full flex-1 flex flex-col justify-start pt-6 sm:pt-10 md:pt-14 lg:pt-16 px-4 sm:px-8 z-10 overflow-hidden">
+          {/* Card Top Header */}
+          <div className="relative z-10 flex items-center justify-between p-3.5 sm:p-4 lg:p-5 pb-0 shrink-0">
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#FF4FA3]/15 border border-[#FF4FA3]/30 text-[#FF4FA3] text-[10px] font-bold uppercase tracking-wider">
+              <Mic className="w-3 h-3" />
+              <span>Live Lyrics</span>
+            </div>
+            {currentSong && (
+              <div className="text-xs text-zinc-400 font-medium truncate max-w-[200px] sm:max-w-xs md:max-w-md">
+                <span className="text-white font-bold">{currentSong.songTitle}</span>
+                <span className="mx-1.5 text-zinc-600">•</span>
+                <span>{currentSong.artistName}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Top-Aligned Lyrics Stage */}
+          <div className="w-full flex-1 flex flex-col justify-start pt-4 sm:pt-6 md:pt-8 lg:pt-10 px-4 sm:px-8 z-10 overflow-hidden min-h-0">
             {currentSong ? (
               lyrics.length > 0 ? (
                 /* Dynamic Karaoke Lyric Display (Top-aligned, User-configurable Alignment, Lines & Appearance) */
