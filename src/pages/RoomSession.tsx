@@ -508,80 +508,166 @@ export default function RoomSession() {
         const data = await res.json();
         setSession(data.session);
         setQueue(data.queue || []);
+        if (data.playback) {
+          if (typeof data.playback.playing === 'boolean') {
+            setPlaying(data.playback.playing);
+          }
+          if (data.playback.variant) {
+            setVariant(data.playback.variant);
+          }
+          if (typeof data.playback.lyricOffset === 'number') {
+            setLyricOffset(data.playback.lyricOffset);
+          }
+        }
       }
     } catch (e) {
-      console.error('Failed to fetch session state:', e);
+      console.error('[STATE] Failed to fetch session state:', e);
     }
   };
 
-  // 3. Connect WebSocket once session is valid
+  // 3. Connect WebSocket with auto-reconnect & state synchronization
   useEffect(() => {
     if (validationStatus !== 'valid' || !sessionId) return;
 
+    let socket: WebSocket | null = null;
+    let reconnectTimer: NodeJS.Timeout | null = null;
+    let isClosedIntentionally = false;
+
     fetchState();
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(`${protocol}//${window.location.host}/ws/karaoke?sessionId=${sessionId}&isHost=${isHost}`);
-    
-    socket.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        switch(msg.type) {
-          case 'STATE_UPDATE':
-            setPlaying(msg.payload.playing);
-            if (msg.payload.variant) setVariant(msg.payload.variant);
-            if (msg.payload.lyricOffset !== undefined) setLyricOffset(msg.payload.lyricOffset);
-            fetchState();
-            break;
-          case 'QUEUE_UPDATED':
-          case 'QUEUE_EMPTY':
-            fetchState();
-            break;
-          case 'PLAYING':
-            setPlaying(true);
-            if (audioRef.current && isHost) {
-              audioRef.current.play().catch(err => console.log('Autoplay prevented:', err));
-            }
-            break;
-          case 'PAUSED':
-            setPlaying(false);
-            if (audioRef.current && isHost) audioRef.current.pause();
-            break;
-          case 'RESTARTED':
-            if (audioRef.current) {
-              audioRef.current.currentTime = 0;
-              setCurrentTime(0);
-            }
-            break;
-          case 'SONG_CHANGED':
-            fetchState();
-            setPlaying(true);
-            break;
-          case 'VARIANT_CHANGED':
-            setVariant(msg.payload.variant);
-            if (msg.payload.position !== undefined) {
-              setCurrentTime(msg.payload.position);
-            }
-            if (msg.payload.playing !== undefined) {
-              setPlaying(msg.payload.playing);
-            }
-            break;
-          case 'OFFSET_CHANGED':
-            setLyricOffset(msg.payload.offset);
-            break;
-          case 'SESSION_CLOSED':
-            setValidationStatus('expired');
-            setErrorMessage('The host has closed the session.');
-            break;
+    function connect() {
+      if (isClosedIntentionally) return;
+
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      socket = new WebSocket(`${protocol}//${window.location.host}/ws/karaoke?sessionId=${sessionId}&isHost=${isHost}`);
+
+      socket.onopen = () => {
+        // Re-fetch authoritative state on connect/reconnect
+        fetchState();
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          switch(msg.type) {
+            case 'PING':
+              if (socket?.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'PONG' }));
+              }
+              break;
+            case 'HEARTBEAT_ACK':
+              break;
+            case 'STATE_UPDATE':
+              if (typeof msg.payload?.playing === 'boolean') setPlaying(msg.payload.playing);
+              if (msg.payload?.variant) setVariant(msg.payload.variant);
+              if (msg.payload?.lyricOffset !== undefined) setLyricOffset(msg.payload.lyricOffset);
+              fetchState();
+              break;
+            case 'QUEUE_UPDATED':
+            case 'QUEUE_EMPTY':
+              fetchState();
+              break;
+            case 'PLAYING':
+              setPlaying(true);
+              break;
+            case 'PAUSED':
+              setPlaying(false);
+              break;
+            case 'RESTARTED':
+              if (audioRef.current) {
+                audioRef.current.currentTime = 0;
+                setCurrentTime(0);
+              }
+              break;
+            case 'SONG_CHANGED':
+              fetchState();
+              setPlaying(true);
+              break;
+            case 'VARIANT_CHANGED':
+              setVariant(msg.payload.variant);
+              if (msg.payload.position !== undefined) {
+                setCurrentTime(msg.payload.position);
+              }
+              if (msg.payload.playing !== undefined) {
+                setPlaying(msg.payload.playing);
+              }
+              break;
+            case 'OFFSET_CHANGED':
+              setLyricOffset(msg.payload.offset);
+              break;
+            case 'SESSION_CLOSED':
+              isClosedIntentionally = true;
+              setValidationStatus('expired');
+              setErrorMessage('The host has closed the session.');
+              break;
+          }
+        } catch (err) {
+          console.error('[WS] Parse error:', err);
         }
-      } catch (err) {
-        console.error('WS parse error:', err);
+      };
+
+      socket.onclose = () => {
+        if (!isClosedIntentionally && validationStatus === 'valid') {
+          reconnectTimer = setTimeout(() => {
+            connect();
+          }, 2000);
+        }
+      };
+
+      socket.onerror = () => {
+        // Handled via onclose reconnect loop
+      };
+
+      setWs(socket);
+    }
+
+    connect();
+
+    return () => {
+      isClosedIntentionally = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (socket) socket.close();
+    };
+  }, [validationStatus, sessionId, isHost]);
+
+  // 4. Host Heartbeat Loop to prevent session timeouts
+  useEffect(() => {
+    if (!isHost || validationStatus !== 'valid' || !sessionId) return;
+
+    const sendHeartbeat = async () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(JSON.stringify({ type: 'HEARTBEAT', timestamp: Date.now() }));
+        } catch (e) {
+          // ignore
+        }
+      }
+      try {
+        await fetch(`/api/karaoke/sessions/${sessionId}/heartbeat`, { method: 'POST' });
+      } catch (e) {
+        // ignore network glitches
       }
     };
 
-    setWs(socket);
-    return () => socket.close();
-  }, [validationStatus, sessionId, isHost]);
+    sendHeartbeat();
+    const interval = setInterval(sendHeartbeat, 15000);
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        sendHeartbeat();
+        fetchState();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+    };
+  }, [isHost, validationStatus, sessionId, ws]);
 
   // Determine current song
   const currentSong = queue.find(q => q.status === 'playing') || queue.find(q => q.status === 'pending') || queue[0];
@@ -718,25 +804,35 @@ export default function RoomSession() {
   // Host Control actions
   const togglePlay = () => {
     if (!isHost) return;
-    if (ws) {
-      ws.send(JSON.stringify({ type: playing ? 'PAUSE' : 'PLAY' }));
+    const nextPlaying = !playing;
+    setPlaying(nextPlaying);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: nextPlaying ? 'PLAY' : 'PAUSE' }));
     }
   };
 
-  const handleSkip = () => {
+  const handleSkip = async () => {
     if (!isHost) return;
-    if (ws) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'SKIP' }));
+    } else if (sessionId) {
+      try {
+        await fetch(`/api/karaoke/sessions/${sessionId}/skip`, { method: 'POST' });
+      } catch (e) {
+        console.error('Failed to skip track via REST:', e);
+      }
     }
+    fetchState();
   };
 
   const handleRestart = () => {
     if (!isHost) return;
-    if (ws) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'RESTART' }));
     }
     if (audioRef.current) {
       audioRef.current.currentTime = 0;
+      setCurrentTime(0);
     }
   };
 
@@ -755,7 +851,7 @@ export default function RoomSession() {
     
     restorePositionRef.current = { time: currentPos, playing: wasPlaying };
     
-    if (ws) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ 
         type: 'VARIANT_CHANGED', 
         payload: { 
@@ -771,16 +867,37 @@ export default function RoomSession() {
     if (!isHost) return;
     const newOffset = lyricOffset + delta;
     setLyricOffset(newOffset);
-    if (ws) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'OFFSET_CHANGED', payload: { offset: newOffset } }));
     }
   };
 
-  const handleSongEnded = () => {
-    if (isHost && ws) {
+  const handleSongEnded = async () => {
+    if (!isHost) return;
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'SONG_FINISHED' }));
+    } else if (sessionId) {
+      try {
+        await fetch(`/api/karaoke/sessions/${sessionId}/skip`, { method: 'POST' });
+      } catch (e) {
+        console.error('Failed to finish song via REST:', e);
+      }
     }
+    fetchState();
   };
+
+  // Host Audio Playback Synchronization Effect
+  useEffect(() => {
+    if (!isHost || !audioRef.current || !currentSong) return;
+
+    if (playing) {
+      audioRef.current.play().catch(err => {
+        console.warn('[AUDIO] Autoplay prevented or waiting for interaction:', err);
+      });
+    } else {
+      audioRef.current.pause();
+    }
+  }, [playing, currentSong?.songId, variant, isHost]);
 
   const handleSeek = (e: ChangeEvent<HTMLInputElement>) => {
     if (!isHost || !audioRef.current) return;

@@ -4,7 +4,7 @@ import { sessions, controllers, queueItems, songs, artists, users } from '../db/
 import { eq, and, asc, or } from 'drizzle-orm';
 import { requireAuth } from '../middleware/auth.js';
 import crypto from 'crypto';
-import { notifyQueueUpdate, closeSessionWS } from '../ws/index.js';
+import { notifyQueueUpdate, closeSessionWS, handleHostHeartbeat, advanceQueueBySessionId, getRoomState } from '../ws/index.js';
 import { formatArtistDisplay } from '../lib/artist-utils.js';
 import { getSongArtistsMap } from './songs.js';
 
@@ -152,6 +152,38 @@ router.post('/sessions/:sessionId/end', async (req, res) => {
   }
 });
 
+// Host Heartbeat Endpoint
+router.post('/sessions/:sessionId/heartbeat', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (session.length === 0 || session[0].status !== 'active') {
+      return res.status(410).json({ error: 'Session expired or not found', code: 'ROOM_EXPIRED' });
+    }
+    await handleHostHeartbeat(sessionId);
+    res.json({ success: true, timestamp: Date.now() });
+  } catch (error) {
+    console.error('[HEARTBEAT] Failed:', error);
+    res.status(500).json({ error: 'Failed to process heartbeat' });
+  }
+});
+
+// Skip Track Endpoint
+router.post('/sessions/:sessionId/skip', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (session.length === 0 || session[0].status !== 'active') {
+      return res.status(410).json({ error: 'Session expired or not found', code: 'ROOM_EXPIRED' });
+    }
+    await advanceQueueBySessionId(sessionId);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[SKIP] Failed:', error);
+    res.status(500).json({ error: 'Failed to advance queue' });
+  }
+});
+
 // Validate Room & Controller Endpoint
 router.get('/sessions/:sessionId/validate', async (req, res) => {
   try {
@@ -206,7 +238,9 @@ router.get('/sessions/:sessionId/validate', async (req, res) => {
       });
     }
 
-    // Role is host
+    // Role is host - register heartbeat
+    await handleHostHeartbeat(sessionId);
+
     return res.json({
       valid: true,
       role: 'host',
@@ -258,7 +292,20 @@ router.get('/sessions/:sessionId/state', async (req, res) => {
       };
     });
 
-    res.json({ session: session[0], queue: formattedQueue });
+    const liveState = getRoomState(sessionId);
+
+    res.json({
+      session: session[0],
+      queue: formattedQueue,
+      playback: liveState ? {
+        playing: liveState.playing,
+        position: liveState.position,
+        currentSongId: liveState.currentSongId,
+        currentQueueItemId: liveState.currentQueueItemId,
+        variant: liveState.variant,
+        lyricOffset: liveState.lyricOffset
+      } : null
+    });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch state' });
   }
