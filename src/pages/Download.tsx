@@ -141,7 +141,15 @@ export default function DownloadMusic() {
         body: JSON.stringify({ urlOrQuery: inputVal.trim() }),
       });
 
-      const data = await res.json();
+      let data: any = {};
+      if (res.headers.get('content-type')?.includes('application/json')) {
+        try {
+          data = await res.json();
+        } catch (e) {
+          console.error('JSON parse error:', e);
+        }
+      }
+
       if (!res.ok) {
         throw new Error(data.error || 'Failed to resolve link or search music');
       }
@@ -198,7 +206,15 @@ export default function DownloadMusic() {
         }),
       });
 
-      const data = await res.json();
+      let data: any = {};
+      if (res.headers.get('content-type')?.includes('application/json')) {
+        try {
+          data = await res.json();
+        } catch (e) {
+          console.error('JSON parse error:', e);
+        }
+      }
+
       if (!res.ok) {
         throw new Error(data.error || 'Failed to start download process');
       }
@@ -206,7 +222,7 @@ export default function DownloadMusic() {
       setActiveJobId(data.jobId);
       // Fetch initial job state immediately
       const jobRes = await fetch(`/api/downloader/jobs/${data.jobId}`);
-      if (jobRes.ok) {
+      if (jobRes.ok && jobRes.headers.get('content-type')?.includes('application/json')) {
         setActiveJob(await jobRes.json());
       }
     } catch (err: any) {

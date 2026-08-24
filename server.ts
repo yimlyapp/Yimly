@@ -185,6 +185,17 @@ app.all('/api/*', (req, res) => {
   res.status(404).json({ error: `API route not found: ${req.method} ${req.originalUrl}` });
 });
 
+// API Error handler: ensure any error on /api/* routes returns JSON
+app.use('/api', (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error(`[API Error] ${req.method} ${req.originalUrl}:`, err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  res.status(err.status || err.statusCode || 500).json({
+    error: err.message || 'Internal Server Error'
+  });
+});
+
 async function startServer() {
   if (!isProd) {
     // Development mode: Use Vite's middleware

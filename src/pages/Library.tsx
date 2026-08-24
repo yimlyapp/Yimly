@@ -60,7 +60,12 @@ export default function Library() {
   useEffect(() => {
     if (search.trim()) {
       fetch(`/api/search?q=${encodeURIComponent(search)}`)
-        .then(res => res.json())
+        .then(async res => {
+          if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+            return await res.json();
+          }
+          return [];
+        })
         .then(data => setSearchResults(Array.isArray(data) ? data : []))
         .catch(err => console.error('Search failed:', err));
     } else {
@@ -72,7 +77,9 @@ export default function Library() {
     try {
       setScanning(true);
       const libsRes = await fetch('/api/libraries');
-      if (!libsRes.ok) throw new Error('Failed to fetch libraries');
+      if (!libsRes.ok || !libsRes.headers.get('content-type')?.includes('application/json')) {
+        throw new Error('Failed to fetch libraries');
+      }
       const libs = await libsRes.json();
       if (libs.length === 0) {
         alert('No libraries configured. Please add a library in Settings first.');
@@ -99,7 +106,9 @@ export default function Library() {
   const openArtist = async (artistId: number) => {
     try {
       const res = await fetch(`/api/artists/${artistId}`);
-      if (!res.ok) throw new Error('Failed to fetch artist details');
+      if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) {
+        throw new Error('Failed to fetch artist details');
+      }
       const data = await res.json();
       setSelectedArtist(data);
       setSelectedAlbum(null);
@@ -112,7 +121,9 @@ export default function Library() {
   const openAlbum = async (albumId: number) => {
     try {
       const res = await fetch(`/api/albums/${albumId}`);
-      if (!res.ok) throw new Error('Failed to fetch album details');
+      if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) {
+        throw new Error('Failed to fetch album details');
+      }
       const data = await res.json();
       setSelectedAlbum(data);
       setSelectedArtist(null);
@@ -125,8 +136,12 @@ export default function Library() {
   const addToQueue = async (songId: number) => {
     try {
       const activeRoomsRes = await fetch('/api/karaoke/active-sessions');
+      if (!activeRoomsRes.ok || !activeRoomsRes.headers.get('content-type')?.includes('application/json')) {
+        alert("No active karaoke rooms found. Please host or join a room first from Karaoke Rooms.");
+        return;
+      }
       const rooms = await activeRoomsRes.json();
-      if (rooms.length === 0) {
+      if (!Array.isArray(rooms) || rooms.length === 0) {
         alert("No active karaoke rooms found. Please host or join a room first from Karaoke Rooms.");
         return;
       }

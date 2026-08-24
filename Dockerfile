@@ -23,8 +23,10 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV DATA_DIR=/app/data
 
-# Install curl for container health check
-RUN apk add --no-cache curl
+# Install curl, ffmpeg, python3, ca-certificates and yt-dlp for audio processing
+RUN apk add --no-cache curl ffmpeg python3 ca-certificates \
+  && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
+  && chmod +x /usr/local/bin/yt-dlp
 
 # Install only production dependencies
 COPY package.json package-lock.json* ./

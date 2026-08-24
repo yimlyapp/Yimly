@@ -17,12 +17,11 @@ services:
       - PORT=3000
       - JWT_SECRET=${JWT_SECRET:-yimly_production_secure_secret_change_me}
       - DATA_DIR=/app/data
-      - C:/DockerApps/downtify/downloads:/hortify
     volumes:
       # Persistent SQLite database and configuration (never wiped on rebuild)
       - ${DATA_PATH:-./data}:/app/data
-      # Host media directory for MP3/LRC files (mounted read-only)
-      - ${MEDIA_PATH:-./media}:/media:ro
+      # Host media directory for MP3/LRC files
+      - ${MEDIA_PATH:-./media}:/media
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s

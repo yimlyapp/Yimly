@@ -18,15 +18,29 @@ router.use(requireAuth);
 
 // Helper: Ensure yt-dlp executable exists
 async function getYtDlpPath(): Promise<string> {
-  const possiblePaths = ['/usr/local/bin/yt-dlp', '/usr/bin/yt-dlp', './yt-dlp'];
+  const possiblePaths = [
+    '/usr/local/bin/yt-dlp',
+    '/usr/bin/yt-dlp',
+    path.join(process.cwd(), 'yt-dlp'),
+    './yt-dlp',
+  ];
+
   for (const p of possiblePaths) {
-    if (fs.existsSync(p)) return p;
+    if (fs.existsSync(p)) {
+      try {
+        // Test if the file is executable and valid
+        await execFilePromise(p, ['--version']);
+        return p;
+      } catch (err) {
+        console.warn(`Binary at ${p} failed version check, re-downloading...`);
+      }
+    }
   }
 
-  // Download yt-dlp binary if not found
+  // Download yt-dlp binary if not found or invalid
   try {
-    console.log('yt-dlp binary not found. Downloading latest binary...');
-    const targetPath = './yt-dlp';
+    console.log('yt-dlp binary not found or invalid. Downloading latest binary...');
+    const targetPath = path.join(process.cwd(), 'yt-dlp');
     await execPromise(`curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ${targetPath} && chmod +x ${targetPath}`);
     return targetPath;
   } catch (err) {
@@ -608,6 +622,8 @@ async function processJobInBackground(job: DownloadJob) {
         qualityFlag,
         '--js-runtimes',
         'node',
+        '--extractor-args',
+        'youtube:player_client=mweb,web_embedded',
         '-o',
         `${tempFileBase}.%(ext)s`,
         queryOrUrl,

@@ -115,8 +115,15 @@ export default function Settings() {
         setLibToRemove(null);
         fetchLibraries();
       } else {
-        const data = await res.json();
-        alert(`Failed to remove library: ${data.error}`);
+        let data: any = {};
+        if (res.headers.get('content-type')?.includes('application/json')) {
+          try {
+            data = await res.json();
+          } catch (e) {
+            console.error('Failed to parse error json', e);
+          }
+        }
+        alert(`Failed to remove library: ${data.error || res.statusText || 'Unknown error'}`);
       }
     } catch (err) {
       alert('Error removing library.');

@@ -44,8 +44,15 @@ export default function Home() {
   const createRoom = async () => {
     try {
       const res = await fetch('/api/karaoke/sessions', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      let data: any = {};
+      if (res.headers.get('content-type')?.includes('application/json')) {
+        try {
+          data = await res.json();
+        } catch (e) {
+          console.error('Failed to parse json response', e);
+        }
+      }
+      if (!res.ok) throw new Error(data.error || 'Failed to start session');
       navigate(`/rooms/${data.id}?role=host`);
     } catch (err: any) {
       alert(err.message || 'Failed to start session');

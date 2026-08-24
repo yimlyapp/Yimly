@@ -7,10 +7,18 @@ export default function Users() {
   const [usersList, setUsersList] = useState<any[]>([]);
 
   useEffect(() => {
-    fetch('/api/users')
-      .then(res => res.json())
-      .then(data => setUsersList(Array.isArray(data) ? data : []));
-  }, []);
+    if (user?.role === 'administrator') {
+      fetch('/api/users')
+        .then(async res => {
+          if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+            return await res.json();
+          }
+          return [];
+        })
+        .then(data => setUsersList(Array.isArray(data) ? data : []))
+        .catch(err => console.error('Users fetch error:', err));
+    }
+  }, [user]);
 
   if (user?.role !== 'administrator') {
     return (
