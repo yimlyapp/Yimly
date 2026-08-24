@@ -8,6 +8,7 @@ import {
 import { 
   getLyricsSettings, 
   saveLyricsSettings, 
+  resolveLyricsSettings,
   DEFAULT_LYRICS_SETTINGS, 
   LyricsAppearanceSettings, 
   applyTextCase, 
@@ -146,9 +147,12 @@ export default function Settings() {
 
   // Update & Persist Lyrics Appearance Settings
   const updateSetting = (updater: (prev: LyricsAppearanceSettings) => LyricsAppearanceSettings) => {
-    const updated = updater(lyricsSettings);
-    setLyricsSettings(updated);
-    saveLyricsSettings(updated);
+    setLyricsSettings((prev) => {
+      const canonicalPrev = resolveLyricsSettings(prev);
+      const updated = resolveLyricsSettings(updater(canonicalPrev));
+      saveLyricsSettings(updated);
+      return updated;
+    });
   };
 
   const resetLyricsToDefault = () => {

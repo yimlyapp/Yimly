@@ -5,6 +5,7 @@ import QRCode from 'qrcode';
 import GuestRoom from '../components/GuestRoom';
 import { 
   getLyricsSettings, 
+  resolveLyricsSettings,
   LyricsAppearanceSettings, 
   applyTextCase, 
   getFontFamilyStyle,
@@ -15,7 +16,7 @@ import {
   Play, Pause, SkipForward, RotateCcw, Mic, Music, 
   FileText, ArrowLeft, Plus, Radio, Check, AlertCircle, 
   User, Library as LibraryIcon, Search, X, RefreshCw,
-  Maximize2, Minimize2, MoreVertical, Info, LogOut
+  Maximize2, Minimize2, MoreVertical, Info, LogOut, QrCode
 } from 'lucide-react';
 
 interface LyricLine {
@@ -59,24 +60,63 @@ export default function RoomSession() {
   const [variant, setVariant] = useState<'original' | 'instrumental'>('original');
   const [lyricOffset, setLyricOffset] = useState<number>(0); // in ms
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
-  const [lyricsSettings, setLyricsSettings] = useState<LyricsAppearanceSettings>(getLyricsSettings);
+  const [lyricsSettings, setLyricsSettings] = useState<LyricsAppearanceSettings>(() => {
+    return getLyricsSettings();
+  });
   const [currentSongDetails, setCurrentSongDetails] = useState<any>(null);
 
+  const lastSongIdRef = useRef<number | null>(null);
+  const prevSettingsJsonRef = useRef<string>('');
+
+  // Synchronize and subscribe to canonical lyrics settings across storage, tabs, visibility, and session lifecycle
   useEffect(() => {
+    const current = getLyricsSettings();
+    setLyricsSettings(current);
+    prevSettingsJsonRef.current = JSON.stringify(current);
+
+    console.log('[LyricSettings] Host initialized');
+    console.log('[LyricSettings] source: localStorage');
+    console.log(`[LyricSettings] session: ${sessionId || 'unknown'}`);
+    console.log(`[LyricSettings] font: ${current.highlighted.font}`);
+    console.log(`[LyricSettings] currentSize: ${current.highlighted.size}`);
+    console.log(`[LyricSettings] otherSize: ${current.unhighlighted.size}`);
+
     const handleSettingsChange = (e: any) => {
-      if (e.detail) {
-        setLyricsSettings(e.detail);
-      } else {
-        setLyricsSettings(getLyricsSettings());
+      const updated = e?.detail ? resolveLyricsSettings(e.detail) : getLyricsSettings();
+      console.log('[LyricSettings] Updated from settings change event:', updated);
+      setLyricsSettings(updated);
+      prevSettingsJsonRef.current = JSON.stringify(updated);
+    };
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (!e.key || e.key === 'yimly_lyrics_appearance_settings_v1') {
+        const updated = getLyricsSettings();
+        console.log('[LyricSettings] Updated from storage event:', updated);
+        setLyricsSettings(updated);
+        prevSettingsJsonRef.current = JSON.stringify(updated);
       }
     };
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        const latest = getLyricsSettings();
+        setLyricsSettings(latest);
+        prevSettingsJsonRef.current = JSON.stringify(latest);
+      }
+    };
+
     window.addEventListener('yimly_lyrics_settings_changed', handleSettingsChange);
-    window.addEventListener('storage', handleSettingsChange);
+    window.addEventListener('storage', handleStorageChange);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
     return () => {
       window.removeEventListener('yimly_lyrics_settings_changed', handleSettingsChange);
-      window.removeEventListener('storage', handleSettingsChange);
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };
-  }, []);
+  }, [sessionId]);
   const [showLibrary, setShowLibrary] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
@@ -675,6 +715,15 @@ export default function RoomSession() {
 
   // Fetch song details and lyrics whenever currentSong changes
   useEffect(() => {
+    if (lastSongIdRef.current !== null && lastSongIdRef.current !== currentSong?.songId) {
+      const currentSettings = getLyricsSettings();
+      const currentJson = JSON.stringify(currentSettings);
+      if (currentJson !== prevSettingsJsonRef.current && prevSettingsJsonRef.current !== '') {
+        console.warn('[LyricSettings] WARNING: settings changed during song transition');
+      }
+    }
+    lastSongIdRef.current = currentSong?.songId ?? null;
+
     if (currentSong?.songId) {
       fetch(`/api/songs/${currentSong.songId}`)
         .then(async res => {
@@ -1675,91 +1724,101 @@ export default function RoomSession() {
 
         {/* Floating Join Room / Queue Card Area (Landscape = 20% width, Portrait = Hidden) */}
         {isHost && (
-          <aside className="hidden landscape:flex portrait:hidden flex-col h-full landscape:w-[20%] bg-[#12131D]/95 backdrop-blur-xl border-l border-white/10 p-4 shadow-2xl z-20 select-none overflow-y-auto shrink-0">
-            {/* Join Room Section */}
-            <div className="flex flex-col items-center">
-              <h3 className="text-[11px] font-black uppercase tracking-widest text-zinc-300 mb-2">
-                JOIN ROOM
-              </h3>
+          <aside className="hidden landscape:flex portrait:hidden flex-col h-full landscape:w-[20%] min-w-[210px] max-w-[320px] bg-[#0A0B12]/80 backdrop-blur-xl border-l border-white/10 p-3 lg:p-4 gap-3 lg:gap-4 shadow-2xl z-20 select-none overflow-hidden shrink-0">
+            {/* Card 1: Join Session / QR Code Card */}
+            <div className="relative overflow-hidden rounded-2xl md:rounded-3xl bg-gradient-to-br from-[#171827] via-[#1b172a] to-[#141522] border border-white/10 p-3.5 lg:p-4 shadow-xl flex flex-col items-center shrink-0">
+              {/* Ambient Glow matching Homepage Feature Card */}
+              <div className="absolute top-0 right-0 w-32 h-32 bg-[#FF4FA3]/15 rounded-full blur-2xl pointer-events-none -mr-10 -mt-10" />
 
-              {/* QR Code */}
-              {qrCodeDataUrl ? (
-                <div className="bg-white p-2 rounded-xl shadow-md mx-auto w-24 h-24 sm:w-28 sm:h-28 flex items-center justify-center">
-                  <img 
-                    src={qrCodeDataUrl} 
-                    alt="Join Room QR Code" 
-                    className="w-full h-full object-contain"
-                  />
+              <div className="relative z-10 flex flex-col items-center w-full">
+                {/* Header Pill */}
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#FF4FA3]/15 border border-[#FF4FA3]/30 text-[#FF4FA3] text-[10px] font-bold uppercase tracking-wider mb-2.5">
+                  <QrCode className="w-3 h-3" />
+                  <span>Join Session</span>
                 </div>
-              ) : (
-                <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
-                  <span className="text-[10px] text-zinc-500 font-mono">Loading QR...</span>
-                </div>
-              )}
 
-              {/* Session Code */}
-              <div className="text-sm md:text-base font-mono font-black text-white tracking-widest mt-1.5 text-center">
-                {session?.roomCode}
-              </div>
-
-              {/* Subtitle */}
-              <div className="text-[10px] text-zinc-400 font-medium text-center mt-0.5">
-                Scan to Join
-              </div>
-            </div>
-
-            {/* Divider */}
-            <div className="border-t border-white/10 my-3 shrink-0" />
-
-            {/* UP NEXT Queue Section */}
-            <div className="flex items-center justify-between px-1 mb-2 shrink-0">
-              <div className="flex items-center gap-1.5 text-xs font-bold text-white">
-                <Music className="w-3.5 h-3.5 text-[#FF4FA3]" />
-                <span>UP NEXT</span>
-              </div>
-              <span className="px-2 py-0.5 rounded-full text-[10px] bg-white/10 font-mono font-bold text-zinc-300">
-                {queue.length}
-              </span>
-            </div>
-
-            {/* Scrollable Queue Items */}
-            <div className="flex-1 overflow-y-auto max-h-[220px] xl:max-h-[280px] space-y-2 pr-1 scrollbar-thin">
-              {queue.map((item, index) => {
-                const isPlaying = item.status === 'playing' || index === 0;
-                const singerName = item.userName || (item.userId ? `Singer ${item.userId}` : 'Guest');
-
-                return (
-                  <div 
-                    key={item.id || index}
-                    className={`p-2.5 rounded-xl border transition-all ${
-                      isPlaying 
-                        ? 'bg-[#181524] border-[#FF4FA3]/40 shadow-sm' 
-                        : 'bg-[#0D0E17] border-white/5'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-1 mb-0.5">
-                      <h4 className="font-bold text-xs text-white truncate flex-1">
-                        {item.songTitle}
-                      </h4>
-                      {isPlaying && (
-                        <span className="px-1.5 py-0.2 rounded text-[8px] font-bold uppercase tracking-wider bg-[#FF4FA3] text-white shrink-0">
-                          Live
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[11px] text-zinc-400 truncate">
-                      {singerName}
-                    </p>
+                {/* QR Code Container */}
+                {qrCodeDataUrl ? (
+                  <div className="bg-white p-2 rounded-xl shadow-md mx-auto w-24 h-24 sm:w-28 sm:h-28 flex items-center justify-center">
+                    <img 
+                      src={qrCodeDataUrl} 
+                      alt="Join Room QR Code" 
+                      className="w-full h-full object-contain"
+                    />
                   </div>
-                );
-              })}
+                ) : (
+                  <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
+                    <span className="text-[10px] text-zinc-500 font-mono">Loading QR...</span>
+                  </div>
+                )}
 
-              {queue.length === 0 && (
-                <div className="py-6 text-center text-zinc-500">
-                  <p className="text-xs font-medium">Queue is empty</p>
-                  <p className="text-[10px] text-zinc-600 mt-0.5">Scan to add songs</p>
+                {/* Session Code */}
+                <div className="text-sm md:text-base font-mono font-black text-white tracking-widest mt-2 text-center">
+                  {session?.roomCode}
                 </div>
-              )}
+
+                {/* Subtitle */}
+                <div className="text-[10px] text-zinc-400 font-medium text-center mt-0.5">
+                  Scan to Join & Queue
+                </div>
+              </div>
+            </div>
+
+            {/* Card 2: UP NEXT Queue Card */}
+            <div className="relative overflow-hidden rounded-2xl md:rounded-3xl bg-gradient-to-br from-[#171827] via-[#1b172a] to-[#141522] border border-white/10 p-3.5 lg:p-4 shadow-xl flex-1 flex flex-col min-h-0">
+              {/* Subtle Ambient Glow */}
+              <div className="absolute bottom-0 right-0 w-32 h-32 bg-[#FF4FA3]/10 rounded-full blur-2xl pointer-events-none -mr-10 -mb-10" />
+
+              {/* Queue Header */}
+              <div className="relative z-10 flex items-center justify-between px-0.5 mb-2.5 shrink-0">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-white tracking-wide">
+                  <Music className="w-3.5 h-3.5 text-[#FF4FA3]" />
+                  <span>UP NEXT</span>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] bg-white/10 border border-white/5 font-mono font-bold text-zinc-300">
+                  {queue.length}
+                </span>
+              </div>
+
+              {/* Scrollable Queue Items */}
+              <div className="relative z-10 flex-1 overflow-y-auto space-y-2 pr-0.5 scrollbar-thin min-h-0">
+                {queue.map((item, index) => {
+                  const isPlaying = item.status === 'playing' || index === 0;
+                  const singerName = item.userName || (item.userId ? `Singer ${item.userId}` : 'Guest');
+
+                  return (
+                    <div 
+                      key={item.id || index}
+                      className={`p-2.5 rounded-xl border transition-all ${
+                        isPlaying 
+                          ? 'bg-[#1e192c] border-[#FF4FA3]/40 shadow-sm' 
+                          : 'bg-[#10121d]/80 hover:bg-[#151726] border-white/5'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1 mb-0.5">
+                        <h4 className="font-bold text-xs text-white truncate flex-1">
+                          {item.songTitle}
+                        </h4>
+                        {isPlaying && (
+                          <span className="px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider bg-[#FF4FA3] text-white shrink-0">
+                            Live
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-zinc-400 truncate">
+                        {singerName}
+                      </p>
+                    </div>
+                  );
+                })}
+
+                {queue.length === 0 && (
+                  <div className="py-6 text-center text-zinc-500">
+                    <p className="text-xs font-medium">Queue is empty</p>
+                    <p className="text-[10px] text-zinc-600 mt-0.5">Scan to add songs</p>
+                  </div>
+                )}
+              </div>
             </div>
           </aside>
         )}

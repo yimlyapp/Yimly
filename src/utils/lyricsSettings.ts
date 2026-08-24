@@ -47,38 +47,78 @@ export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
 
 const STORAGE_KEY = 'yimly_lyrics_appearance_settings_v1';
 
+/**
+ * Deeply validates, sanitizes, and completes any partial or raw settings object
+ * into the canonical full LyricsAppearanceSettings structure.
+ */
+export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
+  const parsed = (raw && typeof raw === 'object') ? raw : {};
+  const high = (parsed.highlighted && typeof parsed.highlighted === 'object') ? parsed.highlighted : {};
+  const unhigh = (parsed.unhighlighted && typeof parsed.unhighlighted === 'object') ? parsed.unhighlighted : {};
+
+  const validTextCases = ['original', 'lowercase', 'uppercase', 'titlecase'] as const;
+  const validAlignments = ['left', 'center', 'right'] as const;
+
+  return {
+    highlighted: {
+      font: typeof high.font === 'string' && high.font.trim() ? high.font.trim() : DEFAULT_LYRICS_SETTINGS.highlighted.font,
+      size: typeof high.size === 'number' && !isNaN(high.size) ? high.size : DEFAULT_LYRICS_SETTINGS.highlighted.size,
+      weight: high.weight ? String(high.weight) : DEFAULT_LYRICS_SETTINGS.highlighted.weight,
+      letterSpacing: typeof high.letterSpacing === 'number' && !isNaN(high.letterSpacing) ? high.letterSpacing : DEFAULT_LYRICS_SETTINGS.highlighted.letterSpacing,
+      lineSpacing: typeof high.lineSpacing === 'number' && !isNaN(high.lineSpacing) ? high.lineSpacing : DEFAULT_LYRICS_SETTINGS.highlighted.lineSpacing,
+      textCase: validTextCases.includes(high.textCase) ? high.textCase : DEFAULT_LYRICS_SETTINGS.highlighted.textCase,
+      opacity: typeof high.opacity === 'number' && !isNaN(high.opacity) ? high.opacity : DEFAULT_LYRICS_SETTINGS.highlighted.opacity,
+      color: typeof high.color === 'string' && high.color.trim() ? high.color.trim() : DEFAULT_LYRICS_SETTINGS.highlighted.color
+    },
+    unhighlighted: {
+      font: typeof unhigh.font === 'string' && unhigh.font.trim() ? unhigh.font.trim() : DEFAULT_LYRICS_SETTINGS.unhighlighted.font,
+      size: typeof unhigh.size === 'number' && !isNaN(unhigh.size) ? unhigh.size : DEFAULT_LYRICS_SETTINGS.unhighlighted.size,
+      weight: unhigh.weight ? String(unhigh.weight) : DEFAULT_LYRICS_SETTINGS.unhighlighted.weight,
+      letterSpacing: typeof unhigh.letterSpacing === 'number' && !isNaN(unhigh.letterSpacing) ? unhigh.letterSpacing : DEFAULT_LYRICS_SETTINGS.unhighlighted.letterSpacing,
+      lineSpacing: typeof unhigh.lineSpacing === 'number' && !isNaN(unhigh.lineSpacing) ? unhigh.lineSpacing : DEFAULT_LYRICS_SETTINGS.unhighlighted.lineSpacing,
+      textCase: validTextCases.includes(unhigh.textCase) ? unhigh.textCase : DEFAULT_LYRICS_SETTINGS.unhighlighted.textCase,
+      opacity: typeof unhigh.opacity === 'number' && !isNaN(unhigh.opacity) ? unhigh.opacity : DEFAULT_LYRICS_SETTINGS.unhighlighted.opacity,
+      color: typeof unhigh.color === 'string' && unhigh.color.trim() ? unhigh.color.trim() : DEFAULT_LYRICS_SETTINGS.unhighlighted.color
+    },
+    alignment: validAlignments.includes(parsed.alignment) ? parsed.alignment : DEFAULT_LYRICS_SETTINGS.alignment,
+    visibleLines: [1, 3, 5].includes(parsed.visibleLines) ? parsed.visibleLines : DEFAULT_LYRICS_SETTINGS.visibleLines,
+    highlightCurrentLine: typeof parsed.highlightCurrentLine === 'boolean' ? parsed.highlightCurrentLine : DEFAULT_LYRICS_SETTINGS.highlightCurrentLine,
+    animationDuration: typeof parsed.animationDuration === 'number' && !isNaN(parsed.animationDuration) ? parsed.animationDuration : DEFAULT_LYRICS_SETTINGS.animationDuration
+  };
+}
+
+/**
+ * Loads the canonical lyric appearance settings from persistent storage.
+ * Always resolves to a complete, valid LyricsAppearanceSettings object.
+ */
 export function getLyricsSettings(): LyricsAppearanceSettings {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
-      return {
-        highlighted: { 
-          ...DEFAULT_LYRICS_SETTINGS.highlighted, 
-          ...(parsed.highlighted || {}) 
-        },
-        unhighlighted: { 
-          ...DEFAULT_LYRICS_SETTINGS.unhighlighted, 
-          ...(parsed.unhighlighted || {}) 
-        },
-        alignment: parsed.alignment || DEFAULT_LYRICS_SETTINGS.alignment,
-        visibleLines: typeof parsed.visibleLines === 'number' ? parsed.visibleLines : DEFAULT_LYRICS_SETTINGS.visibleLines,
-        highlightCurrentLine: typeof parsed.highlightCurrentLine === 'boolean' ? parsed.highlightCurrentLine : DEFAULT_LYRICS_SETTINGS.highlightCurrentLine,
-        animationDuration: typeof parsed.animationDuration === 'number' ? parsed.animationDuration : DEFAULT_LYRICS_SETTINGS.animationDuration
-      };
+      const canonical = resolveLyricsSettings(parsed);
+      console.log('[LyricsSettings] Successfully loaded persisted settings from localStorage:', canonical);
+      return canonical;
     }
   } catch (e) {
-    console.error('Failed to load lyrics settings:', e);
+    console.error('[LyricsSettings] Failed to load lyrics settings from localStorage, falling back to defaults:', e);
   }
+  console.log('[LyricsSettings] No persisted settings found; using canonical defaults.');
   return DEFAULT_LYRICS_SETTINGS;
 }
 
+/**
+ * Saves canonical lyric appearance settings to persistent storage and notifies
+ * any active rooms or listeners immediately.
+ */
 export function saveLyricsSettings(settings: LyricsAppearanceSettings): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-    window.dispatchEvent(new CustomEvent('yimly_lyrics_settings_changed', { detail: settings }));
+    const canonical = resolveLyricsSettings(settings);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(canonical));
+    window.dispatchEvent(new CustomEvent('yimly_lyrics_settings_changed', { detail: canonical }));
+    console.log('[LyricsSettings] Persisted updated lyric appearance settings:', canonical);
   } catch (e) {
-    console.error('Failed to save lyrics settings:', e);
+    console.error('[LyricsSettings] Failed to save lyrics settings:', e);
   }
 }
 
