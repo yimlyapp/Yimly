@@ -38,7 +38,7 @@ export default function Settings() {
     embedArtwork: true,
     downloadLyrics: true,
     lyricsProviders: ['lrclib'],
-    folderStructure: '{artist}/{album}/{track_number} - {title}',
+    folderStructure: '{artist}/{artist} - {title}',
     playlistFolder: true,
   });
   const [savingDlSettings, setSavingDlSettings] = useState(false);
@@ -753,17 +753,17 @@ export default function Settings() {
             {/* Folder Naming Pattern */}
             <div className="space-y-2">
               <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider">
-                Folder / File Naming Pattern
+                Folder / File Naming Pattern (Downtify Standard)
               </label>
               <input
                 type="text"
                 value={dlSettings.folderStructure}
                 onChange={(e) => setDlSettings({ ...dlSettings, folderStructure: e.target.value })}
-                placeholder="{artist}/{album}/{track_number} - {title}"
+                placeholder="{artist}/{artist} - {title}"
                 className="w-full bg-[#08090E] border border-white/10 rounded-xl px-4 py-3 text-xs text-white focus:outline-none focus:border-[#FF4FA3] font-mono"
               />
               <p className="text-[11px] text-zinc-500">
-                Variables: <code className="text-[#FF4FA3]">{'{artist}'}</code>, <code className="text-[#FF4FA3]">{'{album}'}</code>, <code className="text-[#FF4FA3]">{'{track_number}'}</code>, <code className="text-[#FF4FA3]">{'{title}'}</code>
+                Standard format: <code className="text-[#FF4FA3]">/media/&lt;Artist&gt;/&lt;Artist&gt; - &lt;Title&gt;.mp3</code> + matching <code className="text-[#FF4FA3]">.lrc</code> sidecar
               </p>
             </div>
           </div>

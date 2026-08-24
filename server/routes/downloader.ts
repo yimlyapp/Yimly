@@ -106,10 +106,14 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
-// Helper: Sanitize string for filenames & directories
+// Helper: Sanitize string for filenames & directories (Downtify compatible)
 function sanitizeFilename(str: string): string {
   if (!str) return 'Unknown';
-  return str.replace(/[/\\?%*:|"<>]/g, '').trim() || 'Unknown';
+  const cleaned = str
+    .replace(/[/\\?%*:|"<>]/g, '')
+    .trim()
+    .replace(/^\.+|\.+$/g, '');
+  return cleaned || 'Unknown';
 }
 
 // -------------------------------------------------------------------
@@ -153,7 +157,7 @@ router.get('/settings', async (req, res) => {
       // Compatibility keys matching Downtify naming
       download_lyrics: downloadLyrics,
       lyrics_providers: parsedProviders,
-      folderStructure: settingsMap.get('downloader_folder_structure') || '{artist}/{album}/{track_number} - {title}',
+      folderStructure: settingsMap.get('downloader_folder_structure') || '{artist}/{artist} - {title}',
       playlistFolder: settingsMap.get('downloader_playlist_folder') !== 'false',
     });
   } catch (error) {
@@ -187,7 +191,7 @@ router.post('/settings', async (req, res) => {
       ['downloader_quality', String(quality ?? '320k')],
       ['downloader_embed_metadata', String(embedMetadata ?? true)],
       ['downloader_embed_artwork', String(embedArtwork ?? true)],
-      ['downloader_folder_structure', String(folderStructure ?? '{artist}/{album}/{track_number} - {title}')],
+      ['downloader_folder_structure', String(folderStructure ?? '{artist}/{artist} - {title}')],
       ['downloader_playlist_folder', String(playlistFolder ?? true)],
       ['downloader_download_lyrics', String(finalDownloadLyrics)],
       ['downloader_lyrics_providers', JSON.stringify(providersArray)],
@@ -512,7 +516,7 @@ router.post('/start', async (req, res) => {
       quality = '320k',
       embedMetadata = true,
       embedArtwork = true,
-      folderStructure = '{artist}/{album}/{track_number} - {title}',
+      folderStructure = '{artist}/{artist} - {title}',
       playlistFolder = true,
       playlistName,
       downloadLyrics,
@@ -718,27 +722,50 @@ async function processJobInBackground(job: DownloadJob) {
       const qualityFlag = job.quality === '320k' ? '0' : job.quality === '256k' ? '1' : job.quality === '192k' ? '2' : '4';
 
       // Download audio via yt-dlp
-      await execFilePromise(ytDlpPath, [
-        '-x',
-        '--audio-format',
-        formatExt,
-        '--audio-quality',
-        qualityFlag,
-        '--js-runtimes',
-        'node',
-        '--extractor-args',
-        'youtube:player_client=mweb,web_embedded',
-        '-o',
-        `${tempFileBase}.%(ext)s`,
+      const possibleExtensions = [formatExt, 'mp3', 'm4a', 'flac', 'wav', 'opus', 'webm', 'ogg'];
+      let downloadSuccess = false;
+      const searchAttempts = [
         queryOrUrl,
-      ]);
+        `scsearch1:${track.artist} ${track.title}`,
+        `scsearch1:${track.artist.split(/[&,;/]|feat/i)[0].trim()} ${track.title}`,
+      ];
+
+      for (const attemptQuery of searchAttempts) {
+        if (!attemptQuery) continue;
+        try {
+          const dlArgs = [
+            '-x',
+            '--audio-format',
+            formatExt,
+            '--audio-quality',
+            qualityFlag,
+          ];
+          if (attemptQuery.includes('youtube') || attemptQuery.startsWith('ytsearch')) {
+            dlArgs.push(
+              '--js-runtimes',
+              'node',
+              '--extractor-args',
+              'youtube:player_client=mweb,web_embedded'
+            );
+          }
+          dlArgs.push('-o', `${tempFileBase}.%(ext)s`, attemptQuery);
+          await execFilePromise(ytDlpPath, dlArgs);
+          
+          const hasFile = possibleExtensions.some((ext) => fs.existsSync(`${tempFileBase}.${ext}`));
+          if (hasFile) {
+            downloadSuccess = true;
+            break;
+          }
+        } catch (attemptErr: any) {
+          console.warn(`Download attempt with query "${attemptQuery}" failed, trying next fallback:`, attemptErr?.message || attemptErr);
+        }
+      }
 
       track.progress = 70;
       track.status = 'tagging';
       job.updatedAt = Date.now();
 
       // Find generated audio file
-      const possibleExtensions = [formatExt, 'mp3', 'm4a', 'flac', 'wav', 'opus', 'webm', 'ogg'];
       let downloadedAudioFile = '';
       for (const ext of possibleExtensions) {
         const candidate = `${tempFileBase}.${ext}`;
@@ -802,35 +829,27 @@ async function processJobInBackground(job: DownloadJob) {
         }
       }
 
-      // Construct final destination subpath
-      const safeArtist = sanitizeFilename(track.artist);
-      const safeAlbum = sanitizeFilename(track.album);
-      const safeTitle = sanitizeFilename(track.title);
-      const trackNumPadded = String(track.trackNumber || 1).padStart(2, '0');
+      // Construct final destination according to Downtify structure:
+      // /media/<Artist>/<Artist> - <Title>.<formatExt>
+      // /media/<Artist>/<Artist> - <Title>.lrc
+      const safeArtist = sanitizeFilename(track.artist || 'Unknown Artist');
+      const safeTitle = sanitizeFilename(track.title || 'Unknown Title');
+      const baseFilename = `${safeArtist} - ${safeTitle}`;
 
-      let relSubpath = job.folderStructure
-        .replace('{artist}', safeArtist)
-        .replace('{album}', safeAlbum)
-        .replace('{track_number}', trackNumPadded)
-        .replace('{title}', safeTitle);
+      // Destination directory is strictly the artist folder inside library root (e.g. /media/<Artist>)
+      const artistDir = path.join(job.libraryPath, safeArtist);
 
-      if (job.playlistFolder && job.playlistName) {
-        const safePlaylist = sanitizeFilename(job.playlistName);
-        relSubpath = path.join(safePlaylist, relSubpath);
+      if (!fs.existsSync(artistDir)) {
+        fs.mkdirSync(artistDir, { recursive: true });
       }
 
-      const finalDestFile = path.join(job.libraryPath, `${relSubpath}.${formatExt}`);
-      const finalDestDir = path.dirname(finalDestFile);
-
-      if (!fs.existsSync(finalDestDir)) {
-        fs.mkdirSync(finalDestDir, { recursive: true });
-      }
+      const finalDestFile = path.join(artistDir, `${baseFilename}.${formatExt}`);
 
       // Move temp file to final library path
       fs.copyFileSync(downloadedAudioFile, finalDestFile);
       fs.unlinkSync(downloadedAudioFile);
 
-      // Save LRC sidecar if synced lyrics exist
+      // Save matching LRC sidecar directly beside the MP3 with matching base filename
       if (fetchedLyrics?.synced) {
         saveLrcSidecar(finalDestFile, fetchedLyrics.synced);
       }
