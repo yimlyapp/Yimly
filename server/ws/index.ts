@@ -1,7 +1,8 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { db } from '../db/index.js';
-import { sessions, queueItems, songs, artists } from '../db/schema.js';
+import { sessions, queueItems, songs, artists, settings } from '../db/schema.js';
 import { eq, asc, and } from 'drizzle-orm';
+import { LyricsAppearanceSettings, DEFAULT_LYRICS_SETTINGS, resolveLyricsSettings } from '../lib/lyrics-settings.js';
 
 export interface RoomState {
   playing: boolean;
@@ -10,6 +11,7 @@ export interface RoomState {
   currentQueueItemId: number | null;
   variant: 'original' | 'instrumental';
   lyricOffset: number; // in ms
+  lyricSettings: LyricsAppearanceSettings;
   clients: Set<WebSocket>;
   hostClient: WebSocket | null;
   lastHostHeartbeat: number;
@@ -23,7 +25,31 @@ export async function getOrCreateRoom(sessionId: string): Promise<RoomState> {
   if (!room) {
     let initialSongId: number | null = null;
     let initialQueueItemId: number | null = null;
+    let initialLyricOffset = 0;
+    let initialLyricSettings = DEFAULT_LYRICS_SETTINGS;
+
     try {
+      // 1. Check session settings in DB
+      const sessionRec = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+      if (sessionRec.length > 0 && sessionRec[0].lyricSettings) {
+        try {
+          initialLyricSettings = resolveLyricsSettings(JSON.parse(sessionRec[0].lyricSettings));
+        } catch (e) {
+          // ignore parsing error
+        }
+      } else {
+        // Check global lyrics setting in DB
+        const globalSetting = await db.select().from(settings).where(eq(settings.key, 'lyrics_appearance_settings')).limit(1);
+        if (globalSetting.length > 0 && globalSetting[0].value) {
+          try {
+            initialLyricSettings = resolveLyricsSettings(JSON.parse(globalSetting[0].value));
+          } catch (e) {
+            // ignore
+          }
+        }
+      }
+
+      // 2. Find currently playing or next pending item in DB
       const playingItem = await db.select({
         id: queueItems.id,
         songId: queueItems.songId
@@ -50,6 +76,14 @@ export async function getOrCreateRoom(sessionId: string): Promise<RoomState> {
           initialSongId = pendingItem[0].songId;
         }
       }
+
+      // 3. If there is a song, load its saved lyricOffset
+      if (initialSongId) {
+        const songRec = await db.select({ lyricOffset: songs.lyricOffset }).from(songs).where(eq(songs.id, initialSongId)).limit(1);
+        if (songRec.length > 0 && typeof songRec[0].lyricOffset === 'number') {
+          initialLyricOffset = songRec[0].lyricOffset;
+        }
+      }
     } catch (e) {
       console.error('[WS] Error initializing room state from DB:', e);
     }
@@ -60,7 +94,8 @@ export async function getOrCreateRoom(sessionId: string): Promise<RoomState> {
       currentSongId: initialSongId,
       currentQueueItemId: initialQueueItemId,
       variant: 'original',
-      lyricOffset: 0,
+      lyricOffset: initialLyricOffset,
+      lyricSettings: initialLyricSettings,
       clients: new Set(),
       hostClient: null,
       lastHostHeartbeat: Date.now(),
@@ -110,7 +145,8 @@ export function setupWebSockets(wss: WebSocketServer) {
           currentSongId: room.currentSongId,
           currentQueueItemId: room.currentQueueItemId,
           variant: room.variant,
-          lyricOffset: room.lyricOffset
+          lyricOffset: room.lyricOffset,
+          lyricSettings: room.lyricSettings
         }
       }));
     }
@@ -183,10 +219,42 @@ export function setupWebSockets(wss: WebSocketServer) {
             });
             break;
 
-          case 'OFFSET_CHANGED':
-            room.lyricOffset = data.payload.offset;
-            broadcastToRoom(sessionId, { type: 'OFFSET_CHANGED', payload: { offset: room.lyricOffset } });
+          case 'OFFSET_CHANGED': {
+            const offsetVal = Math.round(Number(data.payload?.offset) || 0);
+            const targetSongId = data.payload?.songId ? Number(data.payload.songId) : room.currentSongId;
+            room.lyricOffset = offsetVal;
+            if (targetSongId) {
+              try {
+                await db.update(songs).set({ lyricOffset: offsetVal }).where(eq(songs.id, targetSongId));
+              } catch (e) {
+                console.error('[WS] Failed to save song lyricOffset:', e);
+              }
+            }
+            broadcastToRoom(sessionId, {
+              type: 'OFFSET_CHANGED',
+              payload: { offset: room.lyricOffset, songId: targetSongId }
+            });
             break;
+          }
+
+          case 'LYRIC_SETTINGS_CHANGED': {
+            if (data.payload?.settings) {
+              const resolved = resolveLyricsSettings(data.payload.settings);
+              room.lyricSettings = resolved;
+              try {
+                await db.update(sessions)
+                  .set({ lyricSettings: JSON.stringify(resolved), updatedAt: new Date() })
+                  .where(eq(sessions.id, sessionId));
+              } catch (e) {
+                console.error('[WS] Failed to save session lyricSettings:', e);
+              }
+              broadcastToRoom(sessionId, {
+                type: 'LYRIC_SETTINGS_UPDATED',
+                payload: { settings: resolved }
+              });
+            }
+            break;
+          }
 
           case 'QUEUE_UPDATE':
             broadcastToRoom(sessionId, { type: 'QUEUE_UPDATED' });
@@ -202,27 +270,48 @@ export function setupWebSockets(wss: WebSocketServer) {
                   currentSongId: room.currentSongId,
                   currentQueueItemId: room.currentQueueItemId,
                   variant: room.variant,
-                  lyricOffset: room.lyricOffset
+                  lyricOffset: room.lyricOffset,
+                  lyricSettings: room.lyricSettings
                 }
               }));
             }
             break;
 
-          case 'SONG_CHANGED':
-            room.currentSongId = data.payload.songId;
+          case 'SONG_CHANGED': {
+            room.currentSongId = data.payload.songId ? Number(data.payload.songId) : null;
             room.currentQueueItemId = data.payload.queueItemId || null;
             room.position = 0;
             room.playing = true;
+
+            // Load song's saved offset
+            if (room.currentSongId) {
+              try {
+                const songRec = await db.select({ lyricOffset: songs.lyricOffset }).from(songs).where(eq(songs.id, room.currentSongId)).limit(1);
+                room.lyricOffset = songRec[0]?.lyricOffset ?? 0;
+              } catch (e) {
+                room.lyricOffset = 0;
+              }
+            } else {
+              room.lyricOffset = 0;
+            }
+
             broadcastToRoom(sessionId, { 
               type: 'SONG_CHANGED', 
               payload: { 
                 songId: room.currentSongId, 
                 queueItemId: room.currentQueueItemId,
                 playing: true,
-                position: 0
+                position: 0,
+                lyricOffset: room.lyricOffset
               } 
             });
+
+            broadcastToRoom(sessionId, {
+              type: 'OFFSET_CHANGED',
+              payload: { offset: room.lyricOffset, songId: room.currentSongId }
+            });
             break;
+          }
         }
       } catch (err) {
         console.error('[WS] Message error:', err);
@@ -362,13 +451,30 @@ export async function advanceQueue(sessionId: string, room: RoomState) {
       room.position = 0;
       room.playing = true;
 
+      // Load song's saved lyricOffset
+      try {
+        const songRec = await db.select({ lyricOffset: songs.lyricOffset }).from(songs).where(eq(songs.id, nextItem.songId)).limit(1);
+        room.lyricOffset = songRec[0]?.lyricOffset ?? 0;
+      } catch (e) {
+        room.lyricOffset = 0;
+      }
+
       broadcastToRoom(sessionId, {
         type: 'SONG_CHANGED',
         payload: {
           songId: room.currentSongId,
           queueItemId: room.currentQueueItemId,
           playing: true,
-          position: 0
+          position: 0,
+          lyricOffset: room.lyricOffset
+        }
+      });
+
+      broadcastToRoom(sessionId, {
+        type: 'OFFSET_CHANGED',
+        payload: {
+          offset: room.lyricOffset,
+          songId: room.currentSongId
         }
       });
 
@@ -382,6 +488,7 @@ export async function advanceQueue(sessionId: string, room: RoomState) {
       room.currentQueueItemId = null;
       room.playing = false;
       room.position = 0;
+      room.lyricOffset = 0;
 
       broadcastToRoom(sessionId, {
         type: 'QUEUE_EMPTY',
@@ -438,13 +545,30 @@ export async function checkAndAutoPlay(sessionId: string) {
         room.position = 0;
         room.playing = true;
 
+        // Load song's saved lyricOffset
+        try {
+          const songRec = await db.select({ lyricOffset: songs.lyricOffset }).from(songs).where(eq(songs.id, itemToPlay.songId)).limit(1);
+          room.lyricOffset = songRec[0]?.lyricOffset ?? 0;
+        } catch (e) {
+          room.lyricOffset = 0;
+        }
+
         broadcastToRoom(sessionId, {
           type: 'SONG_CHANGED',
           payload: {
             songId: room.currentSongId,
             queueItemId: room.currentQueueItemId,
             playing: true,
-            position: 0
+            position: 0,
+            lyricOffset: room.lyricOffset
+          }
+        });
+
+        broadcastToRoom(sessionId, {
+          type: 'OFFSET_CHANGED',
+          payload: {
+            offset: room.lyricOffset,
+            songId: room.currentSongId
           }
         });
 
@@ -466,7 +590,7 @@ export function notifyQueueUpdate(sessionId: string) {
   checkAndAutoPlay(sessionId);
 }
 
-function broadcastToRoom(sessionId: string, message: any) {
+export function broadcastToRoom(sessionId: string, message: any) {
   const room = activeRooms.get(sessionId);
   if (room) {
     const msgStr = JSON.stringify(message);
@@ -482,4 +606,35 @@ function broadcastToRoom(sessionId: string, message: any) {
   }
 }
 
+export function broadcastLyricSettingsToSession(sessionId: string, newSettings: LyricsAppearanceSettings) {
+  const room = activeRooms.get(sessionId);
+  if (room) {
+    room.lyricSettings = newSettings;
+  }
+  broadcastToRoom(sessionId, {
+    type: 'LYRIC_SETTINGS_UPDATED',
+    payload: { settings: newSettings }
+  });
+}
 
+export function broadcastLyricSettingsToAllActiveRooms(newSettings: LyricsAppearanceSettings) {
+  for (const [sessionId, room] of activeRooms.entries()) {
+    room.lyricSettings = newSettings;
+    broadcastToRoom(sessionId, {
+      type: 'LYRIC_SETTINGS_UPDATED',
+      payload: { settings: newSettings }
+    });
+  }
+}
+
+export function broadcastSongOffsetToRooms(songId: number, offset: number) {
+  for (const [sessionId, room] of activeRooms.entries()) {
+    if (room.currentSongId === songId) {
+      room.lyricOffset = offset;
+      broadcastToRoom(sessionId, {
+        type: 'OFFSET_CHANGED',
+        payload: { offset, songId }
+      });
+    }
+  }
+}

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
 import { users } from '../db/schema.js';
-import { eq, ne } from 'drizzle-orm';
+import { eq, ne, and } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { z } from 'zod';
@@ -11,9 +11,15 @@ const router = Router();
 router.use(requireAuth);
 router.use(requireAdmin);
 
-const userSchema = z.object({
+const userCreateSchema = z.object({
   username: z.string().min(3).max(50),
-  password: z.string().min(8).optional(),
+  password: z.string().min(1, 'Password is required'),
+  role: z.enum(['administrator', 'user']).default('user'),
+});
+
+const userUpdateSchema = z.object({
+  username: z.string().min(3).max(50),
+  password: z.string().min(1).optional().or(z.literal('')),
   role: z.enum(['administrator', 'user']).default('user'),
 });
 
@@ -33,10 +39,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const parsed = userSchema.parse(req.body);
-    if (!parsed.password) {
-      return res.status(400).json({ error: 'Password is required for new users' });
-    }
+    const parsed = userCreateSchema.parse(req.body);
 
     const existingUser = await db.select().from(users).where(eq(users.username, parsed.username)).limit(1);
     if (existingUser.length > 0) {
@@ -69,7 +72,17 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const parsed = userSchema.parse(req.body);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid user ID' });
+    
+    const parsed = userUpdateSchema.parse(req.body);
+
+    // Check if new username is already taken by another user
+    const duplicate = await db.select().from(users)
+      .where(and(eq(users.username, parsed.username), ne(users.id, id)))
+      .limit(1);
+    if (duplicate.length > 0) {
+      return res.status(400).json({ error: 'Username is already in use by another account' });
+    }
 
     const updateData: any = {
       username: parsed.username,
@@ -77,7 +90,7 @@ router.put('/:id', async (req, res) => {
       updatedAt: new Date(),
     };
 
-    if (parsed.password) {
+    if (parsed.password && parsed.password.length > 0) {
       updateData.password = await bcrypt.hash(parsed.password, 10);
     }
 

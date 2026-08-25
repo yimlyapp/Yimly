@@ -4,6 +4,7 @@ import { songs, artists, albums, lyrics, songArtists } from '../db/schema.js';
 import { eq, like, or, inArray, asc } from 'drizzle-orm';
 import { requireAuth } from '../middleware/auth.js';
 import { formatArtistDisplay } from '../lib/artist-utils.js';
+import { broadcastSongOffsetToRooms } from '../ws/index.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -54,6 +55,7 @@ router.get('/', async (req, res) => {
       trackNumber: songs.trackNumber,
       artworkPath: songs.artworkPath,
       albumArtworkPath: albums.artworkPath,
+      lyricOffset: songs.lyricOffset,
     })
     .from(songs)
     .leftJoin(artists, eq(songs.artistId, artists.id))
@@ -166,6 +168,7 @@ router.get('/:id', async (req, res) => {
       hasLrc: lyrics.id,
       artworkPath: songs.artworkPath,
       albumArtworkPath: albums.artworkPath,
+      lyricOffset: songs.lyricOffset,
     })
     .from(songs)
     .leftJoin(artists, eq(songs.artistId, artists.id))
@@ -185,7 +188,8 @@ router.get('/:id', async (req, res) => {
       artists: trackArtists,
       hasArtwork: !!songRec[0].artworkPath || !!songRec[0].albumArtworkPath,
       hasLrc: !!songRec[0].hasLrc,
-      hasInstrumental: !!songRec[0].hasInstrumental
+      hasInstrumental: !!songRec[0].hasInstrumental,
+      lyricOffset: songRec[0].lyricOffset ?? 0,
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch song details' });
@@ -325,5 +329,50 @@ router.get('/:id/lyrics', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch lyrics' });
   }
 });
+
+router.get('/:id/lyrics/offset', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid song ID' });
+
+    const song = await db.select({ lyricOffset: songs.lyricOffset }).from(songs).where(eq(songs.id, id)).limit(1);
+    if (song.length === 0) return res.status(404).json({ error: 'Song not found' });
+
+    const offset = song[0].lyricOffset ?? 0;
+    res.json({ songId: id, offset, lyricOffset: offset });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch lyric offset' });
+  }
+});
+
+const updateSongLyricOffset = async (req: any, res: any) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid song ID' });
+
+    const rawOffset = req.body?.offset !== undefined ? req.body.offset : req.body?.lyricOffset;
+    if (rawOffset === undefined || isNaN(Number(rawOffset))) {
+      return res.status(400).json({ error: 'Offset must be a valid number in milliseconds' });
+    }
+
+    const offset = Math.round(Number(rawOffset));
+    const existing = await db.select({ id: songs.id }).from(songs).where(eq(songs.id, id)).limit(1);
+    if (existing.length === 0) return res.status(404).json({ error: 'Song not found' });
+
+    await db.update(songs).set({ lyricOffset: offset }).where(eq(songs.id, id));
+
+    // Broadcast updated offset to active websocket rooms playing this song
+    broadcastSongOffsetToRooms(id, offset);
+
+    res.json({ success: true, songId: id, offset, lyricOffset: offset });
+  } catch (error) {
+    console.error('Failed to update song lyric offset:', error);
+    res.status(500).json({ error: 'Failed to update song lyric offset' });
+  }
+};
+
+router.put('/:id/lyrics/offset', updateSongLyricOffset);
+router.post('/:id/lyrics/offset', updateSongLyricOffset);
+router.patch('/:id/lyrics/offset', updateSongLyricOffset);
 
 export default router;

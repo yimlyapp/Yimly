@@ -52,7 +52,7 @@ export default function GuestRoom({
   useEffect(() => {
     if (showAddSong) {
       setLoadingSongs(true);
-      fetch('/api/songs')
+      fetch('/api/karaoke/songs')
         .then(async res => {
           if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
             return await res.json();

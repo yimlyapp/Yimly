@@ -5,6 +5,7 @@ import QRCode from 'qrcode';
 import GuestRoom from '../components/GuestRoom';
 import { 
   getLyricsSettings, 
+  fetchServerLyricsSettings,
   resolveLyricsSettings,
   LyricsAppearanceSettings, 
   applyTextCase, 
@@ -67,8 +68,15 @@ export default function RoomSession() {
     setLyricsSettings(current);
     prevSettingsJsonRef.current = JSON.stringify(current);
 
+    fetchServerLyricsSettings(sessionId).then((srv) => {
+      if (srv) {
+        setLyricsSettings(srv);
+        prevSettingsJsonRef.current = JSON.stringify(srv);
+      }
+    });
+
     console.log('[LyricSettings] Host initialized');
-    console.log('[LyricSettings] source: localStorage');
+    console.log('[LyricSettings] source: localStorage / server');
     console.log(`[LyricSettings] session: ${sessionId || 'unknown'}`);
     console.log(`[LyricSettings] font: ${current.highlighted.font}`);
     console.log(`[LyricSettings] currentSize: ${current.highlighted.size}`);
@@ -502,6 +510,11 @@ export default function RoomSession() {
           if (data.guestUsername) {
             setGuestUsername(data.guestUsername);
           }
+          if (data.lyricSettings) {
+            const resolved = resolveLyricsSettings(data.lyricSettings);
+            setLyricsSettings(resolved);
+            prevSettingsJsonRef.current = JSON.stringify(resolved);
+          }
           setValidationStatus('valid');
         } else {
           if (data.code === 'ROOM_NOT_FOUND' || res.status === 404) {
@@ -542,6 +555,11 @@ export default function RoomSession() {
         const data = await res.json();
         setSession(data.session);
         setQueue(data.queue || []);
+        if (data.lyricSettings || data.playback?.lyricSettings) {
+          const resolved = resolveLyricsSettings(data.lyricSettings || data.playback.lyricSettings);
+          setLyricsSettings(resolved);
+          prevSettingsJsonRef.current = JSON.stringify(resolved);
+        }
         if (data.playback) {
           if (typeof data.playback.playing === 'boolean') {
             setPlaying(data.playback.playing);
@@ -595,6 +613,11 @@ export default function RoomSession() {
               if (typeof msg.payload?.playing === 'boolean') setPlaying(msg.payload.playing);
               if (msg.payload?.variant) setVariant(msg.payload.variant);
               if (msg.payload?.lyricOffset !== undefined) setLyricOffset(msg.payload.lyricOffset);
+              if (msg.payload?.lyricSettings) {
+                const resolved = resolveLyricsSettings(msg.payload.lyricSettings);
+                setLyricsSettings(resolved);
+                prevSettingsJsonRef.current = JSON.stringify(resolved);
+              }
               fetchState();
               break;
             case 'QUEUE_UPDATED':
@@ -614,6 +637,9 @@ export default function RoomSession() {
               }
               break;
             case 'SONG_CHANGED':
+              if (msg.payload?.lyricOffset !== undefined && typeof msg.payload.lyricOffset === 'number') {
+                setLyricOffset(msg.payload.lyricOffset);
+              }
               fetchState();
               setPlaying(true);
               break;
@@ -627,7 +653,17 @@ export default function RoomSession() {
               }
               break;
             case 'OFFSET_CHANGED':
-              setLyricOffset(msg.payload.offset);
+              if (typeof msg.payload?.offset === 'number') {
+                setLyricOffset(msg.payload.offset);
+              }
+              break;
+            case 'LYRIC_SETTINGS_UPDATED':
+            case 'LYRIC_SETTINGS_CHANGED':
+              if (msg.payload?.settings) {
+                const resolved = resolveLyricsSettings(msg.payload.settings);
+                setLyricsSettings(resolved);
+                prevSettingsJsonRef.current = JSON.stringify(resolved);
+              }
               break;
             case 'SESSION_CLOSED':
               isClosedIntentionally = true;
@@ -726,7 +762,12 @@ export default function RoomSession() {
           return null;
         })
         .then(data => {
-          if (data) setCurrentSongDetails(data);
+          if (data) {
+            setCurrentSongDetails(data);
+            if (data.lyricOffset !== undefined && typeof data.lyricOffset === 'number') {
+              setLyricOffset(data.lyricOffset);
+            }
+          }
         })
         .catch(err => console.error('Failed to fetch song details:', err));
 
@@ -750,7 +791,7 @@ export default function RoomSession() {
   // Load songs for song picker modal (guests only)
   useEffect(() => {
     if (showLibrary) {
-      fetch('/api/songs')
+      fetch('/api/karaoke/songs')
         .then(async res => {
           if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
             return await res.json();
@@ -910,8 +951,22 @@ export default function RoomSession() {
     if (!isHost) return;
     const newOffset = lyricOffset + delta;
     setLyricOffset(newOffset);
+    const currentSongId = currentSong?.songId;
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'OFFSET_CHANGED', payload: { offset: newOffset } }));
+      ws.send(JSON.stringify({ 
+        type: 'OFFSET_CHANGED', 
+        payload: { 
+          offset: newOffset,
+          songId: currentSongId 
+        } 
+      }));
+    }
+    if (currentSongId) {
+      fetch(`/api/songs/${currentSongId}/lyrics/offset`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offset: newOffset }),
+      }).catch(err => console.warn('[OFFSET] Failed to save song lyric offset:', err));
     }
   };
 

@@ -111,15 +111,60 @@ export function getLyricsSettings(): LyricsAppearanceSettings {
  * Saves canonical lyric appearance settings to persistent storage and notifies
  * any active rooms or listeners immediately.
  */
-export function saveLyricsSettings(settings: LyricsAppearanceSettings): void {
+export function saveLyricsSettings(settings: LyricsAppearanceSettings, sessionId?: string): void {
   try {
     const canonical = resolveLyricsSettings(settings);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(canonical));
     window.dispatchEvent(new CustomEvent('yimly_lyrics_settings_changed', { detail: canonical }));
-    console.log('[LyricsSettings] Persisted updated lyric appearance settings:', canonical);
+    console.log('[LyricsSettings] Persisted updated lyric appearance settings locally:', canonical);
+
+    // Persist to server default settings
+    fetch('/api/karaoke/settings/lyrics', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: canonical }),
+    }).catch(err => console.warn('[LyricsSettings] Failed to save settings to server default:', err));
+
+    // If active session ID is provided, also sync directly to the session
+    if (sessionId) {
+      fetch(`/api/karaoke/sessions/${sessionId}/lyrics-settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: canonical }),
+      }).catch(err => console.warn(`[LyricsSettings] Failed to sync settings to session ${sessionId}:`, err));
+    }
   } catch (e) {
     console.error('[LyricsSettings] Failed to save lyrics settings:', e);
   }
+}
+
+/**
+ * Fetches the canonical lyric appearance settings from the server.
+ * Updates local storage cache upon success.
+ */
+export async function fetchServerLyricsSettings(sessionId?: string): Promise<LyricsAppearanceSettings> {
+  try {
+    const url = sessionId 
+      ? `/api/karaoke/sessions/${sessionId}/lyrics-settings` 
+      : '/api/karaoke/settings/lyrics';
+
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.settings) {
+        const canonical = resolveLyricsSettings(data.settings);
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(canonical));
+        } catch (e) {
+          // ignore localStorage error
+        }
+        return canonical;
+      }
+    }
+  } catch (err) {
+    console.warn('[LyricsSettings] Failed to fetch server lyrics settings:', err);
+  }
+  return getLyricsSettings();
 }
 
 export function applyTextCase(text: string, textCase: string): string {

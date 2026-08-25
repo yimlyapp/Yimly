@@ -112,9 +112,21 @@ export async function setupDatabase() {
     console.warn('Migrations folder not found, skipping migrations.');
   }
 
-  // Ensure artwork_path column exists in songs table (backward compatibility safety)
+  // Ensure artwork_path and lyric_offset columns exist in songs table (backward compatibility safety)
   try {
     await sqlite.execute('ALTER TABLE songs ADD COLUMN artwork_path text;');
+  } catch (e) {
+    // Column already exists, safe to ignore
+  }
+  try {
+    await sqlite.execute('ALTER TABLE songs ADD COLUMN lyric_offset integer DEFAULT 0;');
+  } catch (e) {
+    // Column already exists, safe to ignore
+  }
+
+  // Ensure lyric_settings column exists in sessions table
+  try {
+    await sqlite.execute('ALTER TABLE sessions ADD COLUMN lyric_settings text;');
   } catch (e) {
     // Column already exists, safe to ignore
   }
@@ -133,6 +145,37 @@ export async function setupDatabase() {
     `);
     await sqlite.execute('CREATE INDEX IF NOT EXISTS song_artists_song_id_idx ON song_artists (song_id);');
     await sqlite.execute('CREATE INDEX IF NOT EXISTS song_artists_artist_id_idx ON song_artists (artist_id);');
+  } catch (e) {
+    // Table/indices already exist, safe to ignore
+  }
+
+  // Ensure playlists and playlist_songs tables exist
+  try {
+    await sqlite.execute(`
+      CREATE TABLE IF NOT EXISTS playlists (
+        id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+        user_id integer NOT NULL,
+        name text NOT NULL,
+        description text,
+        is_public integer DEFAULT 0 NOT NULL,
+        created_at integer NOT NULL,
+        updated_at integer NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+    `);
+    await sqlite.execute(`
+      CREATE TABLE IF NOT EXISTS playlist_songs (
+        id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+        playlist_id integer NOT NULL,
+        song_id integer NOT NULL,
+        position integer DEFAULT 0 NOT NULL,
+        added_at integer NOT NULL,
+        FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
+        FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE
+      );
+    `);
+    await sqlite.execute('CREATE INDEX IF NOT EXISTS playlists_user_id_idx ON playlists (user_id);');
+    await sqlite.execute('CREATE INDEX IF NOT EXISTS playlist_songs_playlist_id_idx ON playlist_songs (playlist_id);');
   } catch (e) {
     // Table/indices already exist, safe to ignore
   }

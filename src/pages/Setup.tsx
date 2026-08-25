@@ -13,8 +13,8 @@ export default function Setup({ onComplete }: { onComplete: () => void }) {
     e.preventDefault();
     setError('');
 
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters long');
+    if (!password) {
+      setError('Password is required');
       return;
     }
 
@@ -93,10 +93,9 @@ export default function Setup({ onComplete }: { onComplete: () => void }) {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="At least 8 characters"
+                placeholder="Enter password"
                 className="w-full pl-10 pr-4 py-2.5 bg-[#0A0B10] border border-white/10 rounded-xl text-white placeholder-zinc-600 focus:outline-none focus:border-[#FF4FA3] focus:ring-1 focus:ring-[#FF4FA3] text-sm"
                 required
-                minLength={8}
               />
             </div>
           </div>

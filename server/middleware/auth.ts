@@ -18,6 +18,16 @@ export const isPublicRoute = (req: Request): boolean => {
   const url = (req.originalUrl || req.url || '').split('?')[0];
   const method = req.method.toUpperCase();
 
+  // Public Setup endpoints
+  if (url === '/api/setup/status' || (method === 'POST' && url === '/api/setup')) {
+    return true;
+  }
+
+  // Public Auth endpoints
+  if (method === 'POST' && (url === '/api/auth/login' || url === '/api/auth/logout')) {
+    return true;
+  }
+
   // Public Karaoke session creation and joining
   if (method === 'POST' && (url === '/api/karaoke/sessions' || url === '/api/karaoke/sessions/join')) {
     return true;
@@ -28,13 +38,36 @@ export const isPublicRoute = (req: Request): boolean => {
     return true;
   }
 
-  // Public Karaoke session validation, state query, queueing, ending, heartbeat, and skip for room participants
-  if (/^\/api\/karaoke\/sessions\/[^\/]+\/(validate|state|queue|end|heartbeat|skip)$/.test(url)) {
+  // Public Karaoke session validation, state query, queueing, ending, heartbeat, skip, lyrics-settings for room participants
+  if (/^\/api\/karaoke\/sessions\/[^\/]+\/(validate|state|queue|end|heartbeat|skip|lyrics-settings)$/.test(url)) {
     return true;
   }
 
-  // Public songs endpoints for karaoke playback, search, lyrics, and audio streaming
-  if (method === 'GET' && /^\/api\/songs(\/.*)?$/.test(url)) {
+  // Global lyrics appearance settings for hosts & rooms
+  if (/^\/api\/karaoke\/settings\/lyrics$/.test(url)) {
+    return true;
+  }
+
+  // Guest song catalog & search for karaoke rooms (minimal scoped data for queueing)
+  if (method === 'GET' && (url === '/api/karaoke/songs' || url === '/api/karaoke/search')) {
+    return true;
+  }
+
+  // Direct artwork serving
+  if (method === 'GET' && /^\/api\/artwork\/[^\/]+$/.test(url)) {
+    return true;
+  }
+
+  // Active song playback, lyrics, artwork & lyric offset (needed for TV/room player & connected displays)
+  if (method === 'GET' && /^\/api\/songs\/\d+(\/(artwork|audio|lyrics(\/offset)?))?$/.test(url)) {
+    return true;
+  }
+
+  if ((method === 'PUT' || method === 'POST' || method === 'PATCH') && /^\/api\/songs\/\d+\/lyrics\/offset$/.test(url)) {
+    return true;
+  }
+
+  if (method === 'GET' && /^\/api\/(artists|albums)\/\d+\/artwork$/.test(url)) {
     return true;
   }
 

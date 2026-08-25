@@ -3,11 +3,12 @@ import { useOutletContext } from 'react-router-dom';
 import { 
   Plus, Folder, RefreshCw, Trash2, AlertCircle, HardDrive, 
   ShieldCheck, Type, AlignLeft, AlignCenter, AlignRight, RotateCcw, Sparkles, Download, Save, Check,
-  Layers, Zap, Sliders, Eye
+  Layers, Zap, Sliders, Eye, Shield
 } from 'lucide-react';
 import { 
   getLyricsSettings, 
   saveLyricsSettings, 
+  fetchServerLyricsSettings,
   resolveLyricsSettings,
   DEFAULT_LYRICS_SETTINGS, 
   LyricsAppearanceSettings, 
@@ -51,6 +52,11 @@ export default function Settings() {
   useEffect(() => {
     fetchLibraries();
     fetchDlSettings();
+    fetchServerLyricsSettings().then((srv) => {
+      if (srv) {
+        setLyricsSettings(srv);
+      }
+    });
   }, []);
 
   const fetchDlSettings = async () => {
@@ -159,6 +165,16 @@ export default function Settings() {
     setLyricsSettings(DEFAULT_LYRICS_SETTINGS);
     saveLyricsSettings(DEFAULT_LYRICS_SETTINGS);
   };
+
+  if (user?.role !== 'administrator') {
+    return (
+      <div className="p-10 flex flex-col items-center justify-center min-h-[50vh] text-center">
+        <Shield className="w-12 h-12 text-rose-500 mb-3" />
+        <h2 className="text-xl font-bold text-white mb-1">Access Restricted</h2>
+        <p className="text-sm text-zinc-400">Only system administrators can access system and media library settings.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 md:p-10 max-w-5xl mx-auto space-y-10 font-sans select-none">

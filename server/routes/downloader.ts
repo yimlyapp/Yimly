@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { db } from '../db/index.js';
 import { settings, libraries } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { scanLibrary } from '../lib/scanner.js';
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
@@ -22,6 +22,7 @@ const execFilePromise = promisify(execFile);
 
 const router = Router();
 router.use(requireAuth);
+router.use(requireAdmin);
 
 // Helper: Ensure yt-dlp executable exists
 async function getYtDlpPath(): Promise<string> {

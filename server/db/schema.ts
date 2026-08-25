@@ -15,6 +15,7 @@ export const sessions = sqliteTable('sessions', {
   hostId: integer('host_id').references(() => users.id).notNull(),
   hostDevice: text('host_device').notNull(),
   status: text('status', { enum: ['active', 'closed'] }).notNull().default('active'),
+  lyricSettings: text('lyric_settings'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 });
@@ -66,6 +67,7 @@ export const songs = sqliteTable('songs', {
   fileSize: integer('file_size'),
   format: text('format'),
   artworkPath: text('artwork_path'),
+  lyricOffset: integer('lyric_offset').notNull().default(0),
 });
 
 export const lyrics = sqliteTable('lyrics', {
@@ -89,6 +91,24 @@ export const queueItems = sqliteTable('queue_items', {
   addedAt: integer('added_at', { mode: 'timestamp' }).notNull(),
   position: integer('position').notNull(),
   status: text('status', { enum: ['pending', 'playing', 'finished'] }).notNull().default('pending'),
+});
+
+export const playlists = sqliteTable('playlists', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').references(() => users.id).notNull(),
+  name: text('name').notNull(),
+  description: text('description'),
+  isPublic: integer('is_public').notNull().default(0), // 0 = private (default), 1 = public
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+});
+
+export const playlistSongs = sqliteTable('playlist_songs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  playlistId: integer('playlist_id').references(() => playlists.id).notNull(),
+  songId: integer('song_id').references(() => songs.id).notNull(),
+  position: integer('position').notNull().default(0),
+  addedAt: integer('added_at', { mode: 'timestamp' }).notNull(),
 });
 
 export const settings = sqliteTable('settings', {

@@ -73,7 +73,6 @@ export default function Layout() {
             Menu
           </div>
           <NavItem to="/" icon={<Home className="w-4 h-4" />} label="Home" />
-          <NavItem to="/download" icon={<Download className="w-4 h-4" />} label="Download Music" />
           <NavItem to="/library" icon={<Music className="w-4 h-4" />} label="Library" />
           <NavItem to="/rooms" icon={<Radio className="w-4 h-4" />} label="Karaoke Rooms" badge="Live" />
 
@@ -83,6 +82,7 @@ export default function Layout() {
                 Administration
               </div>
               <div className="space-y-1.5">
+                <NavItem to="/download" icon={<Download className="w-4 h-4" />} label="Download Music" />
                 <NavItem to="/users" icon={<Users className="w-4 h-4" />} label="Users" />
                 <NavItem to="/settings" icon={<Settings className="w-4 h-4" />} label="Settings" />
               </div>
@@ -138,7 +138,6 @@ export default function Layout() {
 
             <nav className="flex-1 py-6 space-y-2 overflow-y-auto">
               <NavItem to="/" icon={<Home className="w-5 h-5" />} label="Home" />
-              <NavItem to="/download" icon={<Download className="w-5 h-5" />} label="Download Music" />
               <NavItem to="/library" icon={<Music className="w-5 h-5" />} label="Library" />
               <NavItem to="/rooms" icon={<Radio className="w-5 h-5" />} label="Karaoke Rooms" />
 
@@ -148,6 +147,7 @@ export default function Layout() {
                     Administration
                   </div>
                   <div className="space-y-2">
+                    <NavItem to="/download" icon={<Download className="w-5 h-5" />} label="Download Music" />
                     <NavItem to="/users" icon={<Users className="w-5 h-5" />} label="Users" />
                     <NavItem to="/settings" icon={<Settings className="w-5 h-5" />} label="Settings" />
                   </div>

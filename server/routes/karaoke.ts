@@ -1,12 +1,21 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
-import { sessions, controllers, queueItems, songs, artists, users } from '../db/schema.js';
-import { eq, and, asc, or } from 'drizzle-orm';
+import { sessions, controllers, queueItems, songs, artists, albums, songArtists, users, settings } from '../db/schema.js';
+import { eq, and, asc, or, inArray, like } from 'drizzle-orm';
 import { requireAuth } from '../middleware/auth.js';
 import crypto from 'crypto';
-import { notifyQueueUpdate, closeSessionWS, handleHostHeartbeat, advanceQueueBySessionId, getRoomState } from '../ws/index.js';
+import { 
+  notifyQueueUpdate, 
+  closeSessionWS, 
+  handleHostHeartbeat, 
+  advanceQueueBySessionId, 
+  getRoomState,
+  broadcastLyricSettingsToSession,
+  broadcastLyricSettingsToAllActiveRooms
+} from '../ws/index.js';
 import { formatArtistDisplay } from '../lib/artist-utils.js';
 import { getSongArtistsMap } from './songs.js';
+import { DEFAULT_LYRICS_SETTINGS, resolveLyricsSettings, LyricsAppearanceSettings } from '../lib/lyrics-settings.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -14,6 +23,60 @@ router.use(requireAuth);
 function generateRoomCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
+
+// Global Lyric Appearance Settings (Host defaults)
+router.get('/settings/lyrics', async (req, res) => {
+  try {
+    const saved = await db.select().from(settings).where(eq(settings.key, 'lyrics_appearance_settings')).limit(1);
+    if (saved.length > 0 && saved[0].value) {
+      try {
+        const resolved = resolveLyricsSettings(JSON.parse(saved[0].value));
+        return res.json({ settings: resolved });
+      } catch (e) {
+        // ignore parse error
+      }
+    }
+    res.json({ settings: DEFAULT_LYRICS_SETTINGS });
+  } catch (error) {
+    console.error('Failed to fetch lyric settings:', error);
+    res.status(500).json({ error: 'Failed to fetch lyric settings' });
+  }
+});
+
+const saveGlobalLyricsSettings = async (req: any, res: any) => {
+  try {
+    const raw = req.body?.settings || req.body;
+    const resolved = resolveLyricsSettings(raw);
+    const jsonStr = JSON.stringify(resolved);
+
+    // Save to settings table
+    const existing = await db.select().from(settings).where(eq(settings.key, 'lyrics_appearance_settings')).limit(1);
+    if (existing.length === 0) {
+      await db.insert(settings).values({ key: 'lyrics_appearance_settings', value: jsonStr });
+    } else {
+      await db.update(settings).set({ value: jsonStr }).where(eq(settings.key, 'lyrics_appearance_settings'));
+    }
+
+    // Also update any active sessions and broadcast to active rooms
+    try {
+      await db.update(sessions)
+        .set({ lyricSettings: jsonStr, updatedAt: new Date() })
+        .where(eq(sessions.status, 'active'));
+    } catch (e) {
+      // ignore
+    }
+
+    broadcastLyricSettingsToAllActiveRooms(resolved);
+
+    res.json({ success: true, settings: resolved });
+  } catch (error) {
+    console.error('Failed to save lyric settings:', error);
+    res.status(500).json({ error: 'Failed to save lyric settings' });
+  }
+};
+
+router.put('/settings/lyrics', saveGlobalLyricsSettings);
+router.post('/settings/lyrics', saveGlobalLyricsSettings);
 
 router.post('/sessions', async (req, res) => {
   try {
@@ -51,16 +114,35 @@ router.post('/sessions', async (req, res) => {
       hostId = defaultUser[0]?.id || 1;
     }
 
+    // Determine initial lyric settings
+    let initialLyricsSettings = DEFAULT_LYRICS_SETTINGS;
+    if (req.body?.lyricSettings) {
+      initialLyricsSettings = resolveLyricsSettings(req.body.lyricSettings);
+    } else {
+      const globalSaved = await db.select().from(settings).where(eq(settings.key, 'lyrics_appearance_settings')).limit(1);
+      if (globalSaved.length > 0 && globalSaved[0].value) {
+        try {
+          initialLyricsSettings = resolveLyricsSettings(JSON.parse(globalSaved[0].value));
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+
     const inserted = await db.insert(sessions).values({
       id: sessionId,
       roomCode: `${roomCode.slice(0,3)} ${roomCode.slice(3)}`,
       hostId: hostId,
       hostDevice: device,
+      lyricSettings: JSON.stringify(initialLyricsSettings),
       createdAt: new Date(),
       updatedAt: new Date(),
     }).returning();
 
-    res.json(inserted[0]);
+    res.json({
+      ...inserted[0],
+      lyricSettings: initialLyricsSettings
+    });
   } catch (error) {
     console.error('Failed to create room:', error);
     res.status(500).json({ error: 'Failed to create room' });
@@ -200,6 +282,15 @@ router.get('/sessions/:sessionId/validate', async (req, res) => {
       return res.status(410).json({ valid: false, error: 'This karaoke session has expired or ended', code: 'ROOM_EXPIRED' });
     }
 
+    let lyricSettings = DEFAULT_LYRICS_SETTINGS;
+    if (session[0].lyricSettings) {
+      try {
+        lyricSettings = resolveLyricsSettings(JSON.parse(session[0].lyricSettings));
+      } catch (e) {
+        // ignore
+      }
+    }
+
     if (role === 'guest') {
       if (!controllerId) {
         return res.status(403).json({ 
@@ -234,7 +325,8 @@ router.get('/sessions/:sessionId/validate', async (req, res) => {
         role: 'guest',
         session: session[0],
         controller: controller[0],
-        guestUsername
+        guestUsername,
+        lyricSettings
       });
     }
 
@@ -244,13 +336,71 @@ router.get('/sessions/:sessionId/validate', async (req, res) => {
     return res.json({
       valid: true,
       role: 'host',
-      session: session[0]
+      session: session[0],
+      lyricSettings
     });
   } catch (error) {
     console.error('Failed to validate session:', error);
     res.status(500).json({ valid: false, error: 'Failed to validate session' });
   }
 });
+
+// Session-specific Lyric Settings GET & PUT
+router.get('/sessions/:sessionId/lyrics-settings', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const live = getRoomState(sessionId);
+    if (live) {
+      return res.json({ sessionId, settings: live.lyricSettings });
+    }
+
+    const session = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (session.length === 0) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    let resolved = DEFAULT_LYRICS_SETTINGS;
+    if (session[0].lyricSettings) {
+      try {
+        resolved = resolveLyricsSettings(JSON.parse(session[0].lyricSettings));
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    res.json({ sessionId, settings: resolved });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch session lyric settings' });
+  }
+});
+
+const updateSessionLyricsSettings = async (req: any, res: any) => {
+  try {
+    const { sessionId } = req.params;
+    const raw = req.body?.settings || req.body;
+    const resolved = resolveLyricsSettings(raw);
+    const jsonStr = JSON.stringify(resolved);
+
+    const session = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (session.length === 0) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    await db.update(sessions)
+      .set({ lyricSettings: jsonStr, updatedAt: new Date() })
+      .where(eq(sessions.id, sessionId));
+
+    broadcastLyricSettingsToSession(sessionId, resolved);
+
+    res.json({ success: true, sessionId, settings: resolved });
+  } catch (error) {
+    console.error('Failed to update session lyric settings:', error);
+    res.status(500).json({ error: 'Failed to update session lyric settings' });
+  }
+};
+
+router.put('/sessions/:sessionId/lyrics-settings', updateSessionLyricsSettings);
+router.post('/sessions/:sessionId/lyrics-settings', updateSessionLyricsSettings);
 
 router.get('/sessions/:sessionId/state', async (req, res) => {
   try {
@@ -293,17 +443,32 @@ router.get('/sessions/:sessionId/state', async (req, res) => {
     });
 
     const liveState = getRoomState(sessionId);
+    let resolvedLyricSettings = DEFAULT_LYRICS_SETTINGS;
+    if (liveState?.lyricSettings) {
+      resolvedLyricSettings = liveState.lyricSettings;
+    } else if (session[0].lyricSettings) {
+      try {
+        resolvedLyricSettings = resolveLyricsSettings(JSON.parse(session[0].lyricSettings));
+      } catch (e) {
+        // ignore
+      }
+    }
 
     res.json({
-      session: session[0],
+      session: {
+        ...session[0],
+        lyricSettings: resolvedLyricSettings
+      },
       queue: formattedQueue,
+      lyricSettings: resolvedLyricSettings,
       playback: liveState ? {
         playing: liveState.playing,
         position: liveState.position,
         currentSongId: liveState.currentSongId,
         currentQueueItemId: liveState.currentQueueItemId,
         variant: liveState.variant,
-        lyricOffset: liveState.lyricOffset
+        lyricOffset: liveState.lyricOffset,
+        lyricSettings: liveState.lyricSettings
       } : null
     });
   } catch (error) {
@@ -354,6 +519,113 @@ router.post('/sessions/:sessionId/queue', async (req, res) => {
   } catch (error) {
     console.error('Failed to add to queue:', error);
     res.status(500).json({ error: 'Failed to add to queue' });
+  }
+});
+
+// Guest-scoped songs catalog for karaoke room queueing (minimal metadata, no filesystem paths)
+router.get('/songs', async (req, res) => {
+  try {
+    const allSongs = await db.select({
+      id: songs.id,
+      title: songs.title,
+      artist: artists.name,
+      artistId: songs.artistId,
+      album: albums.title,
+      albumId: songs.albumId,
+      duration: songs.duration,
+      variant: songs.variant,
+      genre: songs.genre,
+      year: songs.year,
+      artworkPath: songs.artworkPath,
+      albumArtworkPath: albums.artworkPath,
+    })
+    .from(songs)
+    .leftJoin(artists, eq(songs.artistId, artists.id))
+    .leftJoin(albums, eq(songs.albumId, albums.id));
+
+    const songIds = allSongs.map(s => s.id);
+    const artistsMap = await getSongArtistsMap(songIds);
+
+    const formatted = allSongs.map(s => {
+      const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
+      return {
+        id: s.id,
+        title: s.title,
+        artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : s.artist),
+        artists: trackArtists,
+        album: s.album,
+        duration: s.duration,
+        variant: s.variant,
+        hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
+      };
+    });
+
+    res.json(formatted);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch karaoke songs' });
+  }
+});
+
+// Guest-scoped songs search for karaoke room queueing
+router.get('/search', async (req, res) => {
+  try {
+    const q = req.query.q as string;
+    if (!q) return res.json([]);
+
+    const searchStr = `%${q}%`;
+
+    const matchingArtistSongIds = await db.select({ songId: songArtists.songId })
+      .from(songArtists)
+      .innerJoin(artists, eq(songArtists.artistId, artists.id))
+      .where(like(artists.name, searchStr));
+
+    const songIdsFromArtists = matchingArtistSongIds.map(r => r.songId);
+
+    const searchSongs = await db.select({
+      id: songs.id,
+      title: songs.title,
+      artist: artists.name,
+      artistId: songs.artistId,
+      album: albums.title,
+      albumId: songs.albumId,
+      artworkPath: songs.artworkPath,
+      albumArtworkPath: albums.artworkPath,
+      duration: songs.duration,
+      variant: songs.variant,
+    })
+    .from(songs)
+    .leftJoin(artists, eq(songs.artistId, artists.id))
+    .leftJoin(albums, eq(songs.albumId, albums.id))
+    .where(
+      or(
+        like(songs.title, searchStr),
+        like(artists.name, searchStr),
+        like(albums.title, searchStr),
+        songIdsFromArtists.length > 0 ? inArray(songs.id, songIdsFromArtists) : undefined
+      )
+    )
+    .limit(30);
+
+    const songIds = searchSongs.map(s => s.id);
+    const artistsMap = await getSongArtistsMap(songIds);
+
+    const formatted = searchSongs.map(s => {
+      const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
+      return {
+        id: s.id,
+        title: s.title,
+        artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : s.artist),
+        artists: trackArtists,
+        album: s.album,
+        duration: s.duration,
+        variant: s.variant,
+        hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
+      };
+    });
+
+    res.json(formatted);
+  } catch (error) {
+    res.status(500).json({ error: 'Karaoke search failed' });
   }
 });
 

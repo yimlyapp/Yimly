@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { Search, Play, Plus, Music, Disc, Mic, RefreshCw, Calendar, FileText, ChevronRight, ArrowLeft, AlertCircle, Check } from 'lucide-react';
 
 export default function Library() {
+  const { user } = useOutletContext<{ user: any }>();
   const [tab, setTab] = useState<'artists' | 'albums' | 'songs'>('artists');
   const [search, setSearch] = useState('');
   const [stats, setStats] = useState({ artists: 0, albums: 0, songs: 0 });
@@ -448,14 +450,16 @@ export default function Library() {
               className="w-full pl-10 pr-4 py-2.5 bg-[#141622] border border-white/10 rounded-full text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-[#FF4FA3] focus:ring-1 focus:ring-[#FF4FA3] transition-all"
             />
           </div>
-          <button 
-            onClick={triggerScan}
-            disabled={scanning}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-[#1C1E2D] hover:bg-[#25283C] text-white rounded-full text-xs font-semibold border border-white/10 transition-colors disabled:opacity-50 shrink-0"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${scanning ? 'animate-spin text-[#FF4FA3]' : ''}`} />
-            <span>{scanning ? 'Scanning...' : 'Scan Media'}</span>
-          </button>
+          {user?.role === 'administrator' && (
+            <button 
+              onClick={triggerScan}
+              disabled={scanning}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-[#1C1E2D] hover:bg-[#25283C] text-white rounded-full text-xs font-semibold border border-white/10 transition-colors disabled:opacity-50 shrink-0"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${scanning ? 'animate-spin text-[#FF4FA3]' : ''}`} />
+              <span>{scanning ? 'Scanning...' : 'Scan Media'}</span>
+            </button>
+          )}
         </div>
       </div>
 
