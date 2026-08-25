@@ -1472,20 +1472,19 @@ export default function RoomSession() {
           <div className="w-full flex-1 flex flex-col justify-start pt-4 sm:pt-6 md:pt-8 lg:pt-10 px-4 sm:px-8 z-10 overflow-hidden min-h-0">
             {currentSong ? (
               lyrics.length > 0 ? (
-                /* Dynamic Karaoke Lyric Display (Top-aligned, User-configurable Alignment, Lines & Appearance) */
-                <div className={`w-full max-w-4xl mx-auto flex flex-col space-y-3 sm:space-y-4 md:space-y-6 select-none ${getAlignmentClass(lyricsSettings.alignment)}`}>
+                <div className={`w-full max-w-4xl mx-auto flex flex-col justify-center items-center gap-2 sm:gap-3 md:gap-4 select-none ${getAlignmentClass(lyricsSettings.alignment)}`}>
                   {/* Line -2 (if 5 lines mode) */}
                   {visibleLinesCount === 5 && (
-                    <div className={`min-h-[1.75rem] md:min-h-[2.5rem] flex items-center w-full ${
+                    <div className={`h-12 md:h-16 flex items-center shrink-0 w-full overflow-hidden ${
                       lyricsSettings.alignment === 'left' ? 'justify-start' : lyricsSettings.alignment === 'right' ? 'justify-end' : 'justify-center'
                     }`}>
                       <AnimatePresence mode="wait">
                         {prev2Line ? (
                           <motion.p
                             key={`prev2-${prev2Line.time}-${prev2Line.text}`}
-                            initial={{ opacity: 0, y: -8 }}
+                            initial={{ opacity: 0, y: -6 }}
                             animate={{ opacity: (lyricsSettings.unhighlighted.opacity ?? 0.45) * 0.6, y: 0 }}
-                            exit={{ opacity: 0, y: -8 }}
+                            exit={{ opacity: 0, y: -6 }}
                             transition={{ duration: animDuration, ease: 'easeOut' }}
                             style={{
                               fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
@@ -1496,12 +1495,12 @@ export default function RoomSession() {
                               lineHeight: lyricsSettings.unhighlighted.lineSpacing,
                               textAlign: lyricsSettings.alignment
                             }}
-                            className="transition-all"
+                            className="transition-all w-full whitespace-normal break-words"
                           >
                             {applyTextCase(prev2Line.text, lyricsSettings.unhighlighted.textCase)}
                           </motion.p>
                         ) : (
-                          <div className="h-4" />
+                          <div className="h-4 w-full" />
                         )}
                       </AnimatePresence>
                     </div>
@@ -1509,16 +1508,16 @@ export default function RoomSession() {
 
                   {/* Line -1: Previous Lyric (if 3 or 5 lines mode) */}
                   {visibleLinesCount >= 3 && (
-                    <div className={`min-h-[2.5rem] md:min-h-[3.5rem] flex items-center w-full ${
+                    <div className={`h-16 md:h-20 flex items-center shrink-0 w-full overflow-hidden ${
                       lyricsSettings.alignment === 'left' ? 'justify-start' : lyricsSettings.alignment === 'right' ? 'justify-end' : 'justify-center'
                     }`}>
                       <AnimatePresence mode="wait">
                         {prev1Line ? (
                           <motion.p
                             key={`prev1-${prev1Line.time}-${prev1Line.text}`}
-                            initial={{ opacity: 0, y: -8 }}
+                            initial={{ opacity: 0, y: -6 }}
                             animate={{ opacity: lyricsSettings.unhighlighted.opacity ?? 0.45, y: 0 }}
-                            exit={{ opacity: 0, y: -8 }}
+                            exit={{ opacity: 0, y: -6 }}
                             transition={{ duration: animDuration, ease: 'easeOut' }}
                             style={{
                               fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
@@ -1529,32 +1528,32 @@ export default function RoomSession() {
                               lineHeight: lyricsSettings.unhighlighted.lineSpacing,
                               textAlign: lyricsSettings.alignment
                             }}
-                            className="transition-all"
+                            className="transition-all w-full whitespace-normal break-words"
                           >
                             {applyTextCase(prev1Line.text, lyricsSettings.unhighlighted.textCase)}
                           </motion.p>
                         ) : (
-                          <div className="h-6" />
+                          <div className="h-6 w-full" />
                         )}
                       </AnimatePresence>
                     </div>
                   )}
 
-                  {/* Line 0: Current Lyric (Highlighted if active, Unhighlighted if waiting/idle) */}
-                  <div className={`min-h-[3.5rem] sm:min-h-[5rem] md:min-h-[6.5rem] flex items-center w-full px-2 ${
+                  {/* Line 0: Current Lyric (Fixed Central Slot, Highlighted if active, Unhighlighted if waiting/idle) */}
+                  <div className={`h-24 sm:h-28 md:h-36 flex items-center shrink-0 w-full overflow-hidden px-2 ${
                     lyricsSettings.alignment === 'left' ? 'justify-start' : lyricsSettings.alignment === 'right' ? 'justify-end' : 'justify-center'
                   }`}>
                     <AnimatePresence mode="wait">
                       {currLine ? (
                         <motion.p
                           key={`curr-${currLine.time}-${currLine.text}-${isHighlighted}`}
-                          initial={{ opacity: 0, scale: isHighlighted ? 0.96 : 1, y: isHighlighted ? 6 : 0 }}
+                          initial={{ opacity: 0, scale: isHighlighted ? 0.98 : 1, y: 0 }}
                           animate={{ 
                             opacity: isHighlighted ? (lyricsSettings.highlighted.opacity ?? 1.0) : (lyricsSettings.unhighlighted.opacity ?? 0.45), 
                             scale: 1, 
                             y: 0 
                           }}
-                          exit={{ opacity: 0, scale: isHighlighted ? 1.02 : 1, y: -6 }}
+                          exit={{ opacity: 0, scale: isHighlighted ? 1.02 : 1, y: 0 }}
                           transition={{ duration: animDuration, ease: 'easeOut' }}
                           style={{
                             fontFamily: isHighlighted ? getFontFamilyStyle(lyricsSettings.highlighted.font) : getFontFamilyStyle(lyricsSettings.unhighlighted.font),
@@ -1566,28 +1565,28 @@ export default function RoomSession() {
                             textAlign: lyricsSettings.alignment,
                             textShadow: isHighlighted ? `0 0 35px ${(lyricsSettings.highlighted.color || '#FF4FA3')}75` : 'none'
                           }}
-                          className="transition-all"
+                          className="transition-all w-full whitespace-normal break-words"
                         >
                           {applyTextCase(currLine.text || '♪ ♪ ♪', isHighlighted ? lyricsSettings.highlighted.textCase : lyricsSettings.unhighlighted.textCase)}
                         </motion.p>
                       ) : (
-                        <p className="text-zinc-600 text-xl md:text-3xl font-bold">♪ ♪ ♪</p>
+                        <p className="text-zinc-600 text-xl md:text-3xl font-bold w-full text-center">♪ ♪ ♪</p>
                       )}
                     </AnimatePresence>
                   </div>
 
                   {/* Line +1: Next Lyric (if 3 or 5 lines mode) */}
                   {visibleLinesCount >= 3 && (
-                    <div className={`min-h-[2.5rem] md:min-h-[3.5rem] flex items-center w-full ${
+                    <div className={`h-16 md:h-20 flex items-center shrink-0 w-full overflow-hidden ${
                       lyricsSettings.alignment === 'left' ? 'justify-start' : lyricsSettings.alignment === 'right' ? 'justify-end' : 'justify-center'
                     }`}>
                       <AnimatePresence mode="wait">
                         {next1Line ? (
                           <motion.p
                             key={`next1-${next1Line.time}-${next1Line.text}`}
-                            initial={{ opacity: 0, y: 8 }}
+                            initial={{ opacity: 0, y: 6 }}
                             animate={{ opacity: lyricsSettings.unhighlighted.opacity ?? 0.45, y: 0 }}
-                            exit={{ opacity: 0, y: 8 }}
+                            exit={{ opacity: 0, y: 6 }}
                             transition={{ duration: animDuration, ease: 'easeOut' }}
                             style={{
                               fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
@@ -1598,12 +1597,12 @@ export default function RoomSession() {
                               lineHeight: lyricsSettings.unhighlighted.lineSpacing,
                               textAlign: lyricsSettings.alignment
                             }}
-                            className="transition-all"
+                            className="transition-all w-full whitespace-normal break-words"
                           >
                             {applyTextCase(next1Line.text, lyricsSettings.unhighlighted.textCase)}
                           </motion.p>
                         ) : (
-                          <div className="h-6" />
+                          <div className="h-6 w-full" />
                         )}
                       </AnimatePresence>
                     </div>
@@ -1611,16 +1610,16 @@ export default function RoomSession() {
 
                   {/* Line +2 (if 5 lines mode) */}
                   {visibleLinesCount === 5 && (
-                    <div className={`min-h-[1.75rem] md:min-h-[2.5rem] flex items-center w-full ${
+                    <div className={`h-12 md:h-16 flex items-center shrink-0 w-full overflow-hidden ${
                       lyricsSettings.alignment === 'left' ? 'justify-start' : lyricsSettings.alignment === 'right' ? 'justify-end' : 'justify-center'
                     }`}>
                       <AnimatePresence mode="wait">
                         {next2Line ? (
                           <motion.p
                             key={`next2-${next2Line.time}-${next2Line.text}`}
-                            initial={{ opacity: 0, y: 8 }}
+                            initial={{ opacity: 0, y: 6 }}
                             animate={{ opacity: (lyricsSettings.unhighlighted.opacity ?? 0.45) * 0.6, y: 0 }}
-                            exit={{ opacity: 0, y: 8 }}
+                            exit={{ opacity: 0, y: 6 }}
                             transition={{ duration: animDuration, ease: 'easeOut' }}
                             style={{
                               fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
@@ -1631,12 +1630,12 @@ export default function RoomSession() {
                               lineHeight: lyricsSettings.unhighlighted.lineSpacing,
                               textAlign: lyricsSettings.alignment
                             }}
-                            className="transition-all"
+                            className="transition-all w-full whitespace-normal break-words"
                           >
                             {applyTextCase(next2Line.text, lyricsSettings.unhighlighted.textCase)}
                           </motion.p>
                         ) : (
-                          <div className="h-4" />
+                          <div className="h-4 w-full" />
                         )}
                       </AnimatePresence>
                     </div>
