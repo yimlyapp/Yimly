@@ -23,7 +23,8 @@ export const sessions = sqliteTable('sessions', {
 export const controllers = sqliteTable('controllers', {
   id: text('id').primaryKey(),
   sessionId: text('session_id').references(() => sessions.id).notNull(),
-  userId: integer('user_id').references(() => users.id), // Can be null for guest controllers? The instructions say "User" so let's allow it.
+  userId: integer('user_id').references(() => users.id),
+  guestName: text('guest_name'),
   device: text('device').notNull(),
   connectionState: text('connection_state').notNull().default('connected'),
   lastSeenTime: integer('last_seen_time', { mode: 'timestamp' }).notNull(),
@@ -87,7 +88,8 @@ export const queueItems = sqliteTable('queue_items', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   sessionId: text('session_id').references(() => sessions.id).notNull(),
   songId: integer('song_id').references(() => songs.id).notNull(),
-  userId: integer('user_id').references(() => users.id).notNull(), // singer
+  userId: integer('user_id').references(() => users.id), // null if queued by karaoke guest
+  guestName: text('guest_name'),
   addedAt: integer('added_at', { mode: 'timestamp' }).notNull(),
   position: integer('position').notNull(),
   status: text('status', { enum: ['pending', 'playing', 'finished'] }).notNull().default('pending'),

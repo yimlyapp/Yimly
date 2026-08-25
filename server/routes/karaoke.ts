@@ -107,11 +107,9 @@ router.post('/sessions', async (req, res) => {
       attempts++;
     }
 
-    // Determine hostId: user.id if logged in, or fallback to first admin / user in database
-    let hostId = user?.id;
+    const hostId = user?.id;
     if (!hostId) {
-      const defaultUser = await db.select({ id: users.id }).from(users).limit(1);
-      hostId = defaultUser[0]?.id || 1;
+      return res.status(401).json({ error: 'Authentication required to create a karaoke room' });
     }
 
     // Determine initial lyric settings
@@ -176,29 +174,18 @@ router.post('/sessions/join', async (req, res) => {
       return res.status(404).json({ error: 'Room not found or inactive' });
     }
 
-    let userId = user?.id || null;
-    const requestedName = (displayName || username || '').trim();
-    if (!userId && requestedName) {
-      const existingUser = await db.select().from(users).where(eq(users.username, requestedName)).limit(1);
-      if (existingUser.length > 0) {
-        userId = existingUser[0].id;
-      } else {
-        const newGuest = await db.insert(users).values({
-          username: requestedName,
-          password: crypto.randomBytes(16).toString('hex'),
-          role: 'user',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        }).returning();
-        userId = newGuest[0]?.id || null;
-      }
-    }
+    // A Karaoke Guest is NOT a Yimly User and must NEVER create a record in the users table.
+    // If the caller is already authenticated as a real Yimly user, associate user.id.
+    // Otherwise, associate guestName with this temporary controller only.
+    const userId = user?.id || null;
+    const guestName = !userId ? ((displayName || username || 'Guest').trim() || 'Guest') : null;
 
     const controllerId = crypto.randomUUID();
     await db.insert(controllers).values({
       id: controllerId,
       sessionId: session[0].id,
       userId: userId,
+      guestName: guestName,
       device: device,
       lastSeenTime: new Date(),
     });
@@ -307,13 +294,15 @@ router.get('/sessions/:sessionId/validate', async (req, res) => {
       if (controller.length === 0) {
         return res.status(403).json({ 
           valid: false, 
-          error: 'Invalid or expired guest controller ID', 
+          error: 'Invalid or expired guest controller ID for this room', 
           code: 'INVALID_CONTROLLER' 
         });
       }
 
       let guestUsername = 'Guest';
-      if (controller[0].userId) {
+      if (controller[0].guestName) {
+        guestUsername = controller[0].guestName;
+      } else if (controller[0].userId) {
         const u = await db.select().from(users).where(eq(users.id, controller[0].userId)).limit(1);
         if (u.length > 0) {
           guestUsername = u[0].username;
@@ -330,7 +319,24 @@ router.get('/sessions/:sessionId/validate', async (req, res) => {
       });
     }
 
-    // Role is host - register heartbeat
+    // Role is host - verify authenticated user owns room or is admin
+    const user = (req as any).user;
+    if (!user || !user.id) {
+      return res.status(401).json({ 
+        valid: false, 
+        error: 'Authentication required for host access', 
+        code: 'AUTH_REQUIRED' 
+      });
+    }
+    if (session[0].hostId !== user.id && user.role !== 'administrator') {
+      return res.status(403).json({ 
+        valid: false, 
+        error: 'Forbidden: You are not the host of this karaoke room', 
+        code: 'FORBIDDEN_NOT_HOST' 
+      });
+    }
+
+    // Register host heartbeat
     await handleHostHeartbeat(sessionId);
 
     return res.json({
@@ -419,6 +425,7 @@ router.get('/sessions/:sessionId/state', async (req, res) => {
       artistName: artists.name,
       userId: queueItems.userId,
       userName: users.username,
+      guestName: queueItems.guestName,
       songId: songs.id,
       artworkPath: songs.artworkPath,
     })
@@ -434,8 +441,10 @@ router.get('/sessions/:sessionId/state', async (req, res) => {
 
     const formattedQueue = queue.map(q => {
       const trackArtists = artistsMap.get(q.songId) || (q.artistName ? [{ id: 0, name: q.artistName }] : []);
+      const singerDisplay = q.guestName || q.userName || 'Guest';
       return {
         ...q,
+        userName: singerDisplay,
         artistName: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : q.artistName),
         artists: trackArtists,
         hasArtwork: !!q.artworkPath,
@@ -496,19 +505,29 @@ router.post('/sessions/:sessionId/queue', async (req, res) => {
     const existingQueue = await db.select().from(queueItems).where(eq(queueItems.sessionId, sessionId));
     const nextPosition = existingQueue.length > 0 ? Math.max(...existingQueue.map(q => q.position)) + 1 : 1;
 
-    let userId = user?.id || null;
-    if (!userId && controllerId) {
-      const ctrl = await db.select().from(controllers).where(eq(controllers.id, controllerId)).limit(1);
-      userId = ctrl[0]?.userId || null;
-    }
-    if (!userId) {
-      userId = session[0].hostId || 1;
+    let userId: number | null = null;
+    let guestName: string | null = null;
+
+    if (user?.id) {
+      userId = user.id;
+    } else if (controllerId) {
+      const ctrl = await db.select().from(controllers).where(
+        and(eq(controllers.id, controllerId), eq(controllers.sessionId, sessionId))
+      ).limit(1);
+      if (ctrl.length === 0) {
+        return res.status(403).json({ error: 'Invalid controller for this room session' });
+      }
+      userId = ctrl[0].userId || null;
+      guestName = ctrl[0].guestName || 'Guest';
+    } else {
+      return res.status(403).json({ error: 'Authentication or valid controller ID required' });
     }
 
     const inserted = await db.insert(queueItems).values({
       sessionId,
-      songId,
+      songId: Number(songId),
       userId,
+      guestName,
       addedAt: new Date(),
       position: nextPosition,
     }).returning();

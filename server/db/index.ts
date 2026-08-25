@@ -131,6 +131,18 @@ export async function setupDatabase() {
     // Column already exists, safe to ignore
   }
 
+  // Ensure guest_name column exists in controllers and queue_items
+  try {
+    await sqlite.execute('ALTER TABLE controllers ADD COLUMN guest_name text;');
+  } catch (e) {
+    // Column already exists, safe to ignore
+  }
+  try {
+    await sqlite.execute('ALTER TABLE queue_items ADD COLUMN guest_name text;');
+  } catch (e) {
+    // Column already exists, safe to ignore
+  }
+
   // Ensure song_artists table exists (backward compatibility safety)
   try {
     await sqlite.execute(`

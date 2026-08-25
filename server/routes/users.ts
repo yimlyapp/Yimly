@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
-import { users } from '../db/schema.js';
-import { eq, ne, and } from 'drizzle-orm';
+import { users, playlists, playlistSongs, controllers, sessions, queueItems } from '../db/schema.js';
+import { eq, ne, and, inArray } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { z } from 'zod';
@@ -123,10 +123,41 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Invalid user ID' });
+    }
     const reqUser = (req as any).user;
 
     if (reqUser.id === id) {
       return res.status(400).json({ error: 'Cannot delete yourself' });
+    }
+
+    // 1. Clean up user playlists and songs
+    const userPlaylists = await db.select({ id: playlists.id }).from(playlists).where(eq(playlists.userId, id));
+    if (userPlaylists.length > 0) {
+      const playlistIds = userPlaylists.map(p => p.id);
+      await db.delete(playlistSongs).where(inArray(playlistSongs.playlistId, playlistIds));
+      await db.delete(playlists).where(eq(playlists.userId, id));
+    }
+
+    // 2. Unlink user from controllers
+    await db.update(controllers).set({ userId: null }).where(eq(controllers.userId, id));
+
+    // 3. Unlink user from queue items
+    try {
+      await db.update(queueItems).set({ userId: null }).where(eq(queueItems.userId, id));
+    } catch (e) {
+      // ignore
+    }
+
+    // 4. Clean up sessions hosted by this user
+    const userSessions = await db.select({ id: sessions.id }).from(sessions).where(eq(sessions.hostId, id));
+    if (userSessions.length > 0) {
+      for (const s of userSessions) {
+        await db.delete(queueItems).where(eq(queueItems.sessionId, s.id));
+        await db.delete(controllers).where(eq(controllers.sessionId, s.id));
+      }
+      await db.delete(sessions).where(eq(sessions.hostId, id));
     }
 
     const deleted = await db.delete(users).where(eq(users.id, id)).returning({ id: users.id });
@@ -134,8 +165,9 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    res.json({ message: 'User deleted' });
+    res.json({ message: 'User deleted successfully' });
   } catch (error) {
+    console.error('Failed to delete user:', error);
     res.status(500).json({ error: 'Failed to delete user' });
   }
 });

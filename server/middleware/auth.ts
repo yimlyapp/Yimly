@@ -28,8 +28,8 @@ export const isPublicRoute = (req: Request): boolean => {
     return true;
   }
 
-  // Public Karaoke session creation and joining
-  if (method === 'POST' && (url === '/api/karaoke/sessions' || url === '/api/karaoke/sessions/join')) {
+  // Public Karaoke session joining
+  if (method === 'POST' && url === '/api/karaoke/sessions/join') {
     return true;
   }
 

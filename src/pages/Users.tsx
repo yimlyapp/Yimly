@@ -299,7 +299,6 @@ export default function Users() {
                               <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-zinc-300 font-medium">You</span>
                             )}
                           </div>
-                          <span className="text-xs text-zinc-500 font-mono">ID: #{u.id}</span>
                         </div>
                       </div>
                     </td>
