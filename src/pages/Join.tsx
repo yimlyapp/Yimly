@@ -60,6 +60,10 @@ export default function Join() {
         throw new Error(data.error || 'This room is no longer available.');
       }
 
+      if (data.sessionId && data.controllerId) {
+        localStorage.setItem(`yimly_controller_${data.sessionId}`, data.controllerId);
+      }
+
       // Success! Navigate directly to Guest Controller
       navigate(`/rooms/${data.sessionId}?role=guest&controllerId=${data.controllerId}`);
     } catch (err: any) {

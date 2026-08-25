@@ -82,6 +82,45 @@ export default function Home() {
     }
   };
 
+  const handleJoinSession = async (s: any) => {
+    try {
+      const storageKey = `yimly_controller_${s.id}`;
+      let controllerId = localStorage.getItem(storageKey);
+
+      if (!controllerId) {
+        const res = await fetch('/api/karaoke/sessions/join', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            roomCode: s.roomCode
+          })
+        });
+        let data: any = {};
+        if (res.headers.get('content-type')?.includes('application/json')) {
+          try {
+            data = await res.json();
+          } catch (e) {
+            console.error('Failed to parse join response', e);
+          }
+        }
+        if (!res.ok) throw new Error(data.error || 'Failed to join room');
+        controllerId = data.controllerId;
+        if (controllerId) {
+          localStorage.setItem(storageKey, controllerId);
+        }
+      }
+
+      if (controllerId) {
+        navigate(`/rooms/${s.id}?role=guest&controllerId=${encodeURIComponent(controllerId)}`);
+      } else {
+        navigate(`/rooms/${s.id}?role=guest`);
+      }
+    } catch (err: any) {
+      console.error('Join session error:', err);
+      navigate(`/rooms/${s.id}?role=guest`);
+    }
+  };
+
   return (
     <div className="p-6 md:p-10 max-w-7xl mx-auto space-y-10">
       {/* Hero / Welcome Banner */}
@@ -183,7 +222,7 @@ export default function Home() {
             {activeSessions.map((s) => (
               <div
                 key={s.id}
-                onClick={() => navigate(`/rooms/${s.id}?role=guest`)}
+                onClick={() => handleJoinSession(s)}
                 className="bg-[#141622] hover:bg-[#1A1C2C] border border-white/5 hover:border-[#FF4FA3]/40 rounded-2xl p-5 cursor-pointer transition-all group relative overflow-hidden"
               >
                 <div className="flex items-center justify-between mb-3">

@@ -119,6 +119,9 @@ export default function Rooms() {
         }
       }
       if (!res.ok) throw new Error(data.error || 'Failed to join room');
+      if (data.sessionId && data.controllerId) {
+        localStorage.setItem(`yimly_controller_${data.sessionId}`, data.controllerId);
+      }
       navigate(`/rooms/${data.sessionId}?role=guest&controllerId=${data.controllerId}`);
     } catch (err: any) {
       setError(err.message);
