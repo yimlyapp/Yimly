@@ -143,6 +143,40 @@ export async function setupDatabase() {
     // Column already exists, safe to ignore
   }
 
+  // Ensure queue_items user_id is nullable (allow guest queueing)
+  try {
+    const tableInfo = await sqlite.execute("PRAGMA table_info(queue_items);");
+    const userIdCol = tableInfo.rows?.find((r: any) => r.name === 'user_id');
+    if (userIdCol && userIdCol.notnull === 1) {
+      await sqlite.execute('PRAGMA foreign_keys=OFF;');
+      await sqlite.execute(`
+        CREATE TABLE IF NOT EXISTS queue_items_new (
+          id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+          session_id text NOT NULL,
+          song_id integer NOT NULL,
+          user_id integer,
+          guest_name text,
+          added_at integer NOT NULL,
+          position integer NOT NULL,
+          status text DEFAULT 'pending' NOT NULL,
+          FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+          FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+      `);
+      await sqlite.execute(`
+        INSERT INTO queue_items_new (id, session_id, song_id, user_id, guest_name, added_at, position, status)
+        SELECT id, session_id, song_id, user_id, guest_name, added_at, position, status FROM queue_items;
+      `);
+      await sqlite.execute('DROP TABLE queue_items;');
+      await sqlite.execute('ALTER TABLE queue_items_new RENAME TO queue_items;');
+      await sqlite.execute('PRAGMA foreign_keys=ON;');
+      console.log('Migrated queue_items.user_id to be nullable for guests.');
+    }
+  } catch (e) {
+    console.error('Failed to ensure nullable queue_items.user_id:', e);
+  }
+
   // Ensure song_artists table exists (backward compatibility safety)
   try {
     await sqlite.execute(`

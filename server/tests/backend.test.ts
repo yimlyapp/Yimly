@@ -13,6 +13,7 @@ import playlistsRoutes from '../routes/playlists.js';
 import favoritesRoutes from '../routes/favorites.js';
 import authRoutes from '../routes/auth.js';
 import songsRoutes from '../routes/songs.js';
+import karaokeRoutes from '../routes/karaoke.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_for_dev';
 
@@ -23,6 +24,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/songs', songsRoutes);
 app.use('/api/playlists', playlistsRoutes);
 app.use('/api/favorites', favoritesRoutes);
+app.use('/api/karaoke', karaokeRoutes);
 
 let server: http.Server;
 let baseUrl: string;
@@ -276,6 +278,44 @@ test('Playlists API tests', async () => {
     headers: { Authorization: `Bearer ${tokenA}` }
   });
   assert.strictEqual(delPlaylistRes.status, 200);
+});
+
+test('Karaoke Guest Queue API tests', async () => {
+  // 1. Host (User A) creates karaoke session
+  const createRoomRes = await fetch(`${baseUrl}/api/karaoke/sessions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${tokenA}`
+    }
+  });
+  assert.strictEqual(createRoomRes.status, 200);
+  const session = await createRoomRes.json();
+  assert.ok(session.id);
+  assert.ok(session.roomCode);
+
+  // 2. Guest joins room
+  const joinRes = await fetch(`${baseUrl}/api/karaoke/sessions/join`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ roomCode: session.roomCode, displayName: 'Test Guest' })
+  });
+  assert.strictEqual(joinRes.status, 200);
+  const joinData = await joinRes.json();
+  assert.strictEqual(joinData.sessionId, session.id);
+  assert.ok(joinData.controllerId);
+
+  // 3. Guest adds song to queue
+  const queueRes = await fetch(`${baseUrl}/api/karaoke/sessions/${session.id}/queue`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ songId: song1Id, controllerId: joinData.controllerId })
+  });
+  assert.strictEqual(queueRes.status, 200);
+  const queueItem = await queueRes.json();
+  assert.ok(queueItem.id);
+  assert.strictEqual(queueItem.songId, song1Id);
+  assert.strictEqual(queueItem.guestName, 'Test Guest');
 });
 
 test('Close server', async () => {
