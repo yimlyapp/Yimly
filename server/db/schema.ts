@@ -113,6 +113,16 @@ export const playlistSongs = sqliteTable('playlist_songs', {
   addedAt: integer('added_at', { mode: 'timestamp' }).notNull(),
 });
 
+export const playlistShares = sqliteTable('playlist_shares', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  playlistId: integer('playlist_id').references(() => playlists.id, { onDelete: 'cascade' }).notNull(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  permission: text('permission', { enum: ['view', 'edit'] }).notNull().default('view'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+}, (table) => ({
+  userPlaylistUnique: uniqueIndex('playlist_shares_user_id_playlist_id_idx').on(table.userId, table.playlistId),
+}));
+
 export const favorites = sqliteTable('favorites', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),

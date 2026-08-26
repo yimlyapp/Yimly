@@ -31,8 +31,10 @@ let baseUrl: string;
 
 let tokenA: string;
 let tokenB: string;
+let tokenC: string;
 let userAId: number;
 let userBId: number;
+  let userCId: number;
 let song1Id: number;
 let song2Id: number;
 
@@ -64,12 +66,21 @@ test('Setup test environment and start server', async () => {
       const ins = await db.insert(users).values({ username: 'testuser_b', password: hashedPass, createdAt: new Date(), updatedAt: new Date() }).returning();
       userBId = ins[0].id;
     }
-  } catch (e) {
+  
+    const existingC = await db.select().from(users).where(eq(users.username, 'testuser_c')).limit(1);
+    if (existingC.length > 0) userCId = existingC[0].id;
+    else {
+      const ins = await db.select().from(users);
+      const newC = await db.insert(users).values({ username: 'testuser_c', password: hashedPass, createdAt: new Date(), updatedAt: new Date() }).returning();
+      userCId = newC[0].id;
+    }
+} catch (e) {
     // ignore
   }
 
   tokenA = jwt.sign({ id: userAId, username: 'testuser_a', role: 'user' }, JWT_SECRET, { expiresIn: '1h' });
   tokenB = jwt.sign({ id: userBId, username: 'testuser_b', role: 'user' }, JWT_SECRET, { expiresIn: '1h' });
+tokenC = jwt.sign({ id: userCId, username: 'testuser_c', role: 'user' }, JWT_SECRET, { expiresIn: '1h' });
 
   let libId: number;
   const existingLib = await db.select().from(libraries).where(eq(libraries.name, 'Test Library')).limit(1);
@@ -278,6 +289,77 @@ test('Playlists API tests', async () => {
     headers: { Authorization: `Bearer ${tokenA}` }
   });
   assert.strictEqual(delPlaylistRes.status, 200);
+});
+
+
+test('Shared Playlists API tests', async () => {
+  // 1. User A creates a playlist
+  const createRes = await fetch(`${baseUrl}/api/playlists`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+    body: JSON.stringify({ name: 'Shared Playlist' })
+  });
+  const playlist = await createRes.json();
+  const playlistId = playlist.id;
+
+  // 2. User C cannot access it
+  const getResC = await fetch(`${baseUrl}/api/playlists/${playlistId}`, {
+    headers: { Authorization: `Bearer ${tokenC}` }
+  });
+  assert.strictEqual(getResC.status, 403);
+
+  // 3. User A shares it with User B as VIEW
+  const shareRes = await fetch(`${baseUrl}/api/playlists/${playlistId}/share`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+    body: JSON.stringify({ username: 'testuser_b', permission: 'view' })
+  });
+  assert.strictEqual(shareRes.status, 201);
+
+  // 4. User B can view it but cannot modify it
+  const getResB = await fetch(`${baseUrl}/api/playlists/${playlistId}`, {
+    headers: { Authorization: `Bearer ${tokenB}` }
+  });
+  assert.strictEqual(getResB.status, 200);
+  
+  const addResB = await fetch(`${baseUrl}/api/playlists/${playlistId}/songs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenB}` },
+    body: JSON.stringify({ songId: song1Id })
+  });
+  assert.strictEqual(addResB.status, 403);
+
+  // 5. User A changes B to EDIT
+  const updateShareRes = await fetch(`${baseUrl}/api/playlists/${playlistId}/share`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+    body: JSON.stringify({ username: 'testuser_b', permission: 'edit' })
+  });
+  assert.strictEqual(updateShareRes.status, 200);
+
+  // 6. User B can now add a track
+  const addResB2 = await fetch(`${baseUrl}/api/playlists/${playlistId}/songs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenB}` },
+    body: JSON.stringify({ songId: song1Id })
+  });
+  assert.strictEqual(addResB2.status, 201);
+
+  // 7. User A revokes access
+  const fetchUserB = await fetch(`${baseUrl}/api/auth/me`, { headers: { Authorization: `Bearer ${tokenB}` }});
+  const userBData = await fetchUserB.json();
+  
+  const revokeRes = await fetch(`${baseUrl}/api/playlists/${playlistId}/share/${userBData.user.id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${tokenA}` }
+  });
+  assert.strictEqual(revokeRes.status, 200);
+
+  // 8. User B loses access
+  const getResB_after = await fetch(`${baseUrl}/api/playlists/${playlistId}`, {
+    headers: { Authorization: `Bearer ${tokenB}` }
+  });
+  assert.strictEqual(getResB_after.status, 403);
 });
 
 test('Karaoke Guest Queue API tests', async () => {

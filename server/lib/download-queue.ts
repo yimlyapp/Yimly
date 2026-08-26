@@ -8,7 +8,7 @@ import { downloadJobs, downloadTrackJobs, libraries, settings } from '../db/sche
 import { eq, and, asc, inArray, sql } from 'drizzle-orm';
 import { scanLibrary } from './scanner.js';
 import { fetchLyrics, saveLrcSidecar, stripLrcTimestamps } from './lyrics.js';
-import { resolveTrackToYouTube } from './youtube-resolver.js';
+import { matchSpotifyTrackToYouTube } from './youtube-matcher.js';
 
 const execFilePromise = promisify(execFile);
 const execPromise = promisify(exec);
@@ -659,43 +659,54 @@ export class DownloadQueueManager {
         track.retryCount = attempt;
         await this.persistTrackUpdate(track);
 
-        const ytDlpPath = await getYtDlpPath();
+        // Stage 2 (Downtify Architecture): YouTube Music audio matching
+        let targetDownloadUrl = track.sourceUrl;
+        const isAlreadyYouTube = targetDownloadUrl && 
+          (targetDownloadUrl.includes('youtube.com/watch') || targetDownloadUrl.includes('youtu.be/') || targetDownloadUrl.includes('music.youtube.com/watch'));
 
-        // Search attempts logic: resolve to direct YouTube URL or search
-        const searchAttempts: string[] = [];
-
-        if (track.sourceUrl && track.sourceUrl.startsWith('http') && !track.sourceUrl.includes('spotify.com/')) {
-          searchAttempts.push(track.sourceUrl);
-        } else {
-          // Resolve Spotify / metadata directly to YouTube target
+        if (!isAlreadyYouTube) {
           try {
-            const ytMatch = await resolveTrackToYouTube({
+            const ytMatch = await matchSpotifyTrackToYouTube({
               title: track.title,
               artist: track.artist,
               album: track.album,
               duration: track.duration || undefined,
+              releaseYear: track.releaseYear,
             });
-            if (ytMatch?.url) {
-              searchAttempts.push(ytMatch.url);
+
+            if (ytMatch && ytMatch.candidate?.url) {
+              targetDownloadUrl = ytMatch.candidate.url;
+              track.sourceUrl = targetDownloadUrl;
+              // Persist resolved YouTube URL to database
+              await db.update(downloadTrackJobs)
+                .set({ sourceUrl: targetDownloadUrl, updatedAt: new Date() })
+                .where(eq(downloadTrackJobs.id, track.id));
+
+              console.log(`[Downloader Queue] Matched "${track.title}" -> ${targetDownloadUrl} (Spotify: ${track.duration || '?'}s, YT: ${ytMatch.candidate.duration}s, Diff: ${ytMatch.durationDiff}s, Score: ${ytMatch.score})`);
+            } else {
+              console.warn(`[Downloader Queue] No YouTube Music match found for "${track.title}" by "${track.artist}"`);
             }
-          } catch (resErr: any) {
-            console.warn(`[Downloader Queue] Resolution notice for "${track.title}":`, resErr?.message || resErr);
+          } catch (matchErr: any) {
+            console.warn(`[Downloader Queue] Matching error for "${track.title}":`, matchErr?.message || matchErr);
           }
         }
 
-        // Fallbacks if resolution didn't produce a stream
-        searchAttempts.push(
-          `scsearch1:${track.artist} ${track.title}`,
-          `ytsearch1:${track.artist} - ${track.title} audio`,
-          `scsearch1:${track.artist.split(/[&,;/]|feat/i)[0].trim()} ${track.title}`,
-          `ytsearch1:${track.title} ${track.artist}`
-        );
+        // If matching failed completely and no target URL available, fail this individual track cleanly
+        if (!targetDownloadUrl || targetDownloadUrl.includes('spotify.com/')) {
+          track.status = 'failed';
+          track.error = 'No matching YouTube Music audio stream found for track';
+          track.progress = 0;
+          await this.persistTrackUpdate(track);
+          await this.checkJobCompletion(job);
+          return;
+        }
 
+        const ytDlpPath = await getYtDlpPath();
         const tempFileBase = path.join(tmpJobDir, `audio_${Date.now()}`);
         let downloadedAudioPath = '';
 
         track.status = 'downloading';
-        track.progress = 30;
+        track.progress = 35;
         await this.persistTrackUpdate(track);
 
         // In parallel, start fetching lyrics if requested
@@ -709,47 +720,38 @@ export class DownloadQueueManager {
 
         const possibleExtensions = ['mp3', 'm4a', 'flac', 'wav', 'opus', 'webm', 'ogg'];
 
-        for (const query of searchAttempts) {
-          if (!query || (job.status as string) === 'cancelled') break;
+        // Stage 3 (Downtify Architecture): Individual yt-dlp download of ONLY the resolved YouTube URL
+        const dlArgs = [
+          '-x',
+          '--audio-format', formatExt === 'opus' ? 'opus' : formatExt,
+          '--audio-quality', job.quality === '128k' ? '5' : job.quality === '192k' ? '2' : '0',
+          '--no-playlist',
+          '--max-filesize', '100M',
+          '--js-runtimes', 'node',
+          '-o', `${tempFileBase}.%(ext)s`,
+          targetDownloadUrl,
+        ];
 
-          try {
-            const dlArgs = [
-              '-x',
-              '--audio-format', formatExt === 'opus' ? 'opus' : formatExt,
-              '--audio-quality', job.quality === '128k' ? '5' : job.quality === '192k' ? '2' : '0',
-              '--no-playlist',
-              '--max-filesize', '100M',
-              '--js-runtimes', 'node',
-              '-o', `${tempFileBase}.%(ext)s`,
-              query,
-            ];
+        await new Promise<void>((resolve, reject) => {
+          const child = execFile(ytDlpPath, dlArgs, (err) => {
+            this.activeChildProcesses.delete(track.id);
+            if (err) reject(err);
+            else resolve();
+          });
+          this.activeChildProcesses.set(track.id, child);
+        });
 
-            await new Promise<void>((resolve, reject) => {
-              const child = execFile(ytDlpPath, dlArgs, (err) => {
-                this.activeChildProcesses.delete(track.id);
-                if (err) reject(err);
-                else resolve();
-              });
-              this.activeChildProcesses.set(track.id, child);
-            });
-
-            // Check if audio file was produced
-            for (const ext of possibleExtensions) {
-              const candidate = `${tempFileBase}.${ext}`;
-              if (fs.existsSync(candidate) && fs.statSync(candidate).size > 1024) {
-                downloadedAudioPath = candidate;
-                break;
-              }
-            }
-
-            if (downloadedAudioPath) break;
-          } catch (queryErr) {
-            // Try next fallback query
+        // Check if audio file was produced
+        for (const ext of possibleExtensions) {
+          const candidate = `${tempFileBase}.${ext}`;
+          if (fs.existsSync(candidate) && fs.statSync(candidate).size > 1024) {
+            downloadedAudioPath = candidate;
+            break;
           }
         }
 
         if (!downloadedAudioPath || !fs.existsSync(downloadedAudioPath)) {
-          throw new Error(`Audio search returned 0 streams for "${track.artist} - ${track.title}"`);
+          throw new Error(`yt-dlp completed but audio file was not found for URL: ${targetDownloadUrl}`);
         }
 
         track.status = 'tagging';
