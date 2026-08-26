@@ -39,6 +39,7 @@ export async function setupDatabase() {
     await sqlite.execute('PRAGMA journal_mode = WAL;');
     await sqlite.execute('PRAGMA synchronous = NORMAL;');
     await sqlite.execute('PRAGMA busy_timeout = 5000;');
+    await sqlite.execute('PRAGMA foreign_keys = ON;');
 
     const result = await sqlite.execute('PRAGMA integrity_check;');
     if (result.rows && result.rows.length > 0) {
@@ -224,6 +225,24 @@ export async function setupDatabase() {
     await sqlite.execute('CREATE INDEX IF NOT EXISTS playlist_songs_playlist_id_idx ON playlist_songs (playlist_id);');
   } catch (e) {
     // Table/indices already exist, safe to ignore
+  }
+
+  // Ensure playlist_shares table exists
+  try {
+    await sqlite.execute(`
+      CREATE TABLE IF NOT EXISTS playlist_shares (
+        id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+        playlist_id integer NOT NULL,
+        user_id integer NOT NULL,
+        permission text DEFAULT 'view' NOT NULL,
+        created_at integer NOT NULL,
+        FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+    `);
+    await sqlite.execute('CREATE UNIQUE INDEX IF NOT EXISTS playlist_shares_user_id_playlist_id_idx ON playlist_shares (user_id, playlist_id);');
+  } catch (e) {
+    console.error('Failed to create playlist_shares table:', e);
   }
 
   // Ensure favorites table exists
