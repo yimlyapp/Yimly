@@ -8,6 +8,7 @@ import { downloadJobs, downloadTrackJobs, libraries, settings } from '../db/sche
 import { eq, and, asc, inArray, sql } from 'drizzle-orm';
 import { scanLibrary } from './scanner.js';
 import { fetchLyrics, saveLrcSidecar, stripLrcTimestamps } from './lyrics.js';
+import { resolveTrackToYouTube } from './youtube-resolver.js';
 
 const execFilePromise = promisify(execFile);
 const execPromise = promisify(exec);
@@ -660,11 +661,29 @@ export class DownloadQueueManager {
 
         const ytDlpPath = await getYtDlpPath();
 
-        // Search attempts logic
+        // Search attempts logic: resolve to direct YouTube URL or search
         const searchAttempts: string[] = [];
-        if (track.sourceUrl && track.sourceUrl.startsWith('http')) {
+
+        if (track.sourceUrl && track.sourceUrl.startsWith('http') && !track.sourceUrl.includes('spotify.com/')) {
           searchAttempts.push(track.sourceUrl);
+        } else {
+          // Resolve Spotify / metadata directly to YouTube target
+          try {
+            const ytMatch = await resolveTrackToYouTube({
+              title: track.title,
+              artist: track.artist,
+              album: track.album,
+              duration: track.duration || undefined,
+            });
+            if (ytMatch?.url) {
+              searchAttempts.push(ytMatch.url);
+            }
+          } catch (resErr: any) {
+            console.warn(`[Downloader Queue] Resolution notice for "${track.title}":`, resErr?.message || resErr);
+          }
         }
+
+        // Fallbacks if resolution didn't produce a stream
         searchAttempts.push(
           `scsearch1:${track.artist} ${track.title}`,
           `ytsearch1:${track.artist} - ${track.title} audio`,
@@ -700,6 +719,7 @@ export class DownloadQueueManager {
               '--audio-quality', job.quality === '128k' ? '5' : job.quality === '192k' ? '2' : '0',
               '--no-playlist',
               '--max-filesize', '100M',
+              '--js-runtimes', 'node',
               '-o', `${tempFileBase}.%(ext)s`,
               query,
             ];
