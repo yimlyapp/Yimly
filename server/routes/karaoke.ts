@@ -492,13 +492,17 @@ router.post('/sessions/:sessionId/queue', async (req, res) => {
     const { songId, controllerId } = req.body;
     const user = (req as any).user;
 
+    console.log('[QUEUE DEBUG] sessionId=', sessionId, 'controllerId=', controllerId, 'user=', user?.id || 'unauthenticated', 'body=', req.body);
+
     const session = await db.select().from(sessions).where(and(eq(sessions.id, sessionId), eq(sessions.status, 'active'))).limit(1);
     if (session.length === 0) {
+      console.log('[QUEUE DEBUG FAILURE] Active session not found for sessionId:', sessionId);
       return res.status(404).json({ error: 'Active session not found' });
     }
 
     const song = await db.select().from(songs).where(eq(songs.id, Number(songId))).limit(1);
     if (song.length === 0) {
+      console.log('[QUEUE DEBUG FAILURE] Song not found for songId:', songId);
       return res.status(404).json({ error: 'Song not found' });
     }
 
@@ -518,10 +522,13 @@ router.post('/sessions/:sessionId/queue', async (req, res) => {
         if (ctrl.length > 0) {
           userId = ctrl[0].userId || null;
           guestName = ctrl[0].guestName || 'Guest';
+          console.log('[QUEUE DEBUG] Found controller:', ctrl[0]);
         } else {
+          console.log('[QUEUE DEBUG] Controller ID provided but not found in session controllers table:', controllerId);
           guestName = req.body.guestName || 'Guest';
         }
       } else {
+        console.log('[QUEUE DEBUG] No user and no controllerId provided. Assigning default guest.');
         guestName = req.body.guestName || 'Guest';
       }
     }
@@ -535,11 +542,13 @@ router.post('/sessions/:sessionId/queue', async (req, res) => {
       position: nextPosition,
     }).returning();
 
+    console.log('[QUEUE DEBUG SUCCESS] Inserted queue item:', inserted[0]);
+
     notifyQueueUpdate(sessionId);
     
     res.json(inserted[0]);
   } catch (error) {
-    console.error('Failed to add to queue:', error);
+    console.error('[QUEUE DEBUG ERROR] Failed to add to queue:', error);
     res.status(500).json({ error: 'Failed to add to queue' });
   }
 });
