@@ -82,18 +82,6 @@ router.post('/sessions', async (req, res) => {
   try {
     const user = (req as any).user;
     const device = req.headers['user-agent'] || 'Unknown Device';
-    
-    // Close previous sessions hosted by this user to prevent stale sessions
-    if (user?.id) {
-      const oldActive = await db.select().from(sessions)
-        .where(and(eq(sessions.hostId, user.id), eq(sessions.status, 'active')));
-      
-      for (const oldSess of oldActive) {
-        await db.update(sessions).set({ status: 'closed' }).where(eq(sessions.id, oldSess.id));
-        await db.delete(queueItems).where(eq(queueItems.sessionId, oldSess.id));
-        closeSessionWS(oldSess.id);
-      }
-    }
       
     const sessionId = crypto.randomUUID();
     let roomCode = generateRoomCode();

@@ -318,6 +318,78 @@ test('Karaoke Guest Queue API tests', async () => {
   assert.strictEqual(queueItem.guestName, 'Test Guest');
 });
 
+test('Multiple simultaneous karaoke rooms hosted by same user', async () => {
+  // User A creates Room 1, Room 2, Room 3
+  const res1 = await fetch(`${baseUrl}/api/karaoke/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` }
+  });
+  assert.strictEqual(res1.status, 200);
+  const room1 = await res1.json();
+
+  const res2 = await fetch(`${baseUrl}/api/karaoke/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` }
+  });
+  assert.strictEqual(res2.status, 200);
+  const room2 = await res2.json();
+
+  const res3 = await fetch(`${baseUrl}/api/karaoke/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` }
+  });
+  assert.strictEqual(res3.status, 200);
+  const room3 = await res3.json();
+
+  // Verify distinct session IDs and room codes
+  assert.notStrictEqual(room1.id, room2.id);
+  assert.notStrictEqual(room2.id, room3.id);
+  assert.notStrictEqual(room1.roomCode, room2.roomCode);
+
+  // Verify all three exist and are active in active-sessions list
+  const activeRes = await fetch(`${baseUrl}/api/karaoke/active-sessions`);
+  assert.strictEqual(activeRes.status, 200);
+  const activeRooms = await activeRes.json();
+  const roomIds = activeRooms.map((r: any) => r.id);
+  assert.ok(roomIds.includes(room1.id));
+  assert.ok(roomIds.includes(room2.id));
+  assert.ok(roomIds.includes(room3.id));
+
+  // Verify guests can join Room 1 and Room 2 independently
+  const join1 = await fetch(`${baseUrl}/api/karaoke/sessions/join`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ roomCode: room1.roomCode, displayName: 'Guest 1' })
+  });
+  assert.strictEqual(join1.status, 200);
+  const data1 = await join1.json();
+  assert.strictEqual(data1.sessionId, room1.id);
+
+  const join2 = await fetch(`${baseUrl}/api/karaoke/sessions/join`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ roomCode: room2.roomCode, displayName: 'Guest 2' })
+  });
+  assert.strictEqual(join2.status, 200);
+  const data2 = await join2.json();
+  assert.strictEqual(data2.sessionId, room2.id);
+
+  // End Room 2
+  const endRes = await fetch(`${baseUrl}/api/karaoke/sessions/${room2.id}/end`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tokenA}` }
+  });
+  assert.strictEqual(endRes.status, 200);
+
+  // Verify Room 1 and Room 3 are still active, while Room 2 is closed
+  const activeResAfter = await fetch(`${baseUrl}/api/karaoke/active-sessions`);
+  const activeRoomsAfter = await activeResAfter.json();
+  const roomIdsAfter = activeRoomsAfter.map((r: any) => r.id);
+  assert.ok(roomIdsAfter.includes(room1.id));
+  assert.ok(roomIdsAfter.includes(room3.id));
+  assert.strictEqual(roomIdsAfter.includes(room2.id), false);
+});
+
 test('Close server', async () => {
   await new Promise<void>((resolve) => {
     server.close(() => resolve());
