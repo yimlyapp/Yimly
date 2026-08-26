@@ -28,6 +28,12 @@ app.use(cookieParser());
 // Setup database on startup
 setupDatabase().then(async () => {
   console.log('Database connected.');
+  try {
+    const { downloadQueue } = await import('./server/lib/download-queue.js');
+    await downloadQueue.init();
+  } catch (qErr) {
+    console.error('Failed to initialize download queue on startup:', qErr);
+  }
 });
 
 // Health Check

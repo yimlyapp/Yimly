@@ -247,6 +247,20 @@ export default function DownloadMusic() {
     }
   };
 
+  const handleRetryFailed = async () => {
+    if (!activeJobId) return;
+    try {
+      await fetch(`/api/downloader/jobs/${activeJobId}/retry-failed`, { method: 'POST' });
+      // Fetch latest state immediately
+      const res = await fetch(`/api/downloader/jobs/${activeJobId}`);
+      if (res.ok) {
+        setActiveJob(await res.json());
+      }
+    } catch (e) {
+      console.error('Retry error', e);
+    }
+  };
+
   if (user?.role !== 'administrator') {
     return (
       <div className="p-10 flex flex-col items-center justify-center min-h-[50vh] text-center">
@@ -556,6 +570,17 @@ export default function DownloadMusic() {
             </div>
 
             <div className="flex items-center gap-3">
+              {activeJob.tracks.some(t => t.status === 'failed') && (
+                <button
+                  type="button"
+                  onClick={handleRetryFailed}
+                  className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-semibold rounded-xl border border-amber-500/30 transition-colors flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Retry Failed ({activeJob.tracks.filter(t => t.status === 'failed').length})</span>
+                </button>
+              )}
+
               {activeJob.status === 'downloading' || activeJob.status === 'queued' ? (
                 <button
                   type="button"
@@ -569,6 +594,30 @@ export default function DownloadMusic() {
                   {activeJob.status}
                 </span>
               )}
+            </div>
+          </div>
+
+          {/* Stats Badges */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            <div className="bg-[#08090E] border border-white/5 rounded-xl p-2.5 text-center">
+              <span className="text-[10px] uppercase font-bold text-zinc-500 block">Total</span>
+              <span className="text-base font-extrabold text-white font-mono">{activeJob.totalCount}</span>
+            </div>
+            <div className="bg-[#08090E] border border-emerald-500/10 rounded-xl p-2.5 text-center">
+              <span className="text-[10px] uppercase font-bold text-emerald-400 block">Completed</span>
+              <span className="text-base font-extrabold text-emerald-400 font-mono">{activeJob.completedCount}</span>
+            </div>
+            <div className="bg-[#08090E] border border-[#FF4FA3]/10 rounded-xl p-2.5 text-center">
+              <span className="text-[10px] uppercase font-bold text-[#FF4FA3] block">In Progress / Queued</span>
+              <span className="text-base font-extrabold text-[#FF4FA3] font-mono">
+                {activeJob.tracks.filter(t => t.status === 'queued' || t.status === 'searching' || t.status === 'downloading' || t.status === 'tagging').length}
+              </span>
+            </div>
+            <div className="bg-[#08090E] border border-red-500/10 rounded-xl p-2.5 text-center">
+              <span className="text-[10px] uppercase font-bold text-red-400 block">Failed</span>
+              <span className="text-base font-extrabold text-red-400 font-mono">
+                {activeJob.tracks.filter(t => t.status === 'failed').length}
+              </span>
             </div>
           </div>
 

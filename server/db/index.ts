@@ -244,6 +244,63 @@ export async function setupDatabase() {
     // Table/indices already exist, safe to ignore
   }
 
+  // Ensure download_jobs and download_track_jobs tables exist
+  try {
+    await sqlite.execute(`
+      CREATE TABLE IF NOT EXISTS download_jobs (
+        id text PRIMARY KEY NOT NULL,
+        playlist_name text,
+        type text DEFAULT 'playlist' NOT NULL,
+        status text DEFAULT 'queued' NOT NULL,
+        library_id integer,
+        library_path text NOT NULL,
+        format text DEFAULT 'mp3' NOT NULL,
+        quality text DEFAULT '320k' NOT NULL,
+        embed_metadata integer DEFAULT 1 NOT NULL,
+        embed_artwork integer DEFAULT 1 NOT NULL,
+        download_lyrics integer DEFAULT 1 NOT NULL,
+        lyrics_providers text,
+        folder_structure text DEFAULT 'artist/album' NOT NULL,
+        playlist_folder integer DEFAULT 0 NOT NULL,
+        total_count integer DEFAULT 0 NOT NULL,
+        completed_count integer DEFAULT 0 NOT NULL,
+        failed_count integer DEFAULT 0 NOT NULL,
+        created_at integer NOT NULL,
+        updated_at integer NOT NULL,
+        FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE
+      );
+    `);
+    await sqlite.execute(`
+      CREATE TABLE IF NOT EXISTS download_track_jobs (
+        id text PRIMARY KEY NOT NULL,
+        job_id text NOT NULL,
+        title text NOT NULL,
+        artist text NOT NULL,
+        album text DEFAULT '' NOT NULL,
+        track_number integer,
+        disc_number integer,
+        release_year integer,
+        duration integer,
+        artwork_url text,
+        source_url text,
+        status text DEFAULT 'queued' NOT NULL,
+        progress integer DEFAULT 0 NOT NULL,
+        retry_count integer DEFAULT 0 NOT NULL,
+        error text,
+        output_path text,
+        position integer DEFAULT 0 NOT NULL,
+        created_at integer NOT NULL,
+        updated_at integer NOT NULL,
+        FOREIGN KEY (job_id) REFERENCES download_jobs(id) ON DELETE CASCADE
+      );
+    `);
+    await sqlite.execute('CREATE INDEX IF NOT EXISTS download_jobs_status_idx ON download_jobs (status);');
+    await sqlite.execute('CREATE INDEX IF NOT EXISTS download_track_jobs_job_id_idx ON download_track_jobs (job_id);');
+    await sqlite.execute('CREATE INDEX IF NOT EXISTS download_track_jobs_status_idx ON download_track_jobs (status);');
+  } catch (e) {
+    console.error('Failed to create download jobs tables:', e);
+  }
+
   // Normalize multi-artist metadata and backfill song_artists
   try {
     const { normalizeMultiArtistsInDatabase } = await import('../lib/artist-utils.js');

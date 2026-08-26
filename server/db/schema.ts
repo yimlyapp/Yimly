@@ -126,3 +126,48 @@ export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
 });
+
+export const downloadJobs = sqliteTable('download_jobs', {
+  id: text('id').primaryKey(),
+  playlistName: text('playlist_name'),
+  type: text('type').notNull().default('playlist'),
+  status: text('status', { enum: ['queued', 'downloading', 'completed', 'failed', 'cancelled'] }).notNull().default('queued'),
+  libraryId: integer('library_id').references(() => libraries.id, { onDelete: 'cascade' }),
+  libraryPath: text('library_path').notNull(),
+  format: text('format').notNull().default('mp3'),
+  quality: text('quality').notNull().default('320k'),
+  embedMetadata: integer('embed_metadata').notNull().default(1),
+  embedArtwork: integer('embed_artwork').notNull().default(1),
+  downloadLyrics: integer('download_lyrics').notNull().default(1),
+  lyricsProviders: text('lyrics_providers'),
+  folderStructure: text('folder_structure').notNull().default('artist/album'),
+  playlistFolder: integer('playlist_folder').notNull().default(0),
+  totalCount: integer('total_count').notNull().default(0),
+  completedCount: integer('completed_count').notNull().default(0),
+  failedCount: integer('failed_count').notNull().default(0),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+});
+
+export const downloadTrackJobs = sqliteTable('download_track_jobs', {
+  id: text('id').primaryKey(),
+  jobId: text('job_id').references(() => downloadJobs.id, { onDelete: 'cascade' }).notNull(),
+  title: text('title').notNull(),
+  artist: text('artist').notNull(),
+  album: text('album').notNull().default(''),
+  trackNumber: integer('track_number'),
+  discNumber: integer('disc_number'),
+  releaseYear: integer('release_year'),
+  duration: integer('duration'),
+  artworkUrl: text('artwork_url'),
+  sourceUrl: text('source_url'),
+  status: text('status', { enum: ['queued', 'searching', 'downloading', 'tagging', 'completed', 'failed'] }).notNull().default('queued'),
+  progress: integer('progress').notNull().default(0),
+  retryCount: integer('retry_count').notNull().default(0),
+  error: text('error'),
+  outputPath: text('output_path'),
+  position: integer('position').notNull().default(0),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+});
+

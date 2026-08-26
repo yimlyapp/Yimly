@@ -3,119 +3,21 @@ import { db } from '../db/index.js';
 import { settings, libraries } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
-import { scanLibrary } from '../lib/scanner.js';
-import { exec, execFile } from 'child_process';
-import { promisify } from 'util';
-import fs from 'fs';
-import path from 'path';
-import NodeID3 from 'node-id3';
 import {
-  fetchLyrics,
-  saveLrcSidecar,
-  computeEffectiveLyricsProviders,
-  stripLrcTimestamps,
-  Lyrics,
-} from '../lib/lyrics.js';
+  downloadQueue,
+  getYtDlpPath,
+  sanitizeFilename,
+  ActiveDownloadJob,
+  TrackMetadata,
+} from '../lib/download-queue.js';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 
-const execPromise = promisify(exec);
 const execFilePromise = promisify(execFile);
 
 const router = Router();
 router.use(requireAuth);
 router.use(requireAdmin);
-
-// Helper: Ensure yt-dlp executable exists
-async function getYtDlpPath(): Promise<string> {
-  const possiblePaths = [
-    '/usr/local/bin/yt-dlp',
-    '/usr/bin/yt-dlp',
-    path.join(process.cwd(), 'yt-dlp'),
-    './yt-dlp',
-  ];
-
-  for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
-      try {
-        // Test if the file is executable and valid
-        await execFilePromise(p, ['--version']);
-        return p;
-      } catch (err) {
-        console.warn(`Binary at ${p} failed version check, re-downloading...`);
-      }
-    }
-  }
-
-  // Download yt-dlp binary if not found or invalid
-  try {
-    console.log('yt-dlp binary not found or invalid. Downloading latest binary...');
-    const targetPath = path.join(process.cwd(), 'yt-dlp');
-    await execPromise(`curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ${targetPath} && chmod +x ${targetPath}`);
-    return targetPath;
-  } catch (err) {
-    console.error('Failed to download yt-dlp binary:', err);
-    throw new Error('yt-dlp executable unavailable on server');
-  }
-}
-
-// Memory cache for active download jobs
-interface TrackJob {
-  id: string;
-  title: string;
-  artist: string;
-  album: string;
-  trackNumber?: number;
-  discNumber?: number;
-  releaseYear?: number;
-  duration?: number;
-  artworkUrl?: string;
-  sourceUrl?: string;
-  status: 'queued' | 'searching' | 'downloading' | 'tagging' | 'completed' | 'failed';
-  progress: number; // 0 - 100
-  error?: string;
-}
-
-interface DownloadJob {
-  id: string;
-  status: 'queued' | 'downloading' | 'completed' | 'failed' | 'cancelled';
-  tracks: TrackJob[];
-  libraryId: number;
-  libraryPath: string;
-  format: string;
-  quality: string;
-  embedMetadata: boolean;
-  embedArtwork: boolean;
-  downloadLyrics: boolean;
-  lyricsProviders: string[];
-  folderStructure: string;
-  playlistFolder: boolean;
-  playlistName?: string;
-  completedCount: number;
-  totalCount: number;
-  createdAt: number;
-  updatedAt: number;
-}
-
-const activeJobs = new Map<string, DownloadJob>();
-
-// Cleanup completed jobs older than 2 hours
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, job] of activeJobs.entries()) {
-    if (now - job.updatedAt > 2 * 60 * 60 * 1000) {
-      activeJobs.delete(id);
-    }
-  }
-}, 30 * 60 * 1000);
-
-// Helper: Sanitize string for filenames & directories (Downtify compatible)
-function sanitizeFilename(str: string): string {
-  if (!str) return 'Unknown';
-  const cleaned = str
-    .replace(/[/\\?%*:|"<>]/g, '')
-    .trim()
-    .replace(/^\.+|\.+$/g, '');
-  return cleaned || 'Unknown';
-}
 
 // -------------------------------------------------------------------
 // SETTINGS ENDPOINTS
@@ -146,6 +48,7 @@ router.get('/settings', async (req, res) => {
     }
 
     const downloadLyrics = rawDownloadLyrics !== 'false';
+    const concurrencyVal = parseInt(settingsMap.get('downloader_concurrency') || '4', 10) || 4;
 
     res.json({
       libraryId: settingsMap.get('downloader_library_id') || defaultLibId,
@@ -160,6 +63,7 @@ router.get('/settings', async (req, res) => {
       lyrics_providers: parsedProviders,
       folderStructure: settingsMap.get('downloader_folder_structure') || '{artist}/{artist} - {title}',
       playlistFolder: settingsMap.get('downloader_playlist_folder') !== 'false',
+      concurrency: concurrencyVal,
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch downloader settings' });
@@ -180,6 +84,7 @@ router.post('/settings', async (req, res) => {
       download_lyrics,
       lyricsProviders,
       lyrics_providers,
+      concurrency,
     } = req.body;
 
     const finalDownloadLyrics = downloadLyrics ?? download_lyrics ?? true;
@@ -198,6 +103,12 @@ router.post('/settings', async (req, res) => {
       ['downloader_lyrics_providers', JSON.stringify(providersArray)],
     ];
 
+    if (concurrency !== undefined) {
+      const parsedConcurrency = Math.min(16, Math.max(1, parseInt(concurrency, 10) || 4));
+      pairs.push(['downloader_concurrency', String(parsedConcurrency)]);
+      downloadQueue.setConcurrency(parsedConcurrency);
+    }
+
     for (const [key, value] of pairs) {
       await db
         .insert(settings)
@@ -212,7 +123,7 @@ router.post('/settings', async (req, res) => {
 });
 
 // -------------------------------------------------------------------
-// RESOLVE & METADATA ENDPOINT
+// RESOLVE & METADATA ENDPOINT (Supports full playlist extraction)
 // -------------------------------------------------------------------
 
 router.post('/resolve', async (req, res) => {
@@ -231,7 +142,6 @@ router.post('/resolve', async (req, res) => {
       const isPlaylist = trimmed.includes('/playlist/');
 
       if (isTrack) {
-        // Fetch Spotify track metadata
         const trackData = await resolveSpotifyTrack(trimmed);
         return res.json({
           type: 'track',
@@ -274,8 +184,9 @@ router.post('/resolve', async (req, res) => {
               artist: parsed.uploader || parsed.artist || 'Unknown Artist',
               album: 'YouTube Playlist',
               trackNumber: idx + 1,
-              sourceUrl: parsed.url || `https://www.youtube.com/watch?v=${parsed.id}`,
+              sourceUrl: parsed.url || (parsed.id ? `https://www.youtube.com/watch?v=${parsed.id}` : undefined),
               artworkUrl: parsed.thumbnails?.[0]?.url || '',
+              duration: Math.round(parsed.duration || 0),
             };
           } catch (e) {
             return null;
@@ -300,8 +211,8 @@ router.post('/resolve', async (req, res) => {
           title: parsed.track || parsed.title || 'Unknown Title',
           artist: parsed.artist || parsed.uploader || 'Unknown Artist',
           album: parsed.album || 'Single',
-          duration: parsed.duration || 0,
-          artworkUrl: parsed.thumbnail || '',
+          duration: Math.round(parsed.duration || 0),
+          artworkUrl: parsed.thumbnail || (parsed.thumbnails?.[0]?.url || ''),
           sourceUrl: trimmed,
         };
 
@@ -317,7 +228,7 @@ router.post('/resolve', async (req, res) => {
     }
 
     // 3. Text Search Query (via iTunes Search API + fallback)
-    const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(trimmed)}&entity=song&limit=12`;
+    const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(trimmed)}&entity=song&limit=15`;
     const itunesRes = await fetch(itunesUrl);
     if (itunesRes.ok) {
       const itunesData = await itunesRes.json();
@@ -360,8 +271,9 @@ router.post('/resolve', async (req, res) => {
           artist: parsed.uploader || 'Unknown Artist',
           album: 'YouTube Search',
           trackNumber: idx + 1,
-          sourceUrl: parsed.url || `https://www.youtube.com/watch?v=${parsed.id}`,
+          sourceUrl: parsed.url || (parsed.id ? `https://www.youtube.com/watch?v=${parsed.id}` : undefined),
           artworkUrl: parsed.thumbnails?.[0]?.url || '',
+          duration: Math.round(parsed.duration || 0),
         };
       } catch (e) {
         return null;
@@ -381,7 +293,6 @@ router.post('/resolve', async (req, res) => {
 
 // Helper functions for Spotify metadata resolution
 async function resolveSpotifyTrack(url: string) {
-  // Use oEmbed API first
   const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(url)}`;
   const res = await fetch(oembedUrl);
   let title = 'Unknown Title';
@@ -393,7 +304,6 @@ async function resolveSpotifyTrack(url: string) {
     artworkUrl = data.thumbnail_url || '';
   }
 
-  // Search iTunes for clean artist & album metadata using title
   let artist = 'Unknown Artist';
   let album = 'Single';
   let releaseYear: number | undefined;
@@ -441,8 +351,55 @@ async function resolveSpotifyAlbum(url: string) {
     artworkUrl = data.thumbnail_url || '';
   }
 
-  // Search iTunes for the album
-  const itunesRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(albumTitle)}&entity=song&limit=25`);
+  // 1. Try extracting all album tracks via yt-dlp
+  try {
+    const ytDlpPath = await getYtDlpPath();
+    const { stdout } = await execFilePromise(ytDlpPath, [
+      '--flat-playlist',
+      '--dump-json',
+      '--js-runtimes',
+      'node',
+      url,
+    ]);
+
+    const lines = stdout.trim().split('\n').filter(Boolean);
+    if (lines.length > 0) {
+      const tracks = lines.map((line, idx) => {
+        try {
+          const parsed = JSON.parse(line);
+          const rawArtist = Array.isArray(parsed.artists) ? parsed.artists.join(', ') : (parsed.artist || parsed.uploader || 'Unknown Artist');
+          return {
+            title: parsed.track || parsed.title || 'Unknown Title',
+            artist: rawArtist,
+            album: parsed.album || albumTitle,
+            trackNumber: parsed.track_number || idx + 1,
+            discNumber: parsed.disc_number || 1,
+            releaseYear: parsed.release_year || (parsed.release_date ? parseInt(parsed.release_date.slice(0, 4), 10) : undefined),
+            duration: Math.round(parsed.duration || 0),
+            artworkUrl: parsed.thumbnails?.[0]?.url || artworkUrl,
+            sourceUrl: parsed.url || (parsed.id ? `https://open.spotify.com/track/${parsed.id}` : undefined),
+          };
+        } catch {
+          return null;
+        }
+      }).filter(Boolean);
+
+      if (tracks.length > 0) {
+        return {
+          type: 'album',
+          title: albumTitle,
+          artist: tracks[0]?.artist || 'Unknown Artist',
+          artworkUrl,
+          tracks,
+        };
+      }
+    }
+  } catch (ytErr) {
+    console.warn('[Downloader] yt-dlp album extraction fallback to iTunes:', ytErr);
+  }
+
+  // 2. Fallback to iTunes search with generous limit
+  const itunesRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(albumTitle)}&entity=song&limit=200`);
   if (itunesRes.ok) {
     const itunesData = await itunesRes.json();
     if (itunesData.results && itunesData.results.length > 0) {
@@ -496,13 +453,56 @@ async function resolveSpotifyPlaylist(url: string) {
     artworkUrl = data.thumbnail_url || '';
   }
 
-  return {
-    type: 'playlist',
-    title: playlistTitle,
-    artworkUrl,
-    tracks: [],
-    message: 'Spotify playlist title retrieved. Enter track names or search terms directly if tracklist extraction is limited.',
-  };
+  // Extract all tracks in the playlist using yt-dlp --flat-playlist
+  try {
+    const ytDlpPath = await getYtDlpPath();
+    const { stdout } = await execFilePromise(ytDlpPath, [
+      '--flat-playlist',
+      '--dump-json',
+      '--js-runtimes',
+      'node',
+      url,
+    ]);
+
+    const lines = stdout.trim().split('\n').filter(Boolean);
+    const tracks = lines.map((line, idx) => {
+      try {
+        const parsed = JSON.parse(line);
+        const rawArtist = Array.isArray(parsed.artists)
+          ? parsed.artists.join(', ')
+          : (parsed.artist || parsed.uploader || 'Unknown Artist');
+        return {
+          title: parsed.track || parsed.title || 'Unknown Title',
+          artist: rawArtist,
+          album: parsed.album || playlistTitle,
+          trackNumber: parsed.track_number || parsed.playlist_index || idx + 1,
+          discNumber: parsed.disc_number || 1,
+          releaseYear: parsed.release_year || (parsed.release_date ? parseInt(parsed.release_date.slice(0, 4), 10) : undefined),
+          duration: Math.round(parsed.duration || 0),
+          artworkUrl: parsed.thumbnails?.[0]?.url || artworkUrl,
+          sourceUrl: parsed.url || (parsed.id ? `https://open.spotify.com/track/${parsed.id}` : undefined),
+        };
+      } catch {
+        return null;
+      }
+    }).filter(Boolean);
+
+    return {
+      type: 'playlist',
+      title: playlistTitle,
+      artworkUrl,
+      tracks,
+    };
+  } catch (err: any) {
+    console.warn('[Downloader] yt-dlp playlist extraction notice:', err?.message || err);
+    return {
+      type: 'playlist',
+      title: playlistTitle,
+      artworkUrl,
+      tracks: [],
+      message: 'Could not automatically dump Spotify playlist tracks via yt-dlp. You can search tracks directly or enter YouTube playlist URL.',
+    };
+  }
 }
 
 // -------------------------------------------------------------------
@@ -551,8 +551,8 @@ router.post('/start', async (req, res) => {
     const settingsMap = new Map(allSettings.map((s) => [s.key, s.value]));
 
     const reqDlLyrics = downloadLyrics ?? download_lyrics;
-    const finalDownloadLyrics = reqDlLyrics !== undefined 
-      ? Boolean(reqDlLyrics) 
+    const finalDownloadLyrics = reqDlLyrics !== undefined
+      ? Boolean(reqDlLyrics)
       : settingsMap.get('downloader_download_lyrics') !== 'false';
 
     const reqProviders = lyricsProviders ?? lyrics_providers;
@@ -570,26 +570,21 @@ router.post('/start', async (req, res) => {
       }
     }
 
-    const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const trackJobs: TrackJob[] = tracks.map((t: any, idx: number) => ({
-      id: `tr_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+    const trackMetadataList: TrackMetadata[] = tracks.map((t: any) => ({
       title: t.title || 'Unknown Title',
       artist: t.artist || 'Unknown Artist',
       album: t.album || 'Unknown Album',
-      trackNumber: t.trackNumber || idx + 1,
-      discNumber: t.discNumber || 1,
+      trackNumber: t.trackNumber,
+      discNumber: t.discNumber,
       releaseYear: t.releaseYear,
       duration: t.duration,
       artworkUrl: t.artworkUrl,
       sourceUrl: t.sourceUrl,
-      status: 'queued',
-      progress: 0,
     }));
 
-    const job: DownloadJob = {
-      id: jobId,
-      status: 'queued',
-      tracks: trackJobs,
+    // Add to persistent queue
+    const activeJob = await downloadQueue.addJob({
+      playlistName,
       libraryId: targetLib.id,
       libraryPath: targetLib.path,
       format,
@@ -600,22 +595,13 @@ router.post('/start', async (req, res) => {
       lyricsProviders: finalProviders,
       folderStructure,
       playlistFolder,
-      playlistName,
-      completedCount: 0,
-      totalCount: trackJobs.length,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-
-    activeJobs.set(jobId, job);
-
-    // Process job asynchronously in background
-    processJobInBackground(job);
+      tracks: trackMetadataList,
+    });
 
     res.json({
-      jobId,
+      jobId: activeJob.id,
       message: 'Download job started',
-      totalTracks: trackJobs.length,
+      totalTracks: activeJob.totalCount,
       libraryName: targetLib.name,
       libraryPath: targetLib.path,
     });
@@ -625,259 +611,40 @@ router.post('/start', async (req, res) => {
   }
 });
 
-router.get('/jobs/:jobId', (req, res) => {
-  const job = activeJobs.get(req.params.jobId);
-  if (!job) {
-    return res.status(404).json({ error: 'Download job not found' });
-  }
-  res.json(job);
-});
-
-router.post('/cancel/:jobId', (req, res) => {
-  const job = activeJobs.get(req.params.jobId);
-  if (!job) {
-    return res.status(404).json({ error: 'Download job not found' });
-  }
-
-  job.status = 'cancelled';
-  for (const track of job.tracks) {
-    if (track.status === 'queued' || track.status === 'searching' || track.status === 'downloading') {
-      track.status = 'failed';
-      track.error = 'Job cancelled by user';
-    }
-  }
-  job.updatedAt = Date.now();
-  res.json({ message: 'Job cancelled' });
-});
-
-// -------------------------------------------------------------------
-// BACKGROUND JOB PROCESSOR
-// -------------------------------------------------------------------
-
-async function processJobInBackground(job: DownloadJob) {
-  job.status = 'downloading';
-  job.updatedAt = Date.now();
-
-  const ytDlpPath = await getYtDlpPath();
-
-  for (const track of job.tracks) {
-    if ((job.status as string) === 'cancelled') break;
-
-    try {
-      track.status = 'searching';
-      track.progress = 10;
-      job.updatedAt = Date.now();
-
-      // Determine audio source URL or search query
-      let queryOrUrl = track.sourceUrl;
-      if (!queryOrUrl) {
-        queryOrUrl = `ytsearch1:${track.artist} - ${track.title} audio`;
-      }
-
-      track.status = 'downloading';
-      track.progress = 30;
-      job.updatedAt = Date.now();
-
-      // Determine lyrics providers and fetch lyrics in parallel/background
-      const effectiveLyricsProviders = computeEffectiveLyricsProviders(
-        job.downloadLyrics ?? true,
-        job.lyricsProviders ?? ['lrclib']
-      );
-
-      let fetchedLyrics: Lyrics | null = null;
-      if (effectiveLyricsProviders.length > 0) {
-        try {
-          console.log(`[Lyrics] Looking up lyrics for "${track.title}" by "${track.artist}" via [${effectiveLyricsProviders.join(', ')}]...`);
-          fetchedLyrics = await fetchLyrics(
-            {
-              title: track.title,
-              artists: [track.artist],
-              artist: track.artist,
-              album: track.album,
-              duration: track.duration,
-            },
-            effectiveLyricsProviders
-          );
-          if (fetchedLyrics?.synced) {
-            console.log(`[Lyrics] Found synced lyrics for "${track.title}"`);
-          } else if (fetchedLyrics?.plain) {
-            console.log(`[Lyrics] Found plain lyrics for "${track.title}"`);
-          } else {
-            console.log(`[Lyrics] No lyrics found on lrclib for "${track.title}"`);
-          }
-        } catch (lyricsErr) {
-          console.warn(`[Lyrics] Non-fatal error during lyrics fetch for "${track.title}":`, lyricsErr);
-        }
-      }
-
-      // Create temporary working directory for intermediate files
-      const tmpDir = path.join(process.cwd(), 'data', 'tmp_downloads');
-      if (!fs.existsSync(tmpDir)) {
-        fs.mkdirSync(tmpDir, { recursive: true });
-      }
-
-      const tempFileBase = path.join(tmpDir, `dl_${track.id}`);
-      const formatExt = job.format === 'opus' ? 'opus' : job.format;
-
-      // Quality mapping
-      const qualityFlag = job.quality === '320k' ? '0' : job.quality === '256k' ? '1' : job.quality === '192k' ? '2' : '4';
-
-      // Download audio via yt-dlp
-      const possibleExtensions = [formatExt, 'mp3', 'm4a', 'flac', 'wav', 'opus', 'webm', 'ogg'];
-      let downloadSuccess = false;
-      const searchAttempts = [
-        queryOrUrl,
-        `scsearch1:${track.artist} ${track.title}`,
-        `scsearch1:${track.artist.split(/[&,;/]|feat/i)[0].trim()} ${track.title}`,
-      ];
-
-      for (const attemptQuery of searchAttempts) {
-        if (!attemptQuery) continue;
-        try {
-          const dlArgs = [
-            '-x',
-            '--audio-format',
-            formatExt,
-            '--audio-quality',
-            qualityFlag,
-          ];
-          if (attemptQuery.includes('youtube') || attemptQuery.startsWith('ytsearch')) {
-            dlArgs.push(
-              '--js-runtimes',
-              'node',
-              '--extractor-args',
-              'youtube:player_client=mweb,web_embedded'
-            );
-          }
-          dlArgs.push('-o', `${tempFileBase}.%(ext)s`, attemptQuery);
-          await execFilePromise(ytDlpPath, dlArgs);
-          
-          const hasFile = possibleExtensions.some((ext) => fs.existsSync(`${tempFileBase}.${ext}`));
-          if (hasFile) {
-            downloadSuccess = true;
-            break;
-          }
-        } catch (attemptErr: any) {
-          console.warn(`Download attempt with query "${attemptQuery}" failed, trying next fallback:`, attemptErr?.message || attemptErr);
-        }
-      }
-
-      track.progress = 70;
-      track.status = 'tagging';
-      job.updatedAt = Date.now();
-
-      // Find generated audio file
-      let downloadedAudioFile = '';
-      for (const ext of possibleExtensions) {
-        const candidate = `${tempFileBase}.${ext}`;
-        if (fs.existsSync(candidate)) {
-          downloadedAudioFile = candidate;
-          break;
-        }
-      }
-
-      if (!downloadedAudioFile) {
-        throw new Error('Downloaded audio file not found on disk');
-      }
-
-      // Download Cover Art image if present
-      let artworkBuffer: Buffer | null = null;
-      if (job.embedArtwork && track.artworkUrl) {
-        try {
-          const imgRes = await fetch(track.artworkUrl);
-          if (imgRes.ok) {
-            artworkBuffer = Buffer.from(await imgRes.arrayBuffer());
-          }
-        } catch (e) {
-          console.warn('Failed to fetch artwork image:', e);
-        }
-      }
-
-      // Embed ID3 Tags (for MP3)
-      if (job.embedMetadata && (job.format === 'mp3' || downloadedAudioFile.endsWith('.mp3'))) {
-        try {
-          const tags: NodeID3.Tags = {
-            title: track.title,
-            artist: track.artist,
-            album: track.album,
-            trackNumber: track.trackNumber ? String(track.trackNumber) : undefined,
-            partOfSet: track.discNumber ? String(track.discNumber) : undefined,
-            year: track.releaseYear ? String(track.releaseYear) : undefined,
-          };
-
-          if (artworkBuffer) {
-            tags.image = {
-              mime: 'image/jpeg',
-              type: { id: 3, name: 'front cover' },
-              description: 'Cover Art',
-              imageBuffer: artworkBuffer,
-            };
-          }
-
-          if (fetchedLyrics) {
-            const plainLyricsText = fetchedLyrics.plain || (fetchedLyrics.synced ? stripLrcTimestamps(fetchedLyrics.synced) : undefined);
-            if (plainLyricsText) {
-              tags.unsynchronisedLyrics = {
-                language: 'eng',
-                text: plainLyricsText,
-              };
-            }
-          }
-
-          NodeID3.write(tags, downloadedAudioFile);
-        } catch (e) {
-          console.warn('Failed to write ID3 tags:', e);
-        }
-      }
-
-      // Construct final destination according to Downtify structure:
-      // /media/<Artist>/<Artist> - <Title>.<formatExt>
-      // /media/<Artist>/<Artist> - <Title>.lrc
-      const safeArtist = sanitizeFilename(track.artist || 'Unknown Artist');
-      const safeTitle = sanitizeFilename(track.title || 'Unknown Title');
-      const baseFilename = `${safeArtist} - ${safeTitle}`;
-
-      // Destination directory is strictly the artist folder inside library root (e.g. /media/<Artist>)
-      const artistDir = path.join(job.libraryPath, safeArtist);
-
-      if (!fs.existsSync(artistDir)) {
-        fs.mkdirSync(artistDir, { recursive: true });
-      }
-
-      const finalDestFile = path.join(artistDir, `${baseFilename}.${formatExt}`);
-
-      // Move temp file to final library path
-      fs.copyFileSync(downloadedAudioFile, finalDestFile);
-      fs.unlinkSync(downloadedAudioFile);
-
-      // Save matching LRC sidecar directly beside the MP3 with matching base filename
-      if (fetchedLyrics?.synced) {
-        saveLrcSidecar(finalDestFile, fetchedLyrics.synced);
-      }
-
-      track.progress = 100;
-      track.status = 'completed';
-      job.completedCount++;
-      job.updatedAt = Date.now();
-    } catch (err: any) {
-      console.error(`Error downloading track "${track.title}":`, err);
-      track.status = 'failed';
-      track.error = err.message || 'Download or conversion failed';
-      job.updatedAt = Date.now();
-    }
-  }
-
-  job.status = job.tracks.some((t) => t.status === 'completed') ? 'completed' : 'failed';
-  job.updatedAt = Date.now();
-
-  // Trigger Yimly's existing library scanner to index newly downloaded songs
+router.get('/jobs/:jobId', async (req, res) => {
   try {
-    console.log(`Triggering Yimly media library rescan for library ID: ${job.libraryId} (${job.libraryPath})...`);
-    await scanLibrary(job.libraryId, job.libraryPath);
-    console.log(`Media library scan completed after music download.`);
-  } catch (scanErr) {
-    console.error('Error auto-rescanning library after download:', scanErr);
+    const job = await downloadQueue.getJob(req.params.jobId);
+    if (!job) {
+      return res.status(404).json({ error: 'Download job not found' });
+    }
+    res.json(job);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to get job' });
   }
-}
+});
+
+router.post('/cancel/:jobId', async (req, res) => {
+  try {
+    const success = await downloadQueue.cancelJob(req.params.jobId);
+    if (!success) {
+      return res.status(404).json({ error: 'Download job not found' });
+    }
+    res.json({ message: 'Job cancelled' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to cancel job' });
+  }
+});
+
+router.post('/jobs/:jobId/retry-failed', async (req, res) => {
+  try {
+    const success = await downloadQueue.retryFailedTracks(req.params.jobId);
+    if (!success) {
+      return res.status(404).json({ error: 'Download job not found' });
+    }
+    res.json({ message: 'Retrying failed tracks' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to retry tracks' });
+  }
+});
 
 export default router;
