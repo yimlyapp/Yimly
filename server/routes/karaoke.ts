@@ -510,17 +510,20 @@ router.post('/sessions/:sessionId/queue', async (req, res) => {
 
     if (user?.id) {
       userId = user.id;
-    } else if (controllerId) {
-      const ctrl = await db.select().from(controllers).where(
-        and(eq(controllers.id, controllerId), eq(controllers.sessionId, sessionId))
-      ).limit(1);
-      if (ctrl.length === 0) {
-        return res.status(403).json({ error: 'Invalid controller for this room session' });
-      }
-      userId = ctrl[0].userId || null;
-      guestName = ctrl[0].guestName || 'Guest';
     } else {
-      return res.status(403).json({ error: 'Authentication or valid controller ID required' });
+      if (controllerId) {
+        const ctrl = await db.select().from(controllers).where(
+          and(eq(controllers.id, controllerId), eq(controllers.sessionId, sessionId))
+        ).limit(1);
+        if (ctrl.length > 0) {
+          userId = ctrl[0].userId || null;
+          guestName = ctrl[0].guestName || 'Guest';
+        } else {
+          guestName = req.body.guestName || 'Guest';
+        }
+      } else {
+        guestName = req.body.guestName || 'Guest';
+      }
     }
 
     const inserted = await db.insert(queueItems).values({

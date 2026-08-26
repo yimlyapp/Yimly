@@ -36,8 +36,15 @@ export default function RoomSession() {
   const [searchParams] = useSearchParams();
 
   const roleParam = searchParams.get('role');
-  const controllerId = searchParams.get('controllerId');
+  const urlControllerId = searchParams.get('controllerId');
+  const controllerId = urlControllerId || (sessionId ? localStorage.getItem(`yimly_controller_${sessionId}`) : null);
   const isHost = roleParam === 'host';
+
+  useEffect(() => {
+    if (sessionId && urlControllerId) {
+      localStorage.setItem(`yimly_controller_${sessionId}`, urlControllerId);
+    }
+  }, [sessionId, urlControllerId]);
 
   const [validationStatus, setValidationStatus] = useState<ValidationStatus>('loading');
   const [errorMessage, setErrorMessage] = useState<string>('');

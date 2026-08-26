@@ -1,4 +1,4 @@
-import { useEffect, useState, ReactNode } from 'react';
+import { useEffect, useState, useRef, ReactNode } from 'react';
 import { useOutletContext, Link, useNavigate } from 'react-router-dom';
 import { Play, Mic, Radio, Users, Music, Disc, ChevronRight, Plus, Sparkles, Folder, Download } from 'lucide-react';
 
@@ -9,6 +9,13 @@ export default function Home() {
   const [activeSessions, setActiveSessions] = useState<any[]>([]);
   const [featuredSongs, setFeaturedSongs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const hostButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (user?.role === 'user') {
+      hostButtonRef.current?.focus();
+    }
+  }, [user]);
 
   useEffect(() => {
     async function loadDashboardData() {
@@ -143,8 +150,9 @@ export default function Home() {
             </p>
 
             <button
+              ref={hostButtonRef}
               onClick={createRoom}
-              className="w-full sm:w-auto px-8 py-4 bg-[#FF4FA3] hover:bg-[#ff69b2] text-white font-bold text-base rounded-2xl transition-all shadow-xl shadow-[#FF4FA3]/30 flex items-center justify-center gap-3 hover:scale-[1.02] active:scale-[0.98]"
+              className="w-full sm:w-auto px-8 py-4 bg-[#FF4FA3] hover:bg-[#ff69b2] text-white font-bold text-base rounded-2xl transition-all shadow-xl shadow-[#FF4FA3]/30 flex items-center justify-center gap-3 hover:scale-[1.02] active:scale-[0.98] focus:outline-none focus:ring-4 focus:ring-[#FF4FA3] focus:ring-offset-2 focus:ring-offset-[#171827] focus:scale-105"
             >
               <Mic className="w-5 h-5" />
               <span>Host Karaoke</span>
