@@ -1,13 +1,29 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
 import { libraries, songs, artists, albums, lyrics, queueItems } from '../db/schema.js';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { scanLibrary } from '../lib/scanner.js';
 import fs from 'fs';
 
 const router = Router();
 router.use(requireAuth);
+
+// Library statistics
+router.get('/stats', async (req, res) => {
+  try {
+    const songCountResult = await db.select({ count: sql<number>`count(*)` }).from(songs);
+    const artistCountResult = await db.select({ count: sql<number>`count(*)` }).from(artists);
+    const albumCountResult = await db.select({ count: sql<number>`count(*)` }).from(albums);
+    res.json({ 
+      songs: songCountResult[0].count, 
+      artists: artistCountResult[0].count, 
+      albums: albumCountResult[0].count 
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
 
 router.get('/', async (req, res) => {
   try {
@@ -89,24 +105,6 @@ router.delete('/:id', requireAdmin, async (req, res) => {
   } catch (error) {
     console.error('Error deleting library:', error);
     res.status(500).json({ error: 'Failed to remove library' });
-  }
-});
-
-import { sql } from 'drizzle-orm';
-
-// Library statistics
-router.get('/stats', async (req, res) => {
-  try {
-    const songCountResult = await db.select({ count: sql<number>`count(*)` }).from(songs);
-    const artistCountResult = await db.select({ count: sql<number>`count(*)` }).from(artists);
-    const albumCountResult = await db.select({ count: sql<number>`count(*)` }).from(albums);
-    res.json({ 
-      songs: songCountResult[0].count, 
-      artists: artistCountResult[0].count, 
-      albums: albumCountResult[0].count 
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch stats' });
   }
 });
 

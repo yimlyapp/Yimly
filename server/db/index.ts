@@ -192,6 +192,24 @@ export async function setupDatabase() {
     // Table/indices already exist, safe to ignore
   }
 
+  // Ensure favorites table exists
+  try {
+    await sqlite.execute(`
+      CREATE TABLE IF NOT EXISTS favorites (
+        id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+        user_id integer NOT NULL,
+        song_id integer NOT NULL,
+        created_at integer NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE
+      );
+    `);
+    await sqlite.execute('CREATE UNIQUE INDEX IF NOT EXISTS favorites_user_id_song_id_idx ON favorites (user_id, song_id);');
+    await sqlite.execute('CREATE INDEX IF NOT EXISTS favorites_user_id_idx ON favorites (user_id);');
+  } catch (e) {
+    // Table/indices already exist, safe to ignore
+  }
+
   // Normalize multi-artist metadata and backfill song_artists
   try {
     const { normalizeMultiArtistsInDatabase } = await import('../lib/artist-utils.js');

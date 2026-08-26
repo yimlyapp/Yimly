@@ -37,6 +37,10 @@ export default function Layout() {
     navigate('/login');
   };
 
+  const isHome = location.pathname === '/';
+  const isNormalUser = user?.role === 'user';
+  const hideSidebar = isNormalUser && isHome;
+
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-[#0A0B10] text-white">
@@ -53,68 +57,70 @@ export default function Layout() {
   return (
     <div className="flex h-screen bg-[#0A0B10] text-zinc-100 overflow-hidden font-sans">
       {/* Desktop & Tablet Sidebar */}
-      <aside className="w-64 bg-[#11121A] border-r border-white/5 flex flex-col hidden md:flex shrink-0">
-        {/* Brand Header */}
-        <div className="p-6 pb-5 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#FF4FA3] to-[#e0378b] flex items-center justify-center shadow-lg shadow-[#FF4FA3]/20">
-              <Mic className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <span className="text-xl font-bold tracking-tight text-white block leading-none">Yimly</span>
-              <span className="text-[10px] text-zinc-400 font-medium tracking-wider uppercase mt-1 block">Karaoke Studio</span>
+      {!hideSidebar && (
+        <aside className="w-64 bg-[#11121A] border-r border-white/5 flex flex-col hidden md:flex shrink-0">
+          {/* Brand Header */}
+          <div className="p-6 pb-5 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#FF4FA3] to-[#e0378b] flex items-center justify-center shadow-lg shadow-[#FF4FA3]/20">
+                <Mic className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <span className="text-xl font-bold tracking-tight text-white block leading-none">Yimly</span>
+                <span className="text-[10px] text-zinc-400 font-medium tracking-wider uppercase mt-1 block">Karaoke Studio</span>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Navigation Sections */}
-        <nav className="flex-1 px-3 py-4 space-y-1.5 overflow-y-auto">
-          <div className="px-3 pb-2 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
-            Menu
-          </div>
-          <NavItem to="/" icon={<Home className="w-4 h-4" />} label="Home" />
-          <NavItem to="/library" icon={<Music className="w-4 h-4" />} label="Library" />
-          <NavItem to="/rooms" icon={<Radio className="w-4 h-4" />} label="Karaoke Rooms" badge="Live" />
-
-          {user?.role === 'administrator' && (
-            <div className="pt-6">
-              <div className="px-3 pb-2 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
-                Administration
-              </div>
-              <div className="space-y-1.5">
-                <NavItem to="/download" icon={<Download className="w-4 h-4" />} label="Download Music" />
-                <NavItem to="/users" icon={<Users className="w-4 h-4" />} label="Users" />
-                <NavItem to="/settings" icon={<Settings className="w-4 h-4" />} label="Settings" />
-              </div>
+          {/* Navigation Sections */}
+          <nav className="flex-1 px-3 py-4 space-y-1.5 overflow-y-auto">
+            <div className="px-3 pb-2 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
+              Menu
             </div>
-          )}
-        </nav>
+            <NavItem to="/" icon={<Home className="w-4 h-4" />} label="Home" />
+            <NavItem to="/library" icon={<Music className="w-4 h-4" />} label="Library" />
+            <NavItem to="/rooms" icon={<Radio className="w-4 h-4" />} label="Karaoke Rooms" badge="Live" />
 
-        {/* User Profile & Logout */}
-        <div className="p-3 border-t border-white/5 bg-[#0D0E15]">
-          <div className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-[#171824] border border-white/5">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-8 h-8 rounded-lg bg-zinc-800 border border-white/10 flex items-center justify-center text-xs font-bold text-white shrink-0">
-                {user?.username?.[0]?.toUpperCase() || 'U'}
+            {user?.role === 'administrator' && (
+              <div className="pt-6">
+                <div className="px-3 pb-2 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
+                  Administration
+                </div>
+                <div className="space-y-1.5">
+                  <NavItem to="/download" icon={<Download className="w-4 h-4" />} label="Download Music" />
+                  <NavItem to="/users" icon={<Users className="w-4 h-4" />} label="Users" />
+                  <NavItem to="/settings" icon={<Settings className="w-4 h-4" />} label="Settings" />
+                </div>
               </div>
-              <div className="min-w-0">
-                <span className="text-xs font-semibold text-white block truncate">{user?.username}</span>
-                <span className="text-[10px] text-zinc-400 capitalize block truncate">{user?.role || 'User'}</span>
+            )}
+          </nav>
+
+          {/* User Profile & Logout */}
+          <div className="p-3 border-t border-white/5 bg-[#0D0E15]">
+            <div className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-[#171824] border border-white/5">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-zinc-800 border border-white/10 flex items-center justify-center text-xs font-bold text-white shrink-0">
+                  {user?.username?.[0]?.toUpperCase() || 'U'}
+                </div>
+                <div className="min-w-0">
+                  <span className="text-xs font-semibold text-white block truncate">{user?.username}</span>
+                  <span className="text-[10px] text-zinc-400 capitalize block truncate">{user?.role || 'User'}</span>
+                </div>
               </div>
+              <button 
+                onClick={handleLogout}
+                className="p-1.5 text-zinc-400 hover:text-[#FF4FA3] hover:bg-[#FF4FA3]/10 rounded-lg transition-colors shrink-0"
+                title="Logout"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
             </div>
-            <button 
-              onClick={handleLogout}
-              className="p-1.5 text-zinc-400 hover:text-[#FF4FA3] hover:bg-[#FF4FA3]/10 rounded-lg transition-colors shrink-0"
-              title="Logout"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
           </div>
-        </div>
-      </aside>
+        </aside>
+      )}
 
       {/* Mobile Drawer Backdrop & Menu */}
-      {mobileMenuOpen && (
+      {!hideSidebar && mobileMenuOpen && (
         <div className="fixed inset-0 z-50 md:hidden flex">
           <div 
             className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity" 
@@ -175,20 +181,22 @@ export default function Layout() {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#0A0B10]">
         {/* Mobile Header Bar */}
-        <div className="md:hidden px-4 py-3 bg-[#11121A] border-b border-white/5 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#FF4FA3] flex items-center justify-center text-white">
-              <Mic className="w-4 h-4" />
+        {!hideSidebar && (
+          <div className="md:hidden px-4 py-3 bg-[#11121A] border-b border-white/5 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-[#FF4FA3] flex items-center justify-center text-white">
+                <Mic className="w-4 h-4" />
+              </div>
+              <span className="font-bold text-white tracking-tight">Yimly</span>
             </div>
-            <span className="font-bold text-white tracking-tight">Yimly</span>
+            <button 
+              onClick={() => setMobileMenuOpen(true)}
+              className="p-2 text-zinc-300 hover:text-white rounded-lg bg-zinc-800/60"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
           </div>
-          <button 
-            onClick={() => setMobileMenuOpen(true)}
-            className="p-2 text-zinc-300 hover:text-white rounded-lg bg-zinc-800/60"
-          >
-            <Menu className="w-5 h-5" />
-          </button>
-        </div>
+        )}
 
         {/* Page Content Scroll View */}
         <main className="flex-1 overflow-y-auto">

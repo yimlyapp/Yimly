@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
 import { playlists, playlistSongs, songs, artists, albums, users } from '../db/schema.js';
-import { eq, and, or, asc, inArray, sql } from 'drizzle-orm';
+import { eq, and, asc, sql } from 'drizzle-orm';
 import { requireAuth, AuthenticatedRequest } from '../middleware/auth.js';
 import { formatArtistDisplay } from '../lib/artist-utils.js';
 import { getSongArtistsMap } from './songs.js';
@@ -22,7 +22,7 @@ const playlistUpdateSchema = z.object({
   isPublic: z.boolean().optional(),
 });
 
-// List all playlists accessible to the user (owned + public playlists)
+// List all playlists belonging to the user (or all if admin)
 router.get('/', async (req: AuthenticatedRequest, res) => {
   try {
     const userId = req.user?.id;
@@ -30,11 +30,9 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
 
     let condition;
     if (isAdmin) {
-      // Admin can see all playlists
       condition = undefined;
     } else {
-      // User can see their own playlists + any public playlists
-      condition = or(eq(playlists.userId, userId!), eq(playlists.isPublic, 1));
+      condition = eq(playlists.userId, userId!);
     }
 
     const allPlaylists = await db.select({
@@ -67,11 +65,17 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// Create a new playlist
+// Create a new playlist (server determines owner from authentication, client-supplied userId is ignored)
 router.post('/', async (req: AuthenticatedRequest, res) => {
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    // Ensure client cannot supply userId
+    if (req.body && ('userId' in req.body || 'user_id' in req.body)) {
+      delete req.body.userId;
+      delete req.body.user_id;
+    }
 
     const parsed = playlistCreateSchema.parse(req.body);
 
@@ -101,7 +105,7 @@ router.post('/', async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// Get playlist by ID with ordered songs
+// Get playlist by ID with ordered songs (enforcing user isolation: only owner or admin)
 router.get('/:id', async (req: AuthenticatedRequest, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -133,9 +137,9 @@ router.get('/:id', async (req: AuthenticatedRequest, res) => {
     const isOwner = p.userId === userId;
     const canEdit = isOwner || isAdmin;
 
-    // Authorization check: must be owner, admin, or playlist must be public
+    // Authorization check: User A must never read User B's private playlists
     if (!isOwner && !isAdmin && p.isPublic !== 1) {
-      return res.status(403).json({ error: 'Forbidden. This playlist is private.' });
+      return res.status(403).json({ error: 'Forbidden. Access denied.' });
     }
 
     // Fetch songs in playlist
@@ -195,8 +199,8 @@ router.get('/:id', async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// Update playlist details
-router.put('/:id', async (req: AuthenticatedRequest, res) => {
+// Update playlist details (PUT/PATCH)
+const handlePlaylistUpdate = async (req: AuthenticatedRequest, res: any) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid playlist ID' });
@@ -220,7 +224,7 @@ router.put('/:id', async (req: AuthenticatedRequest, res) => {
     };
 
     if (parsed.name !== undefined) updateData.name = parsed.name.trim();
-    if (parsed.description !== undefined) updateData.description = parsed.description.trim() || null;
+    if (parsed.description !== undefined) updateData.description = parsed.description?.trim() || null;
     if (parsed.isPublic !== undefined) updateData.isPublic = parsed.isPublic ? 1 : 0;
 
     const updated = await db.update(playlists).set(updateData).where(eq(playlists.id, id)).returning();
@@ -238,7 +242,10 @@ router.put('/:id', async (req: AuthenticatedRequest, res) => {
       res.status(500).json({ error: 'Failed to update playlist' });
     }
   }
-});
+};
+
+router.put('/:id', handlePlaylistUpdate);
+router.patch('/:id', handlePlaylistUpdate);
 
 // Delete playlist
 router.delete('/:id', async (req: AuthenticatedRequest, res) => {
@@ -268,14 +275,15 @@ router.delete('/:id', async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// Add song to playlist
+// Add song to playlist (preventing duplicates)
 router.post('/:id/songs', async (req: AuthenticatedRequest, res) => {
   try {
     const playlistId = parseInt(req.params.id);
     if (isNaN(playlistId)) return res.status(400).json({ error: 'Invalid playlist ID' });
 
     const { songId, position } = req.body;
-    if (!songId || isNaN(Number(songId))) {
+    const sId = Number(songId);
+    if (!songId || isNaN(sId)) {
       return res.status(400).json({ error: 'Valid songId is required' });
     }
 
@@ -291,9 +299,19 @@ router.post('/:id/songs', async (req: AuthenticatedRequest, res) => {
       return res.status(403).json({ error: 'Forbidden. You do not have permission to modify this playlist.' });
     }
 
-    const song = await db.select().from(songs).where(eq(songs.id, Number(songId))).limit(1);
+    const song = await db.select().from(songs).where(eq(songs.id, sId)).limit(1);
     if (song.length === 0) {
       return res.status(404).json({ error: 'Song not found' });
+    }
+
+    // Check duplicate policy (prevent duplicate songs within a playlist)
+    const duplicateCheck = await db.select()
+      .from(playlistSongs)
+      .where(and(eq(playlistSongs.playlistId, playlistId), eq(playlistSongs.songId, sId)))
+      .limit(1);
+
+    if (duplicateCheck.length > 0) {
+      return res.status(400).json({ error: 'Song is already in this playlist' });
     }
 
     let itemPos = Number(position);
@@ -301,12 +319,12 @@ router.post('/:id/songs', async (req: AuthenticatedRequest, res) => {
       const currSongs = await db.select({ position: playlistSongs.position })
         .from(playlistSongs)
         .where(eq(playlistSongs.playlistId, playlistId));
-      itemPos = currSongs.length > 0 ? Math.max(...currSongs.map(s => s.position)) + 1 : 1;
+      itemPos = currSongs.length > 0 ? Math.max(...currSongs.map(s => s.position)) + 1 : 0;
     }
 
     const inserted = await db.insert(playlistSongs).values({
       playlistId,
-      songId: Number(songId),
+      songId: sId,
       position: itemPos,
       addedAt: new Date(),
     }).returning();
@@ -321,12 +339,70 @@ router.post('/:id/songs', async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// Remove song from playlist
-router.delete('/:id/songs/:playlistSongId', async (req: AuthenticatedRequest, res) => {
+// Reorder playlist songs
+router.patch('/:id/songs/reorder', async (req: AuthenticatedRequest, res) => {
   try {
     const playlistId = parseInt(req.params.id);
-    const playlistSongId = parseInt(req.params.playlistSongId);
-    if (isNaN(playlistId) || isNaN(playlistSongId)) {
+    if (isNaN(playlistId)) return res.status(400).json({ error: 'Invalid playlist ID' });
+
+    const userId = req.user?.id;
+    const isAdmin = req.user?.role === 'administrator';
+
+    const existing = await db.select().from(playlists).where(eq(playlists.id, playlistId)).limit(1);
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Playlist not found' });
+    }
+
+    if (existing[0].userId !== userId && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden. You do not have permission to modify this playlist.' });
+    }
+
+    const { songIds, items } = req.body;
+
+    if (Array.isArray(songIds)) {
+      for (let i = 0; i < songIds.length; i++) {
+        const sId = Number(songIds[i]);
+        if (!isNaN(sId)) {
+          await db.update(playlistSongs)
+            .set({ position: i })
+            .where(and(eq(playlistSongs.playlistId, playlistId), eq(playlistSongs.songId, sId)));
+        }
+      }
+    } else if (Array.isArray(items)) {
+      for (const item of items) {
+        const pos = Number(item.position);
+        if (!isNaN(pos)) {
+          if (item.songId) {
+            await db.update(playlistSongs)
+              .set({ position: pos })
+              .where(and(eq(playlistSongs.playlistId, playlistId), eq(playlistSongs.songId, Number(item.songId))));
+          } else if (item.playlistSongId || item.id) {
+            const entryId = Number(item.playlistSongId || item.id);
+            await db.update(playlistSongs)
+              .set({ position: pos })
+              .where(and(eq(playlistSongs.playlistId, playlistId), eq(playlistSongs.id, entryId)));
+          }
+        }
+      }
+    } else {
+      return res.status(400).json({ error: 'Invalid reorder payload. Provide songIds array or items array.' });
+    }
+
+    await db.update(playlists).set({ updatedAt: new Date() }).where(eq(playlists.id, playlistId));
+
+    res.json({ message: 'Playlist songs reordered successfully' });
+  } catch (error) {
+    console.error('Failed to reorder playlist songs:', error);
+    res.status(500).json({ error: 'Failed to reorder playlist songs' });
+  }
+});
+
+// Remove song from playlist (supports songId or playlistSongId/entryId)
+router.delete('/:id/songs/:songOrEntryId', async (req: AuthenticatedRequest, res) => {
+  try {
+    const playlistId = parseInt(req.params.id);
+    const targetId = parseInt(req.params.songOrEntryId);
+    if (isNaN(playlistId) || isNaN(targetId)) {
       return res.status(400).json({ error: 'Invalid IDs' });
     }
 
@@ -342,18 +418,25 @@ router.delete('/:id/songs/:playlistSongId', async (req: AuthenticatedRequest, re
       return res.status(403).json({ error: 'Forbidden. You do not have permission to modify this playlist.' });
     }
 
-    const deleted = await db.delete(playlistSongs)
-      .where(and(eq(playlistSongs.id, playlistSongId), eq(playlistSongs.playlistId, playlistId)))
+    // Try deleting by playlist_songs.id first, then by playlist_songs.song_id
+    let deleted = await db.delete(playlistSongs)
+      .where(and(eq(playlistSongs.id, targetId), eq(playlistSongs.playlistId, playlistId)))
       .returning();
 
     if (deleted.length === 0) {
-      return res.status(404).json({ error: 'Playlist song entry not found' });
+      deleted = await db.delete(playlistSongs)
+        .where(and(eq(playlistSongs.songId, targetId), eq(playlistSongs.playlistId, playlistId)))
+        .returning();
+    }
+
+    if (deleted.length === 0) {
+      return res.status(404).json({ error: 'Song entry not found in playlist' });
     }
 
     // Update playlist updatedAt timestamp
     await db.update(playlists).set({ updatedAt: new Date() }).where(eq(playlists.id, playlistId));
 
-    res.json({ message: 'Song removed from playlist' });
+    res.json({ message: 'Song removed from playlist successfully' });
   } catch (error) {
     console.error('Failed to remove song from playlist:', error);
     res.status(500).json({ error: 'Failed to remove song from playlist' });

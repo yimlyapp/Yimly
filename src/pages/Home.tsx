@@ -121,6 +121,39 @@ export default function Home() {
     }
   };
 
+  const isNormalUser = user?.role === 'user';
+
+  if (isNormalUser) {
+    return (
+      <div className="min-h-[85vh] flex flex-col items-center justify-center p-6 md:p-12 text-center">
+        <div className="relative max-w-lg w-full overflow-hidden rounded-3xl bg-gradient-to-br from-[#171827] via-[#1b172a] to-[#141522] border border-white/10 p-8 md:p-14 shadow-2xl">
+          <div className="absolute top-0 right-0 w-72 h-72 bg-[#FF4FA3]/15 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
+          
+          <div className="relative z-10 flex flex-col items-center">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#FF4FA3] to-[#e0378b] flex items-center justify-center shadow-xl shadow-[#FF4FA3]/25 mb-6">
+              <Mic className="w-8 h-8 text-white" />
+            </div>
+
+            <h1 className="text-3xl md:text-4xl font-extrabold text-white tracking-tight mb-3">
+              Yimly
+            </h1>
+
+            <p className="text-zinc-400 text-sm md:text-base leading-relaxed mb-8 max-w-sm">
+              Welcome back{user?.username ? `, ${user.username}` : ''}! Launch your karaoke hosting session instantly.
+            </p>
+
+            <button
+              onClick={createRoom}
+              className="w-full sm:w-auto px-8 py-4 bg-[#FF4FA3] hover:bg-[#ff69b2] text-white font-bold text-base rounded-2xl transition-all shadow-xl shadow-[#FF4FA3]/30 flex items-center justify-center gap-3 hover:scale-[1.02] active:scale-[0.98]"
+            >
+              <Mic className="w-5 h-5" />
+              <span>Host Karaoke</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="p-6 md:p-10 max-w-7xl mx-auto space-y-10">
       {/* Hero / Welcome Banner */}
