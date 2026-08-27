@@ -472,6 +472,105 @@ test('Multiple simultaneous karaoke rooms hosted by same user', async () => {
   assert.strictEqual(roomIdsAfter.includes(room2.id), false);
 });
 
+test('Community Playlists visibility and privacy test scenario', async () => {
+  // 1. User A creates a Community Playlist ("Test Community Playlist", isPublic: true)
+  const createPublicRes = await fetch(`${baseUrl}/api/playlists`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+    body: JSON.stringify({ name: 'Test Community Playlist', isPublic: true })
+  });
+  assert.strictEqual(createPublicRes.status, 201);
+  const publicPlaylist = await createPublicRes.json();
+  assert.strictEqual(publicPlaylist.name, 'Test Community Playlist');
+  assert.strictEqual(publicPlaylist.isPublic, true);
+
+  // 2. User A creates a Personal Playlist ("Test Personal Playlist", isPublic: false)
+  const createPrivateRes = await fetch(`${baseUrl}/api/playlists`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+    body: JSON.stringify({ name: 'Test Personal Playlist', isPublic: false })
+  });
+  assert.strictEqual(createPrivateRes.status, 201);
+  const privatePlaylist = await createPrivateRes.json();
+
+  // 3. User B (different normal authenticated user) requests playlist listing
+  const listResB = await fetch(`${baseUrl}/api/playlists`, {
+    headers: { Authorization: `Bearer ${tokenB}` }
+  });
+  assert.strictEqual(listResB.status, 200);
+  const playlistsB = await listResB.json();
+
+  // ASSERT: User B receives "Test Community Playlist"
+  const foundCommunity = playlistsB.find((p: any) => p.id === publicPlaylist.id);
+  assert.ok(foundCommunity, 'User B should see User A\'s Community Playlist in listing');
+  assert.strictEqual(foundCommunity.name, 'Test Community Playlist');
+
+  // 4. User B opens the same Community Playlist
+  const detailResB = await fetch(`${baseUrl}/api/playlists/${publicPlaylist.id}`, {
+    headers: { Authorization: `Bearer ${tokenB}` }
+  });
+  assert.strictEqual(detailResB.status, 200, 'User B should successfully load Community Playlist detail');
+  const detailDataB = await detailResB.json();
+  assert.strictEqual(detailDataB.id, publicPlaylist.id);
+
+  // 5. User B requests User A's PERSONAL playlist
+  const privateDetailResB = await fetch(`${baseUrl}/api/playlists/${privatePlaylist.id}`, {
+    headers: { Authorization: `Bearer ${tokenB}` }
+  });
+  assert.strictEqual(privateDetailResB.status, 403, 'User B cannot access User A\'s personal playlist');
+});
+
+test('Community Playlist cover image upload and cross-user retrieval test scenario', async () => {
+  // 1. User A creates a public Community Playlist
+  const createRes = await fetch(`${baseUrl}/api/playlists`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+    body: JSON.stringify({ name: 'Cover Test Community Playlist', isPublic: true })
+  });
+  assert.strictEqual(createRes.status, 201);
+  const playlist = await createRes.json();
+  assert.strictEqual(playlist.coverImageUrl, null);
+
+  // Valid small JPEG magic bytes (FFE8 / FFD8 / FFE0 ...)
+  const sampleJpeg = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01, 0x00, 0x48, 0x00, 0x48, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09, 0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D, 0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12, 0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D, 0x1A, 0x1C, 0x1C, 0x20, 0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28, 0x37, 0x29, 0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32, 0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x0A, 0x00, 0x0A, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00, 0x1F, 0x00, 0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0x37, 0xFF, 0xD9]);
+
+  // 2. User B (unauthorized to edit) attempts to upload cover -> 403
+  const unauthorizedUpload = await fetch(`${baseUrl}/api/playlists/${playlist.id}/cover`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'image/jpeg', Authorization: `Bearer ${tokenB}` },
+    body: sampleJpeg
+  });
+  assert.strictEqual(unauthorizedUpload.status, 403);
+
+  // 3. User A (owner) uploads cover -> 200
+  const uploadRes = await fetch(`${baseUrl}/api/playlists/${playlist.id}/cover`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'image/jpeg', Authorization: `Bearer ${tokenA}` },
+    body: sampleJpeg
+  });
+  assert.strictEqual(uploadRes.status, 200);
+  const uploadData = await uploadRes.json();
+  assert.ok(uploadData.coverImageUrl);
+
+  // 4. User B (different user) retrieves the playlist cover image -> 200 with image bytes
+  const getCoverRes = await fetch(`${baseUrl}${uploadData.coverImageUrl}`, {
+    headers: { Authorization: `Bearer ${tokenB}` }
+  });
+  assert.strictEqual(getCoverRes.status, 200);
+  assert.strictEqual(getCoverRes.headers.get('content-type'), 'image/jpeg');
+  const bufferResult = Buffer.from(await getCoverRes.arrayBuffer());
+  assert.strictEqual(bufferResult.length, sampleJpeg.length);
+
+  // 5. User A deletes the cover -> 200
+  const deleteCoverRes = await fetch(`${baseUrl}/api/playlists/${playlist.id}/cover`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${tokenA}` }
+  });
+  assert.strictEqual(deleteCoverRes.status, 200);
+  const deletedData = await deleteCoverRes.json();
+  assert.strictEqual(deletedData.coverImageUrl, null);
+});
+
 test('Close server', async () => {
   await new Promise<void>((resolve) => {
     server.close(() => resolve());

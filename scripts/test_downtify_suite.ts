@@ -102,7 +102,6 @@ async function runComprehensiveDowntifyTests() {
     const inserted = await db.insert(libraries).values({
       name: 'Test Library',
       path: testLibPath,
-      createdAt: new Date(),
     }).returning();
     targetLib = inserted[0];
   }

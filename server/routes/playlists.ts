@@ -1,4 +1,7 @@
 import { Router } from 'express';
+import express from 'express';
+import fs from 'fs';
+import path from 'path';
 import { db } from '../db/index.js';
 import { playlists, playlistSongs, songs, artists, albums, users, playlistShares } from '../db/schema.js';
 import { eq, and, or, asc, sql } from 'drizzle-orm';
@@ -36,6 +39,7 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
         name: playlists.name,
         description: playlists.description,
         isPublic: playlists.isPublic,
+        coverPath: playlists.coverPath,
         createdAt: playlists.createdAt,
         updatedAt: playlists.updatedAt,
         ownerName: users.username,
@@ -52,6 +56,7 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
         name: playlists.name,
         description: playlists.description,
         isPublic: playlists.isPublic,
+        coverPath: playlists.coverPath,
         createdAt: playlists.createdAt,
         updatedAt: playlists.updatedAt,
         ownerName: users.username,
@@ -61,7 +66,7 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
       .from(playlists)
       .leftJoin(users, eq(playlists.userId, users.id))
       .leftJoin(playlistShares, eq(playlists.id, playlistShares.playlistId))
-      .where(or(eq(playlists.userId, userId!), eq(playlistShares.userId, userId!)))
+      .where(or(eq(playlists.userId, userId!), eq(playlistShares.userId, userId!), eq(playlists.isPublic, 1)))
       .orderBy(asc(playlists.name));
     }
 
@@ -70,7 +75,8 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
       isPublic: p.isPublic === 1,
       isOwner: p.userId === userId,
       canEdit: p.userId === userId || isAdmin || p.sharePermission === 'edit',
-      permission: p.userId === userId ? 'owner' : (p.sharePermission || 'none')
+      permission: p.userId === userId ? 'owner' : (p.sharePermission || 'none'),
+      coverImageUrl: p.coverPath ? `/api/playlists/${p.id}/cover` : null,
     }));
 
     // Remove duplicates if the query returned any due to multiple shares (shouldn't happen with distinct, but just in case)
@@ -114,7 +120,8 @@ router.post('/', async (req: AuthenticatedRequest, res) => {
       isOwner: true,
       canEdit: true,
       songs: [],
-      permission: 'owner'
+      permission: 'owner',
+      coverImageUrl: created[0].coverPath ? `/api/playlists/${created[0].id}/cover` : null,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -136,6 +143,7 @@ async function getPlaylistAndAccess(playlistId: number, reqUser: any) {
     name: playlists.name,
     description: playlists.description,
     isPublic: playlists.isPublic,
+    coverPath: playlists.coverPath,
     createdAt: playlists.createdAt,
     updatedAt: playlists.updatedAt,
     ownerName: users.username,
@@ -235,11 +243,203 @@ router.get('/:id', async (req: AuthenticatedRequest, res) => {
       isOwner: access.isOwner,
       canEdit: access.canEdit,
       permission: access.isOwner ? 'owner' : (access.sharePermission || 'none'),
+      coverImageUrl: p.coverPath ? `/api/playlists/${p.id}/cover` : null,
       songs: formattedSongs,
     });
   } catch (error) {
     console.error('Failed to fetch playlist:', error);
     res.status(500).json({ error: 'Failed to fetch playlist' });
+  }
+});
+
+// Get playlist cover image
+router.get('/:id/cover', async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid playlist ID' });
+
+    const { playlist: p, access } = await getPlaylistAndAccess(id, req.user);
+    if (!p) return res.status(404).json({ error: 'Playlist not found' });
+
+    if (!access?.canView) {
+      return res.status(403).json({ error: 'Forbidden. Access denied.' });
+    }
+
+    if (!p.coverPath) {
+      return res.status(404).json({ error: 'No cover image found for this playlist' });
+    }
+
+    const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
+    const safeFilename = path.basename(p.coverPath);
+    const filePath = path.join(dataDir, 'playlist_covers', safeFilename);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Cover image file not found on disk' });
+    }
+
+    const ext = path.extname(safeFilename).toLowerCase();
+    const contentType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    res.sendFile(filePath);
+  } catch (error) {
+    console.error('Failed to serve playlist cover:', error);
+    res.status(500).json({ error: 'Failed to serve cover image' });
+  }
+});
+
+// Upload/update playlist cover image
+router.post('/:id/cover', express.raw({ type: ['image/*', 'application/octet-stream', 'application/json'], limit: '10mb' }), async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid playlist ID' });
+
+    const { playlist: p, access } = await getPlaylistAndAccess(id, req.user);
+    if (!p) return res.status(404).json({ error: 'Playlist not found' });
+
+    if (!access?.canEdit) {
+      return res.status(403).json({ error: 'Forbidden. Only authorized editors can change the playlist cover.' });
+    }
+
+    let imageBuffer: Buffer | null = null;
+    let mimeType = 'image/jpeg';
+
+    const contentType = req.headers['content-type'] || '';
+    if (Buffer.isBuffer(req.body)) {
+      imageBuffer = req.body;
+      if (contentType.includes('png')) mimeType = 'image/png';
+      else if (contentType.includes('webp')) mimeType = 'image/webp';
+      else if (contentType.includes('gif')) mimeType = 'image/gif';
+      else if (contentType.includes('jpeg') || contentType.includes('jpg')) mimeType = 'image/jpeg';
+    } else if (req.body && typeof req.body === 'object') {
+      const b64 = (req.body as any).base64 || (req.body as any).image || (req.body as any).cover;
+      if (typeof b64 === 'string') {
+        const matches = b64.match(/^data:(image\/[\w+.-]+);base64,(.+)$/);
+        if (matches) {
+          mimeType = matches[1];
+          imageBuffer = Buffer.from(matches[2], 'base64');
+        } else {
+          imageBuffer = Buffer.from(b64, 'base64');
+        }
+      }
+    }
+
+    if (!imageBuffer || imageBuffer.length === 0) {
+      return res.status(400).json({ error: 'No valid image data provided' });
+    }
+
+    if (imageBuffer.length > 10 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Image file too large (max 10MB)' });
+    }
+
+    let isValidImage = false;
+    let ext = '.jpg';
+    if (imageBuffer[0] === 0xFF && imageBuffer[1] === 0xD8 && imageBuffer[2] === 0xFF) {
+      isValidImage = true;
+      ext = '.jpg';
+      mimeType = 'image/jpeg';
+    } else if (imageBuffer[0] === 0x89 && imageBuffer[1] === 0x50 && imageBuffer[2] === 0x4E && imageBuffer[3] === 0x47) {
+      isValidImage = true;
+      ext = '.png';
+      mimeType = 'image/png';
+    } else if (imageBuffer[0] === 0x52 && imageBuffer[1] === 0x49 && imageBuffer[2] === 0x46 && imageBuffer[3] === 0x46 && imageBuffer[8] === 0x57 && imageBuffer[9] === 0x45 && imageBuffer[10] === 0x42 && imageBuffer[11] === 0x50) {
+      isValidImage = true;
+      ext = '.webp';
+      mimeType = 'image/webp';
+    } else if (imageBuffer[0] === 0x47 && imageBuffer[1] === 0x49 && imageBuffer[2] === 0x46) {
+      isValidImage = true;
+      ext = '.gif';
+      mimeType = 'image/gif';
+    } else {
+      if (contentType.includes('image/')) {
+        isValidImage = true;
+        if (contentType.includes('png')) ext = '.png';
+        else if (contentType.includes('webp')) ext = '.webp';
+        else if (contentType.includes('gif')) ext = '.gif';
+        else ext = '.jpg';
+      }
+    }
+
+    if (!isValidImage) {
+      return res.status(400).json({ error: 'Invalid or unsupported image format. Supported formats: JPEG, PNG, WebP, GIF.' });
+    }
+
+    const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
+    const coversDir = path.join(dataDir, 'playlist_covers');
+    if (!fs.existsSync(coversDir)) {
+      fs.mkdirSync(coversDir, { recursive: true });
+    }
+
+    if (p.coverPath) {
+      const oldPath = path.join(dataDir, 'playlist_covers', path.basename(p.coverPath));
+      if (fs.existsSync(oldPath)) {
+        try { fs.unlinkSync(oldPath); } catch (e) {}
+      }
+    }
+
+    const filename = `playlist_${id}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`;
+    const filePath = path.join(coversDir, filename);
+    fs.writeFileSync(filePath, imageBuffer);
+
+    const now = new Date();
+    const updated = await db.update(playlists)
+      .set({ coverPath: filename, updatedAt: now })
+      .where(eq(playlists.id, id))
+      .returning();
+
+    res.json({
+      ...updated[0],
+      isPublic: updated[0].isPublic === 1,
+      isOwner: access.isOwner,
+      canEdit: access.canEdit,
+      permission: access.isOwner ? 'owner' : (access.sharePermission || 'none'),
+      coverImageUrl: `/api/playlists/${id}/cover`,
+    });
+  } catch (error) {
+    console.error('Failed to upload playlist cover:', error);
+    res.status(500).json({ error: 'Failed to upload playlist cover' });
+  }
+});
+
+// Delete playlist cover image
+router.delete('/:id/cover', async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid playlist ID' });
+
+    const { playlist: p, access } = await getPlaylistAndAccess(id, req.user);
+    if (!p) return res.status(404).json({ error: 'Playlist not found' });
+
+    if (!access?.canEdit) {
+      return res.status(403).json({ error: 'Forbidden. Only authorized editors can remove the playlist cover.' });
+    }
+
+    const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
+    if (p.coverPath) {
+      const filePath = path.join(dataDir, 'playlist_covers', path.basename(p.coverPath));
+      if (fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); } catch (e) {}
+      }
+    }
+
+    const now = new Date();
+    const updated = await db.update(playlists)
+      .set({ coverPath: null, updatedAt: now })
+      .where(eq(playlists.id, id))
+      .returning();
+
+    res.json({
+      ...updated[0],
+      isPublic: updated[0].isPublic === 1,
+      isOwner: access.isOwner,
+      canEdit: access.canEdit,
+      permission: access.isOwner ? 'owner' : (access.sharePermission || 'none'),
+      coverImageUrl: null,
+    });
+  } catch (error) {
+    console.error('Failed to delete playlist cover:', error);
+    res.status(500).json({ error: 'Failed to delete playlist cover' });
   }
 });
 
@@ -269,7 +469,8 @@ const handlePlaylistUpdate = async (req: AuthenticatedRequest, res: any) => {
       isPublic: updated[0].isPublic === 1,
       isOwner: true,
       canEdit: true,
-      permission: 'owner'
+      permission: 'owner',
+      coverImageUrl: updated[0].coverPath ? `/api/playlists/${id}/cover` : null,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -294,6 +495,14 @@ router.delete('/:id', async (req: AuthenticatedRequest, res) => {
 
     if (!access?.isOwner && !access?.isAdmin) {
       return res.status(403).json({ error: 'Forbidden. Only the owner can delete this playlist.' });
+    }
+
+    const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
+    if (playlist.coverPath) {
+      const coverFilePath = path.join(dataDir, 'playlist_covers', path.basename(playlist.coverPath));
+      if (fs.existsSync(coverFilePath)) {
+        try { fs.unlinkSync(coverFilePath); } catch (e) {}
+      }
     }
 
     await db.delete(playlistShares).where(eq(playlistShares.playlistId, id));

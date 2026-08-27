@@ -101,6 +101,7 @@ export const playlists = sqliteTable('playlists', {
   name: text('name').notNull(),
   description: text('description'),
   isPublic: integer('is_public').notNull().default(0), // 0 = private (default), 1 = public
+  coverPath: text('cover_path'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 });

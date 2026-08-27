@@ -205,6 +205,7 @@ export async function setupDatabase() {
         name text NOT NULL,
         description text,
         is_public integer DEFAULT 0 NOT NULL,
+        cover_path text,
         created_at integer NOT NULL,
         updated_at integer NOT NULL,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -318,6 +319,13 @@ export async function setupDatabase() {
     await sqlite.execute('CREATE INDEX IF NOT EXISTS download_track_jobs_status_idx ON download_track_jobs (status);');
   } catch (e) {
     console.error('Failed to create download jobs tables:', e);
+  }
+
+  // Ensure cover_path column exists in playlists table (backward compatibility safety)
+  try {
+    await sqlite.execute('ALTER TABLE playlists ADD COLUMN cover_path text;');
+  } catch (e) {
+    // Column already exists, safe to ignore
   }
 
   // Normalize multi-artist metadata and backfill song_artists
