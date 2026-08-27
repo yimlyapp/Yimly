@@ -612,8 +612,14 @@ test('Song LRC management and complete song deletion test scenario (using test a
   const libRes = await db.insert(libraries).values({ name: 'Final Song Test Library', path: tempLibPath }).returning();
   const testLibId = libRes[0].id;
 
-  const artRes = await db.insert(artists).values({ name: 'Test Song Artist Final' }).returning();
-  const artId = artRes[0].id;
+  let artId: number;
+  const existingArt = await db.select().from(artists).where(eq(artists.name, 'Test Song Artist Final')).limit(1);
+  if (existingArt.length > 0) {
+    artId = existingArt[0].id;
+  } else {
+    const artRes = await db.insert(artists).values({ name: 'Test Song Artist Final' }).returning();
+    artId = artRes[0].id;
+  }
 
   const originalFilename = 'TEST SONG.mp3';
   const instrumentalFilename = 'TEST SONG (Instrumental).mp3';
@@ -691,12 +697,39 @@ test('Song LRC management and complete song deletion test scenario (using test a
   });
   assert.strictEqual(unauthEdit.status, 403);
 
+  // Security test: unauthenticated request to modify LRC -> 401
+  const noTokenEdit = await fetch(`${baseUrl}/api/songs/${songId}/lrc`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/plain' },
+    body: 'hack',
+  });
+  assert.strictEqual(noTokenEdit.status, 401);
+
   // Security test: test2 cannot delete song -> 403
   const unauthDel = await fetch(`${baseUrl}/api/songs/${songId}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${tokenTest2}` },
   });
   assert.strictEqual(unauthDel.status, 403);
+
+  // Invalid song ID test -> 400
+  const invalidIdDel = await fetch(`${baseUrl}/api/songs/invalid_id`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${tokenTest}` },
+  });
+  assert.strictEqual(invalidIdDel.status, 400);
+
+  // Test DELETE /api/songs/:id/lrc as Admin
+  const deleteLrcRes = await fetch(`${baseUrl}/api/songs/${songId}/lrc`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${tokenTest}` },
+  });
+  assert.strictEqual(deleteLrcRes.status, 200);
+  assert.strictEqual(fsSync.existsSync(lrcFilePath), false);
+
+  // Re-create LRC file before complete song deletion
+  fsSync.writeFileSync(lrcFilePath, '[00:05.00]Restored lyric for delete test');
+  await db.insert(lyrics).values({ songId: songId, lrcPath: lrcFilePath });
 
   // G. Delete the song completely using test (admin)
   const delRes = await fetch(`${baseUrl}/api/songs/${songId}`, {
