@@ -548,54 +548,129 @@ test('Community Playlists visibility and privacy test scenario', async () => {
 });
 
 test('Community Playlist cover image upload and cross-user retrieval test scenario', async () => {
-  // 1. User A creates a public Community Playlist
+  const tokenTest = (global as any).tokenTest;
+  const tokenTest2 = (global as any).tokenTest2;
+
+  // 1. User 'test' creates a public Community Playlist
   const createRes = await fetch(`${baseUrl}/api/playlists`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenTest}` },
     body: JSON.stringify({ name: 'Cover Test Community Playlist', isPublic: true })
   });
   assert.strictEqual(createRes.status, 201);
   const playlist = await createRes.json();
   assert.strictEqual(playlist.coverImageUrl, null);
 
-  // Valid small JPEG magic bytes (FFE8 / FFD8 / FFE0 ...)
+  // Valid small JPEG magic bytes
   const sampleJpeg = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01, 0x00, 0x48, 0x00, 0x48, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09, 0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D, 0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12, 0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D, 0x1A, 0x1C, 0x1C, 0x20, 0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28, 0x37, 0x29, 0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32, 0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x0A, 0x00, 0x0A, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00, 0x1F, 0x00, 0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0x37, 0xFF, 0xD9]);
 
-  // 2. User B (unauthorized to edit) attempts to upload cover -> 403
+  // 2. User 'test2' (unauthorized non-owner) attempts to upload cover -> 403
   const unauthorizedUpload = await fetch(`${baseUrl}/api/playlists/${playlist.id}/cover`, {
     method: 'POST',
-    headers: { 'Content-Type': 'image/jpeg', Authorization: `Bearer ${tokenB}` },
+    headers: { 'Content-Type': 'image/jpeg', Authorization: `Bearer ${tokenTest2}` },
     body: sampleJpeg
   });
   assert.strictEqual(unauthorizedUpload.status, 403);
 
-  // 3. User A (owner) uploads cover -> 200
+  // 3. User 'test' (owner) uploads cover Cover A -> 200
   const uploadRes = await fetch(`${baseUrl}/api/playlists/${playlist.id}/cover`, {
     method: 'POST',
-    headers: { 'Content-Type': 'image/jpeg', Authorization: `Bearer ${tokenA}` },
+    headers: { 'Content-Type': 'image/jpeg', Authorization: `Bearer ${tokenTest}` },
     body: sampleJpeg
   });
   assert.strictEqual(uploadRes.status, 200);
   const uploadData = await uploadRes.json();
   assert.ok(uploadData.coverImageUrl);
+  assert.strictEqual(uploadData.coverImageUrl, `/api/playlists/${playlist.id}/cover`);
 
-  // 4. User B (different user) retrieves the playlist cover image -> 200 with image bytes
-  const getCoverRes = await fetch(`${baseUrl}${uploadData.coverImageUrl}`, {
-    headers: { Authorization: `Bearer ${tokenB}` }
+  // Verify DB record contains cover_path
+  const dbPlaylist = await db.select().from(playlists).where(eq(playlists.id, playlist.id)).limit(1);
+  assert.ok(dbPlaylist.length > 0);
+  assert.ok(dbPlaylist[0].coverPath, 'Database playlists table must store persistent coverPath');
+
+  // Verify image file exists on disk
+  const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
+  const coverFilePathA = path.join(dataDir, 'playlist_covers', path.basename(dbPlaylist[0].coverPath!));
+  assert.ok(fsSync.existsSync(coverFilePathA), 'Cover image file A must exist on disk in playlist_covers directory');
+
+  // 4. User 'test' GET community playlists -> returns coverImageUrl
+  const listResTest = await fetch(`${baseUrl}/api/playlists`, {
+    headers: { Authorization: `Bearer ${tokenTest}` }
   });
-  assert.strictEqual(getCoverRes.status, 200);
-  assert.strictEqual(getCoverRes.headers.get('content-type'), 'image/jpeg');
-  const bufferResult = Buffer.from(await getCoverRes.arrayBuffer());
+  assert.strictEqual(listResTest.status, 200);
+  const listTest = await listResTest.json();
+  const foundTest = listTest.find((p: any) => p.id === playlist.id);
+  assert.ok(foundTest);
+  assert.strictEqual(foundTest.coverImageUrl, `/api/playlists/${playlist.id}/cover`);
+
+  // 5. User 'test2' GET community playlists -> returns same coverImageUrl
+  const listResTest2 = await fetch(`${baseUrl}/api/playlists`, {
+    headers: { Authorization: `Bearer ${tokenTest2}` }
+  });
+  assert.strictEqual(listResTest2.status, 200);
+  const listTest2 = await listResTest2.json();
+  const foundTest2 = listTest2.find((p: any) => p.id === playlist.id);
+  assert.ok(foundTest2, 'User test2 must see the community playlist in GET /api/playlists');
+  assert.strictEqual(foundTest2.coverImageUrl, `/api/playlists/${playlist.id}/cover`, 'User test2 must see the coverImageUrl');
+
+  // 6. User 'test2' GET individual playlist detail -> returns same coverImageUrl
+  const detailResTest2 = await fetch(`${baseUrl}/api/playlists/${playlist.id}`, {
+    headers: { Authorization: `Bearer ${tokenTest2}` }
+  });
+  assert.strictEqual(detailResTest2.status, 200);
+  const detailDataTest2 = await detailResTest2.json();
+  assert.strictEqual(detailDataTest2.coverImageUrl, `/api/playlists/${playlist.id}/cover`);
+
+  // 7. User 'test2' requests image URL directly -> HTTP 200 with correct image content
+  const getCoverResTest2 = await fetch(`${baseUrl}${foundTest2.coverImageUrl}`, {
+    headers: { Authorization: `Bearer ${tokenTest2}` }
+  });
+  assert.strictEqual(getCoverResTest2.status, 200);
+  assert.strictEqual(getCoverResTest2.headers.get('content-type'), 'image/jpeg');
+  const bufferResult = Buffer.from(await getCoverResTest2.arrayBuffer());
   assert.strictEqual(bufferResult.length, sampleJpeg.length);
 
-  // 5. User A deletes the cover -> 200
+  // 8. Replace Cover with Cover B (PNG format via JSON base64 body)
+  const samplePng = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82]);
+  const base64Png = `data:image/png;base64,${samplePng.toString('base64')}`;
+
+  const replaceRes = await fetch(`${baseUrl}/api/playlists/${playlist.id}/cover`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenTest}` },
+    body: JSON.stringify({ image: base64Png })
+  });
+  assert.strictEqual(replaceRes.status, 200);
+
+  // Verify Cover B updated in DB
+  const dbPlaylistB = await db.select().from(playlists).where(eq(playlists.id, playlist.id)).limit(1);
+  assert.ok(dbPlaylistB[0].coverPath);
+  assert.notStrictEqual(dbPlaylistB[0].coverPath, dbPlaylist[0].coverPath, 'Cover path in DB must point to Cover B');
+
+  // Verify old Cover A file is removed and Cover B file exists
+  assert.strictEqual(fsSync.existsSync(coverFilePathA), false, 'Old Cover A file should be unlinked');
+  const coverFilePathB = path.join(dataDir, 'playlist_covers', path.basename(dbPlaylistB[0].coverPath!));
+  assert.ok(fsSync.existsSync(coverFilePathB), 'New Cover B file must exist on disk');
+
+  // User 'test2' fetches Cover B via image URL -> 200 with PNG content-type
+  const getCoverB = await fetch(`${baseUrl}/api/playlists/${playlist.id}/cover`, {
+    headers: { Authorization: `Bearer ${tokenTest2}` }
+  });
+  assert.strictEqual(getCoverB.status, 200);
+  assert.strictEqual(getCoverB.headers.get('content-type'), 'image/png');
+
+  // 9. Remove Cover -> DELETE /api/playlists/:id/cover
   const deleteCoverRes = await fetch(`${baseUrl}/api/playlists/${playlist.id}/cover`, {
     method: 'DELETE',
-    headers: { Authorization: `Bearer ${tokenA}` }
+    headers: { Authorization: `Bearer ${tokenTest}` }
   });
   assert.strictEqual(deleteCoverRes.status, 200);
   const deletedData = await deleteCoverRes.json();
   assert.strictEqual(deletedData.coverImageUrl, null);
+
+  // Verify DB record cover_path is null and file deleted
+  const dbPlaylistDeleted = await db.select().from(playlists).where(eq(playlists.id, playlist.id)).limit(1);
+  assert.strictEqual(dbPlaylistDeleted[0].coverPath, null);
+  assert.strictEqual(fsSync.existsSync(coverFilePathB), false);
 });
 
 test('Song LRC management and complete song deletion test scenario (using test and test2)', async () => {

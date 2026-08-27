@@ -307,13 +307,34 @@ router.post('/:id/cover', express.raw({ type: ['image/*', 'application/octet-str
 
     const contentType = req.headers['content-type'] || '';
     if (Buffer.isBuffer(req.body)) {
-      imageBuffer = req.body;
-      if (contentType.includes('png')) mimeType = 'image/png';
-      else if (contentType.includes('webp')) mimeType = 'image/webp';
-      else if (contentType.includes('gif')) mimeType = 'image/gif';
-      else if (contentType.includes('jpeg') || contentType.includes('jpg')) mimeType = 'image/jpeg';
+      if (contentType.includes('json') || req.body[0] === 0x7B) {
+        try {
+          const jsonBody = JSON.parse(req.body.toString('utf-8'));
+          const b64 = jsonBody.base64 || jsonBody.image || jsonBody.cover || jsonBody.coverImage || jsonBody.cover_image || jsonBody.artwork || jsonBody.data;
+          if (typeof b64 === 'string') {
+            const matches = b64.match(/^data:(image\/[\w+.-]+);base64,(.+)$/);
+            if (matches) {
+              mimeType = matches[1];
+              imageBuffer = Buffer.from(matches[2], 'base64');
+            } else {
+              imageBuffer = Buffer.from(b64, 'base64');
+            }
+          }
+        } catch (e) {
+          imageBuffer = req.body;
+        }
+      } else {
+        imageBuffer = req.body;
+      }
+
+      if (imageBuffer && !contentType.includes('json')) {
+        if (contentType.includes('png')) mimeType = 'image/png';
+        else if (contentType.includes('webp')) mimeType = 'image/webp';
+        else if (contentType.includes('gif')) mimeType = 'image/gif';
+        else if (contentType.includes('jpeg') || contentType.includes('jpg')) mimeType = 'image/jpeg';
+      }
     } else if (req.body && typeof req.body === 'object') {
-      const b64 = (req.body as any).base64 || (req.body as any).image || (req.body as any).cover;
+      const b64 = (req.body as any).base64 || (req.body as any).image || (req.body as any).cover || (req.body as any).coverImage || (req.body as any).cover_image || (req.body as any).artwork || (req.body as any).data;
       if (typeof b64 === 'string') {
         const matches = b64.match(/^data:(image\/[\w+.-]+);base64,(.+)$/);
         if (matches) {
