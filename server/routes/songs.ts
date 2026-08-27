@@ -1,8 +1,8 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import { db } from '../db/index.js';
-import { songs, artists, albums, lyrics, songArtists } from '../db/schema.js';
+import { songs, artists, albums, lyrics, songArtists, playlistSongs, favorites, queueItems } from '../db/schema.js';
 import { eq, like, or, inArray, asc } from 'drizzle-orm';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireAdmin, AuthenticatedRequest } from '../middleware/auth.js';
 import { formatArtistDisplay } from '../lib/artist-utils.js';
 import { broadcastSongOffsetToRooms } from '../ws/index.js';
 import fs from 'fs';
@@ -374,5 +374,171 @@ const updateSongLyricOffset = async (req: any, res: any) => {
 router.put('/:id/lyrics/offset', updateSongLyricOffset);
 router.post('/:id/lyrics/offset', updateSongLyricOffset);
 router.patch('/:id/lyrics/offset', updateSongLyricOffset);
+
+// --- LRC Management Routes ---
+
+const handleUploadOrUpdateLrc = async (req: AuthenticatedRequest, res: any) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid song ID' });
+
+    const song = await db.select().from(songs).where(eq(songs.id, id)).limit(1);
+    if (song.length === 0) return res.status(404).json({ error: 'Song not found' });
+
+    let lrcContent = '';
+    if (typeof req.body === 'string') {
+      lrcContent = req.body;
+    } else if (Buffer.isBuffer(req.body)) {
+      lrcContent = req.body.toString('utf-8');
+    } else if (req.body && typeof req.body === 'object') {
+      lrcContent = req.body.content || req.body.lyrics || req.body.lrc || '';
+    }
+
+    if (typeof lrcContent !== 'string') {
+      lrcContent = String(lrcContent || '');
+    }
+
+    const existingLrc = await db.select().from(lyrics).where(eq(lyrics.songId, id)).limit(1);
+    let lrcPath = existingLrc.length > 0 ? existingLrc[0].lrcPath : null;
+
+    if (!lrcPath) {
+      const audioPath = song[0].mainAudioPath || song[0].instrumentalAudioPath;
+      if (!audioPath) {
+        return res.status(400).json({ error: 'Song has no audio path associated' });
+      }
+      const dir = path.dirname(audioPath);
+      const audioExt = path.extname(audioPath);
+      const baseName = path.basename(audioPath, audioExt);
+      const cleanBase = baseName.replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim();
+      lrcPath = path.join(dir, `${cleanBase}.lrc`);
+    }
+
+    const dir = path.dirname(lrcPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    fs.writeFileSync(lrcPath, lrcContent, 'utf-8');
+
+    if (existingLrc.length === 0) {
+      await db.insert(lyrics).values({ songId: id, lrcPath });
+    } else {
+      await db.update(lyrics).set({ lrcPath }).where(eq(lyrics.songId, id));
+    }
+
+    res.json({
+      success: true,
+      songId: id,
+      lrcPath,
+      hasLrc: true,
+      content: lrcContent,
+    });
+  } catch (error) {
+    console.error('Failed to save LRC:', error);
+    res.status(500).json({ error: 'Failed to save LRC lyrics' });
+  }
+};
+
+router.post('/:id/lrc', requireAdmin, express.text({ type: ['text/*', 'application/octet-stream', 'application/json'] }), handleUploadOrUpdateLrc);
+router.put('/:id/lrc', requireAdmin, express.text({ type: ['text/*', 'application/octet-stream', 'application/json'] }), handleUploadOrUpdateLrc);
+router.patch('/:id/lrc', requireAdmin, express.text({ type: ['text/*', 'application/octet-stream', 'application/json'] }), handleUploadOrUpdateLrc);
+
+router.delete('/:id/lrc', requireAdmin, async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid song ID' });
+
+    const existingLrc = await db.select().from(lyrics).where(eq(lyrics.songId, id)).limit(1);
+    if (existingLrc.length > 0) {
+      if (existingLrc[0].lrcPath && fs.existsSync(existingLrc[0].lrcPath)) {
+        try { fs.unlinkSync(existingLrc[0].lrcPath); } catch (e) {}
+      }
+      await db.delete(lyrics).where(eq(lyrics.songId, id));
+    }
+
+    res.json({ success: true, songId: id, hasLrc: false });
+  } catch (error) {
+    console.error('Failed to delete LRC:', error);
+    res.status(500).json({ error: 'Failed to delete LRC lyrics' });
+  }
+});
+
+// --- Complete Song Delete Route ---
+
+router.delete('/:id', requireAdmin, async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid song ID' });
+
+    const song = await db.select().from(songs).where(eq(songs.id, id)).limit(1);
+    if (song.length === 0) return res.status(404).json({ error: 'Song not found' });
+
+    const targetSong = song[0];
+    const filesToDelete: string[] = [];
+
+    if (targetSong.mainAudioPath && fs.existsSync(targetSong.mainAudioPath)) {
+      filesToDelete.push(targetSong.mainAudioPath);
+    }
+    if (targetSong.instrumentalAudioPath && fs.existsSync(targetSong.instrumentalAudioPath)) {
+      filesToDelete.push(targetSong.instrumentalAudioPath);
+    }
+
+    const lrcRec = await db.select().from(lyrics).where(eq(lyrics.songId, id)).limit(1);
+    if (lrcRec.length > 0 && lrcRec[0].lrcPath && fs.existsSync(lrcRec[0].lrcPath)) {
+      filesToDelete.push(lrcRec[0].lrcPath);
+    }
+
+    if (targetSong.mainAudioPath) {
+      const dir = path.dirname(targetSong.mainAudioPath);
+      const audioExt = path.extname(targetSong.mainAudioPath);
+      const baseName = path.basename(targetSong.mainAudioPath, audioExt);
+      const cleanBase = baseName.replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim().toLowerCase();
+
+      if (fs.existsSync(dir)) {
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.isFile() && entry.name.toLowerCase().endsWith('.lrc')) {
+              const lrcBase = path.basename(entry.name, '.lrc');
+              const cleanLrcBase = lrcBase.replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim().toLowerCase();
+              if (cleanLrcBase === cleanBase || lrcBase.toLowerCase() === baseName.toLowerCase()) {
+                const fullLrcPath = path.join(dir, entry.name);
+                if (!filesToDelete.includes(fullLrcPath)) {
+                  filesToDelete.push(fullLrcPath);
+                }
+              }
+            }
+          }
+        } catch (e) {}
+      }
+    }
+
+    for (const filePath of filesToDelete) {
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      } catch (err) {
+        console.error(`Failed to delete file ${filePath}:`, err);
+      }
+    }
+
+    await db.delete(lyrics).where(eq(lyrics.songId, id));
+    await db.delete(playlistSongs).where(eq(playlistSongs.songId, id));
+    await db.delete(favorites).where(eq(favorites.songId, id));
+    await db.delete(queueItems).where(eq(queueItems.songId, id));
+    await db.delete(songArtists).where(eq(songArtists.songId, id));
+    await db.delete(songs).where(eq(songs.id, id));
+
+    res.json({
+      success: true,
+      deletedSongId: id,
+      deletedFiles: filesToDelete,
+    });
+  } catch (error) {
+    console.error('Failed to delete song completely:', error);
+    res.status(500).json({ error: 'Failed to delete song' });
+  }
+});
 
 export default router;

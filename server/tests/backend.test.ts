@@ -5,8 +5,10 @@ import http from 'http';
 import cookieParser from 'cookie-parser';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import fsSync from 'fs';
+import path from 'path';
 import { db, setupDatabase } from '../db/index.js';
-import { users, libraries, artists, songs, favorites, playlists, playlistSongs } from '../db/schema.js';
+import { users, libraries, artists, songs, favorites, playlists, playlistSongs, lyrics } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 
 import playlistsRoutes from '../routes/playlists.js';
@@ -80,6 +82,31 @@ test('Setup test environment and start server', async () => {
 
   tokenA = jwt.sign({ id: userAId, username: 'testuser_a', role: 'user' }, JWT_SECRET, { expiresIn: '1h' });
   tokenB = jwt.sign({ id: userBId, username: 'testuser_b', role: 'user' }, JWT_SECRET, { expiresIn: '1h' });
+
+  let testUserId: number;
+  let test2UserId: number;
+  const existingTestUser = await db.select().from(users).where(eq(users.username, 'test')).limit(1);
+  if (existingTestUser.length > 0) {
+    testUserId = existingTestUser[0].id;
+    await db.update(users).set({ role: 'administrator' }).where(eq(users.id, testUserId));
+  } else {
+    const ins = await db.insert(users).values({ username: 'test', password: hashedPass, role: 'administrator', createdAt: new Date(), updatedAt: new Date() }).returning();
+    testUserId = ins[0].id;
+  }
+
+  const existingTest2User = await db.select().from(users).where(eq(users.username, 'test2')).limit(1);
+  if (existingTest2User.length > 0) {
+    test2UserId = existingTest2User[0].id;
+    await db.update(users).set({ role: 'user' }).where(eq(users.id, test2UserId));
+  } else {
+    const ins = await db.insert(users).values({ username: 'test2', password: hashedPass, role: 'user', createdAt: new Date(), updatedAt: new Date() }).returning();
+    test2UserId = ins[0].id;
+  }
+
+  const tokenTest = jwt.sign({ id: testUserId, username: 'test', role: 'administrator' }, JWT_SECRET, { expiresIn: '1h' });
+  const tokenTest2 = jwt.sign({ id: test2UserId, username: 'test2', role: 'user' }, JWT_SECRET, { expiresIn: '1h' });
+  (global as any).tokenTest = tokenTest;
+  (global as any).tokenTest2 = tokenTest2;
 tokenC = jwt.sign({ id: userCId, username: 'testuser_c', role: 'user' }, JWT_SECRET, { expiresIn: '1h' });
 
   let libId: number;
@@ -569,6 +596,129 @@ test('Community Playlist cover image upload and cross-user retrieval test scenar
   assert.strictEqual(deleteCoverRes.status, 200);
   const deletedData = await deleteCoverRes.json();
   assert.strictEqual(deletedData.coverImageUrl, null);
+});
+
+test('Song LRC management and complete song deletion test scenario (using test and test2)', async () => {
+  const tokenTest = (global as any).tokenTest;
+  const tokenTest2 = (global as any).tokenTest2;
+
+  // 1. Create temporary library and test files:
+  // Original: TEST SONG.mp3
+  // LRC: TEST SONG.lrc
+  // Instrumental: TEST SONG (Instrumental).mp3
+  const tempLibPath = path.join(process.cwd(), 'data', 'test_song_lib_final');
+  if (!fsSync.existsSync(tempLibPath)) fsSync.mkdirSync(tempLibPath, { recursive: true });
+
+  const libRes = await db.insert(libraries).values({ name: 'Final Song Test Library', path: tempLibPath }).returning();
+  const testLibId = libRes[0].id;
+
+  const artRes = await db.insert(artists).values({ name: 'Test Song Artist Final' }).returning();
+  const artId = artRes[0].id;
+
+  const originalFilename = 'TEST SONG.mp3';
+  const instrumentalFilename = 'TEST SONG (Instrumental).mp3';
+  const lrcFilename = 'TEST SONG.lrc';
+
+  const originalPath = path.join(tempLibPath, originalFilename);
+  const instrumentalPath = path.join(tempLibPath, instrumentalFilename);
+  const lrcFilePath = path.join(tempLibPath, lrcFilename);
+
+  fsSync.writeFileSync(originalPath, Buffer.from('fake mp3 data'));
+  fsSync.writeFileSync(instrumentalPath, Buffer.from('fake instrumental mp3 data'));
+  fsSync.writeFileSync(lrcFilePath, '[00:05.00]Initial test lyric');
+
+  const songIns = await db.insert(songs).values({
+    libraryId: testLibId,
+    artistId: artId,
+    title: 'TEST SONG',
+    mainAudioPath: originalPath,
+    instrumentalAudioPath: instrumentalPath,
+    duration: 210,
+  }).returning();
+  const songId = songIns[0].id;
+
+  await db.insert(lyrics).values({
+    songId: songId,
+    lrcPath: lrcFilePath,
+  });
+
+  // A. GET existing LRC
+  const getLrc1 = await fetch(`${baseUrl}/api/songs/${songId}/lyrics`);
+  assert.strictEqual(getLrc1.status, 200);
+  const text1 = await getLrc1.text();
+  assert.strictEqual(text1.includes('Initial test lyric'), true);
+
+  // B. Upload replacement LRC using test (admin)
+  const replacementLrc = '[00:10.00]Updated lyric line 1\n[00:20.00]Updated lyric line 2';
+  const uploadRes = await fetch(`${baseUrl}/api/songs/${songId}/lrc`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain', Authorization: `Bearer ${tokenTest}` },
+    body: replacementLrc,
+  });
+  assert.strictEqual(uploadRes.status, 200);
+
+  // C. GET LRC again & assert new LRC returned
+  const getLrc2 = await fetch(`${baseUrl}/api/songs/${songId}/lyrics`);
+  assert.strictEqual(getLrc2.status, 200);
+  const text2 = await getLrc2.text();
+  assert.strictEqual(text2, replacementLrc);
+
+  // D. Edit LRC through edit endpoint (PUT)
+  const editedLrc = '[00:12.34]Edited First lyric\n[00:16.20]Edited Second lyric\n[00:20.50]Edited Third lyric';
+  const editRes = await fetch(`${baseUrl}/api/songs/${songId}/lrc`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/plain', Authorization: `Bearer ${tokenTest}` },
+    body: editedLrc,
+  });
+  assert.strictEqual(editRes.status, 200);
+
+  // E. GET LRC again & assert exact edited content returned
+  const getLrc3 = await fetch(`${baseUrl}/api/songs/${songId}/lyrics`);
+  assert.strictEqual(getLrc3.status, 200);
+  const text3 = await getLrc3.text();
+  assert.strictEqual(text3, editedLrc);
+
+  // F. Persistence / Restart test simulation:
+  // Verify file on disk contains editedLrc
+  assert.strictEqual(fsSync.existsSync(lrcFilePath), true);
+  assert.strictEqual(fsSync.readFileSync(lrcFilePath, 'utf-8'), editedLrc);
+
+  // Security test: test2 (non-admin) cannot modify LRC -> 403
+  const unauthEdit = await fetch(`${baseUrl}/api/songs/${songId}/lrc`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/plain', Authorization: `Bearer ${tokenTest2}` },
+    body: 'hack',
+  });
+  assert.strictEqual(unauthEdit.status, 403);
+
+  // Security test: test2 cannot delete song -> 403
+  const unauthDel = await fetch(`${baseUrl}/api/songs/${songId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${tokenTest2}` },
+  });
+  assert.strictEqual(unauthDel.status, 403);
+
+  // G. Delete the song completely using test (admin)
+  const delRes = await fetch(`${baseUrl}/api/songs/${songId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${tokenTest}` },
+  });
+  assert.strictEqual(delRes.status, 200);
+  const delJson = await delRes.json();
+  assert.strictEqual(delJson.success, true);
+
+  // ASSERT: Original song deleted, matching LRC deleted, matching instrumental deleted
+  assert.strictEqual(fsSync.existsSync(originalPath), false);
+  assert.strictEqual(fsSync.existsSync(instrumentalPath), false);
+  assert.strictEqual(fsSync.existsSync(lrcFilePath), false);
+
+  // Verify song record removed from DB
+  const songCheck = await db.select().from(songs).where(eq(songs.id, songId)).limit(1);
+  assert.strictEqual(songCheck.length, 0);
+
+  // H. Verify an unrelated song remains (e.g. song1Id still exists)
+  const unrelatedCheck = await db.select().from(songs).where(eq(songs.id, song1Id)).limit(1);
+  assert.strictEqual(unrelatedCheck.length, 1);
 });
 
 test('Close server', async () => {
