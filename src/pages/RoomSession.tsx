@@ -235,6 +235,7 @@ export default function RoomSession() {
     }
   }, [showSessionInfoModal]);
 
+  const prevShowOverflowMenuRef = useRef(showOverflowMenu);
   useEffect(() => {
     if (showOverflowMenu) {
       const t = setTimeout(() => {
@@ -242,7 +243,11 @@ export default function RoomSession() {
         if (firstMenuItem) firstMenuItem.focus();
       }, 50);
       return () => clearTimeout(t);
+    } else if (prevShowOverflowMenuRef.current) {
+      const btn = document.querySelector<HTMLElement>('[data-tv-id="overflow-menu-button"]');
+      if (btn) btn.focus();
     }
+    prevShowOverflowMenuRef.current = showOverflowMenu;
   }, [showOverflowMenu]);
 
   useEffect(() => {
@@ -358,10 +363,47 @@ export default function RoomSession() {
 
         e.preventDefault();
 
+        const isRight = key === 'ArrowRight' || keyCode === 39;
+        const isLeft = key === 'ArrowLeft' || keyCode === 37;
+        const isDown = key === 'ArrowDown' || keyCode === 40;
+        const isUp = key === 'ArrowUp' || keyCode === 38;
+
+        // Special deterministic D-pad navigation inside 3-dot Overflow Menu
+        if (showOverflowMenu) {
+          const sessionInfoBtn = document.querySelector<HTMLElement>('[data-tv-id="menu-session-info"]');
+          const endSessionBtn = document.querySelector<HTMLElement>('[data-tv-id="menu-end-session"]');
+
+          if (isDown) {
+            if (activeEl === sessionInfoBtn || !endSessionBtn) {
+              endSessionBtn?.focus();
+            } else {
+              sessionInfoBtn?.focus();
+            }
+            return;
+          }
+          if (isUp) {
+            if (activeEl === endSessionBtn || !sessionInfoBtn) {
+              sessionInfoBtn?.focus();
+            } else {
+              endSessionBtn?.focus();
+            }
+            return;
+          }
+          if (isLeft || isRight) {
+            setShowOverflowMenu(false);
+            const menuBtn = document.querySelector<HTMLElement>('[data-tv-id="overflow-menu-button"]');
+            menuBtn?.focus();
+            return;
+          }
+        }
+
         // Determine container scope
         let searchContainer: HTMLElement | Document = document;
-        if (showEndSessionModal || showSessionInfoModal || showLibrary || showOverflowMenu) {
-          const activeModal = document.querySelector<HTMLElement>('.fixed.inset-0, .absolute.right-0.z-50');
+        if (showOverflowMenu) {
+          const menuBox = document.querySelector<HTMLElement>('[data-tv-id="overflow-menu-container"]');
+          if (menuBox) searchContainer = menuBox;
+        } else if (showEndSessionModal || showSessionInfoModal || showLibrary) {
+          const activeModal = document.querySelector<HTMLElement>('.fixed.inset-0 > div, .fixed.inset-0');
           if (activeModal) {
             searchContainer = activeModal;
           }
@@ -385,11 +427,6 @@ export default function RoomSession() {
 
         let bestCandidate: HTMLElement | null = null;
         let minScore = Infinity;
-
-        const isRight = key === 'ArrowRight' || keyCode === 39;
-        const isLeft = key === 'ArrowLeft' || keyCode === 37;
-        const isDown = key === 'ArrowDown' || keyCode === 40;
-        const isUp = key === 'ArrowUp' || keyCode === 38;
 
         for (const cand of navCandidates) {
           const candRect = cand.getBoundingClientRect();
@@ -1415,6 +1452,7 @@ export default function RoomSession() {
                       onClick={() => setShowOverflowMenu(false)} 
                     />
                     <motion.div
+                      data-tv-id="overflow-menu-container"
                       initial={{ opacity: 0, scale: 0.95, y: -5 }}
                       animate={{ opacity: 1, scale: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.95, y: -5 }}
@@ -1427,9 +1465,9 @@ export default function RoomSession() {
                           setShowOverflowMenu(false);
                           setShowSessionInfoModal(true);
                         }}
-                        className="w-full px-4 py-2.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 flex items-center gap-2.5 transition-colors font-medium focus:outline-none focus:bg-[#FF4FA3]/20 focus:text-white cursor-pointer"
+                        className="w-full px-4 py-2.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 flex items-center gap-2.5 transition-all font-medium focus:outline-none focus:bg-[#FF4FA3] focus:text-white focus:font-bold focus:shadow-[0_0_20px_rgba(255,79,163,0.6)] cursor-pointer group"
                       >
-                        <Info className="w-4 h-4 text-zinc-400" />
+                        <Info className="w-4 h-4 text-zinc-400 group-focus:text-white transition-colors" />
                         <span>Session Info</span>
                       </button>
                       <div className="border-t border-white/5 my-1" />
@@ -1439,9 +1477,9 @@ export default function RoomSession() {
                           setShowOverflowMenu(false);
                           setShowEndSessionModal(true);
                         }}
-                        className="w-full px-4 py-2.5 text-left text-red-400 hover:text-red-300 hover:bg-red-500/10 flex items-center gap-2.5 transition-colors font-semibold focus:outline-none focus:bg-red-500/20 focus:text-red-300 cursor-pointer"
+                        className="w-full px-4 py-2.5 text-left text-red-400 hover:text-red-300 hover:bg-red-500/10 flex items-center gap-2.5 transition-all font-semibold focus:outline-none focus:bg-red-600 focus:text-white focus:font-bold focus:shadow-[0_0_20px_rgba(239,68,68,0.6)] cursor-pointer group"
                       >
-                        <LogOut className="w-4 h-4 text-red-400" />
+                        <LogOut className="w-4 h-4 text-red-400 group-focus:text-white transition-colors" />
                         <span>End Session</span>
                       </button>
                     </motion.div>
