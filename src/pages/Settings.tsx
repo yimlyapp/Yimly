@@ -5,6 +5,7 @@ import {
   ShieldCheck, Type, AlignLeft, AlignCenter, AlignRight, RotateCcw, Sparkles, Download, Save, Check,
   Layers, Zap, Sliders, Eye, Shield
 } from 'lucide-react';
+import { AutoResponsiveLyrics } from '../components/AutoResponsiveLyrics';
 import { 
   getLyricsSettings, 
   saveLyricsSettings, 
@@ -218,118 +219,29 @@ export default function Settings() {
             <span>LIVE PREVIEW</span>
           </div>
 
-          <div className={`w-full flex flex-col my-auto space-y-2 max-w-xl ${getAlignmentClass(lyricsSettings.alignment)}`}>
-            {/* 2nd Previous Line (if 5 lines mode) */}
-            {(lyricsSettings.visibleLines ?? 3) === 5 && (
-              <p
-                style={{
-                  fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
-                  fontSize: `${Math.max(12, lyricsSettings.unhighlighted.size - 2)}px`,
-                  fontWeight: lyricsSettings.unhighlighted.weight,
-                  letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
-                  lineHeight: lyricsSettings.unhighlighted.lineSpacing,
-                  color: lyricsSettings.unhighlighted.color || '#d4d4d8',
-                  opacity: Math.max(0.15, (lyricsSettings.unhighlighted.opacity ?? 0.45) * 0.7),
-                  textAlign: lyricsSettings.alignment
-                }}
-                className="transition-all"
-              >
-                {applyTextCase('Earlier lyric line', lyricsSettings.unhighlighted.textCase)}
-              </p>
-            )}
-
-            {/* Previous Line (if 3 or 5 lines mode) */}
-            {(lyricsSettings.visibleLines ?? 3) >= 3 && (
-              <p
-                style={{
-                  fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
-                  fontSize: `${lyricsSettings.unhighlighted.size}px`,
-                  fontWeight: lyricsSettings.unhighlighted.weight,
-                  letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
-                  lineHeight: lyricsSettings.unhighlighted.lineSpacing,
-                  color: lyricsSettings.unhighlighted.color || '#d4d4d8',
-                  opacity: lyricsSettings.unhighlighted.opacity ?? 0.45,
-                  textAlign: lyricsSettings.alignment
-                }}
-                className="transition-all"
-              >
-                {applyTextCase('Previous lyric line', lyricsSettings.unhighlighted.textCase)}
-              </p>
-            )}
-
-            {/* Current Line (Highlighted if enabled) */}
-            {lyricsSettings.highlightCurrentLine !== false ? (
-              <p
-                style={{
-                  fontFamily: getFontFamilyStyle(lyricsSettings.highlighted.font),
-                  fontSize: `${lyricsSettings.highlighted.size}px`,
-                  fontWeight: lyricsSettings.highlighted.weight,
-                  letterSpacing: `${lyricsSettings.highlighted.letterSpacing}px`,
-                  lineHeight: lyricsSettings.highlighted.lineSpacing,
-                  color: lyricsSettings.highlighted.color || '#FF4FA3',
-                  opacity: lyricsSettings.highlighted.opacity ?? 1.0,
-                  filter: `drop-shadow(0 0 25px ${(lyricsSettings.highlighted.color || '#FF4FA3')}73)`,
-                  textAlign: lyricsSettings.alignment
-                }}
-                className="transition-all"
-              >
-                {applyTextCase('CURRENT ACTIVE LYRIC', lyricsSettings.highlighted.textCase)}
-              </p>
-            ) : (
-              <p
-                style={{
-                  fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
-                  fontSize: `${lyricsSettings.highlighted.size}px`,
-                  fontWeight: lyricsSettings.unhighlighted.weight,
-                  letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
-                  lineHeight: lyricsSettings.unhighlighted.lineSpacing,
-                  color: lyricsSettings.unhighlighted.color || '#d4d4d8',
-                  opacity: lyricsSettings.unhighlighted.opacity ?? 0.45,
-                  textAlign: lyricsSettings.alignment
-                }}
-                className="transition-all"
-              >
-                {applyTextCase('CURRENT ACTIVE LYRIC', lyricsSettings.unhighlighted.textCase)}
-              </p>
-            )}
-
-            {/* Next Line (if 3 or 5 lines mode) */}
-            {(lyricsSettings.visibleLines ?? 3) >= 3 && (
-              <p
-                style={{
-                  fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
-                  fontSize: `${lyricsSettings.unhighlighted.size}px`,
-                  fontWeight: lyricsSettings.unhighlighted.weight,
-                  letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
-                  lineHeight: lyricsSettings.unhighlighted.lineSpacing,
-                  color: lyricsSettings.unhighlighted.color || '#d4d4d8',
-                  opacity: lyricsSettings.unhighlighted.opacity ?? 0.45,
-                  textAlign: lyricsSettings.alignment
-                }}
-                className="transition-all"
-              >
-                {applyTextCase('Next upcoming lyric', lyricsSettings.unhighlighted.textCase)}
-              </p>
-            )}
-
-            {/* 2nd Next Line (if 5 lines mode) */}
-            {(lyricsSettings.visibleLines ?? 3) === 5 && (
-              <p
-                style={{
-                  fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
-                  fontSize: `${Math.max(12, lyricsSettings.unhighlighted.size - 2)}px`,
-                  fontWeight: lyricsSettings.unhighlighted.weight,
-                  letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
-                  lineHeight: lyricsSettings.unhighlighted.lineSpacing,
-                  color: lyricsSettings.unhighlighted.color || '#d4d4d8',
-                  opacity: Math.max(0.15, (lyricsSettings.unhighlighted.opacity ?? 0.45) * 0.7),
-                  textAlign: lyricsSettings.alignment
-                }}
-                className="transition-all"
-              >
-                {applyTextCase('Later upcoming lyric', lyricsSettings.unhighlighted.textCase)}
-              </p>
-            )}
+          <div className="w-full h-48 flex items-center justify-center mt-4">
+            <AutoResponsiveLyrics
+              lyrics={[
+                { time: 1, text: 'Earlier lyric line' },
+                { time: 2, text: 'Previous lyric line' },
+                { time: 3, text: 'CURRENT ACTIVE LYRIC' },
+                { time: 4, text: 'Next upcoming lyric' },
+                { time: 5, text: 'Later upcoming lyric' },
+              ]}
+              focusIndex={2}
+              lyricsSettings={lyricsSettings}
+              isHighlighted={lyricsSettings.highlightCurrentLine !== false}
+              prev2Line={{ time: 1, text: 'Earlier lyric line' }}
+              prev1Line={{ time: 2, text: 'Previous lyric line' }}
+              currLine={{ time: 3, text: 'CURRENT ACTIVE LYRIC' }}
+              next1Line={{ time: 4, text: 'Next upcoming lyric' }}
+              next2Line={{ time: 5, text: 'Later upcoming lyric' }}
+              visibleLinesCount={lyricsSettings.visibleLines ?? 3}
+              applyTextCase={applyTextCase}
+              getFontFamilyStyle={getFontFamilyStyle}
+              getAlignmentClass={getAlignmentClass}
+              isPreview={true}
+            />
           </div>
         </div>
 
