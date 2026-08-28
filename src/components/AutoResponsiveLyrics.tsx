@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LyricsAppearanceSettings } from '../utils/lyricsSettings';
+import { Tv, Bug } from 'lucide-react';
 
 export interface LyricLine {
   time: number;
@@ -26,6 +27,21 @@ interface AutoResponsiveLyricsProps {
   isPreview?: boolean;
 }
 
+interface DiagnosticData {
+  containerWidth: number;
+  containerHeight: number;
+  unscaledGroupWidth: number;
+  unscaledGroupHeight: number;
+  scale: number;
+  gap: number;
+  currFontSize: number;
+  unhighFontSize: number;
+  lineSpacing: number;
+  windowWidth: number;
+  windowHeight: number;
+  dpr: number;
+}
+
 export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
   lyrics,
   focusIndex,
@@ -46,73 +62,159 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
   const stageRef = useRef<HTMLDivElement>(null);
   const groupRef = useRef<HTMLDivElement>(null);
 
+  const scaleRef = useRef<number>(1);
+  const gapRef = useRef<number>(12);
+
   const [scale, setScale] = useState<number>(1);
   const [effectiveGap, setEffectiveGap] = useState<number>(12);
 
-  // Auto-Optimization Measurement Algorithm
-  const recalculateLayout = () => {
+  const [showDebug, setShowDebug] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      return urlParams.has('debug') || urlParams.has('tvdebug');
+    }
+    return false;
+  });
+
+  const [diagData, setDiagData] = useState<DiagnosticData>({
+    containerWidth: 0,
+    containerHeight: 0,
+    unscaledGroupWidth: 0,
+    unscaledGroupHeight: 0,
+    scale: 1,
+    gap: 12,
+    currFontSize: 48,
+    unhighFontSize: 20,
+    lineSpacing: 1.2,
+    windowWidth: 0,
+    windowHeight: 0,
+    dpr: 1,
+  });
+
+  // Auto-Optimization Measurement Algorithm using actual DOM dimensions
+  const recalculateLayout = useCallback(() => {
     if (!stageRef.current || !groupRef.current) return;
 
-    const stageEl = stageRef.current;
-    const groupEl = groupRef.current;
+    // Execute after browser frame layout pass
+    requestAnimationFrame(() => {
+      if (!stageRef.current || !groupRef.current) return;
 
-    const stageWidth = stageEl.clientWidth;
-    const stageHeight = stageEl.clientHeight;
+      const stageEl = stageRef.current;
+      const groupEl = groupRef.current;
 
-    if (stageWidth <= 0 || stageHeight <= 0) return;
+      const stageRect = stageEl.getBoundingClientRect();
+      const stageWidth = stageRect.width;
+      const stageHeight = stageRect.height;
 
-    // Determine safe vertical and horizontal paddings
-    // Account for safe area insets & TV display borders
-    const paddingY = isPreview
-      ? 12
-      : Math.max(16, Math.round(stageHeight * 0.04));
-    const paddingX = isPreview
-      ? 16
-      : Math.max(20, Math.round(stageWidth * 0.04));
+      if (stageWidth <= 0 || stageHeight <= 0) return;
 
-    const safeHeight = Math.max(100, stageHeight - paddingY * 2);
-    const safeWidth = Math.max(200, stageWidth - paddingX * 2);
+      // Safe area padding (respecting TV safe margins, animation transitions y:-6/y:6, and text-shadow glow)
+      const animAndGlowBuffer = isPreview ? 6 : 12;
+      const paddingY = isPreview
+        ? 8
+        : Math.max(12, Math.round(stageHeight * 0.04));
+      const paddingX = isPreview
+        ? 10
+        : Math.max(16, Math.round(stageWidth * 0.04));
 
-    // Unscaled natural dimensions of the lyrics group
-    const baseGap = Math.max(
-      6,
-      Math.round((lyricsSettings.unhighlighted.size || 24) * 0.3)
-    );
+      const safeHeight = Math.max(50, stageHeight - (paddingY * 2 + animAndGlowBuffer * 2));
+      const safeWidth = Math.max(100, stageWidth - paddingX * 2);
 
-    const groupHeight = groupEl.scrollHeight || groupEl.offsetHeight;
-    const groupWidth = groupEl.scrollWidth || groupEl.offsetWidth;
+      // Currently applied CSS scale factor (prevents transform measurement feedback loops)
+      const currentAppliedScale = scaleRef.current > 0 ? scaleRef.current : 1;
 
-    if (groupHeight <= 0 || groupWidth <= 0) return;
+      // Query line row nodes inside the lyric group
+      const rowNodes = Array.from(
+        groupEl.querySelectorAll('.lyric-line-row')
+      ) as HTMLElement[];
 
-    // Step 1: Dynamically adjust vertical line gap if height exceeds safe area
-    let computedGap = baseGap;
-    let projectedHeight = groupHeight;
+      let sumLinesUnscaledHeight = 0;
+      let maxLineUnscaledWidth = 0;
 
-    if (projectedHeight > safeHeight && computedGap > 4) {
-      const extraHeight = projectedHeight - safeHeight;
-      const numGaps = Math.max(1, (visibleLinesCount || 3) - 1);
-      const gapReduction = Math.min(
-        computedGap - 4,
-        Math.ceil(extraHeight / numGaps)
+      if (rowNodes.length > 0) {
+        rowNodes.forEach((node) => {
+          const rect = node.getBoundingClientRect();
+          // Use layout offsetHeight and rect height / scale to get true unscaled dimensions
+          const unscaledH = Math.max(node.offsetHeight, rect.height / currentAppliedScale);
+          const unscaledW = Math.max(node.offsetWidth, rect.width / currentAppliedScale);
+          sumLinesUnscaledHeight += unscaledH;
+          if (unscaledW > maxLineUnscaledWidth) {
+            maxLineUnscaledWidth = unscaledW;
+          }
+        });
+      } else {
+        // Fallback if rowNodes query selector hasn't populated yet
+        const groupRect = groupEl.getBoundingClientRect();
+        sumLinesUnscaledHeight = Math.max(groupEl.offsetHeight, groupRect.height / currentAppliedScale);
+        maxLineUnscaledWidth = Math.max(groupEl.offsetWidth, groupRect.width / currentAppliedScale);
+      }
+
+      const lineCount = rowNodes.length || (visibleLinesCount || 3);
+      const numGaps = Math.max(0, lineCount - 1);
+
+      const baseGap = Math.max(
+        4,
+        Math.round((lyricsSettings.unhighlighted.size || 20) * 0.3)
       );
-      computedGap = Math.max(4, computedGap - gapReduction);
-      projectedHeight -= gapReduction * numGaps;
-    }
 
-    // Step 2: Proportional scaling if height or width still exceeds safe bounds
-    let computedScale = 1;
-    const scaleY = safeHeight / projectedHeight;
-    const scaleX = safeWidth / groupWidth;
+      let computedGap = baseGap;
+      let totalProjectedHeight = sumLinesUnscaledHeight + numGaps * baseGap;
 
-    if (scaleY < 1 || scaleX < 1) {
-      computedScale = Math.min(scaleY, scaleX);
-      // Floor to 2 decimal places to prevent sub-pixel animation jitter
-      computedScale = Math.max(0.3, Math.floor(computedScale * 100) / 100);
-    }
+      // Step 1: Reduce dynamic vertical line gap if projected height exceeds safe height
+      if (totalProjectedHeight > safeHeight && computedGap > 4 && numGaps > 0) {
+        const heightOver = totalProjectedHeight - safeHeight;
+        const gapReduction = Math.min(
+          computedGap - 4,
+          Math.ceil(heightOver / numGaps)
+        );
+        computedGap = Math.max(4, computedGap - gapReduction);
+        totalProjectedHeight = sumLinesUnscaledHeight + numGaps * computedGap;
+      }
 
-    setEffectiveGap(computedGap);
-    setScale(computedScale);
-  };
+      // Step 2: Calculate proportional scale factor if height or width exceeds safe bounds
+      let computedScale = 1;
+      const scaleY = safeHeight / (totalProjectedHeight || safeHeight);
+      const scaleX = safeWidth / (maxLineUnscaledWidth || safeWidth);
+
+      if (scaleY < 1 || scaleX < 1) {
+        computedScale = Math.min(scaleY, scaleX);
+        // Floor to 2 decimal places to prevent sub-pixel animation jitter
+        computedScale = Math.max(0.2, Math.floor(computedScale * 100) / 100);
+      }
+
+      // Update refs to prevent feedback loops
+      scaleRef.current = computedScale;
+      gapRef.current = computedGap;
+
+      setScale(computedScale);
+      setEffectiveGap(computedGap);
+
+      // Record diagnostic data for TV testing
+      setDiagData({
+        containerWidth: stageWidth,
+        containerHeight: stageHeight,
+        unscaledGroupWidth: maxLineUnscaledWidth,
+        unscaledGroupHeight: totalProjectedHeight,
+        scale: computedScale,
+        gap: computedGap,
+        currFontSize: isHighlighted
+          ? lyricsSettings.highlighted.size
+          : lyricsSettings.unhighlighted.size,
+        unhighFontSize: lyricsSettings.unhighlighted.size,
+        lineSpacing: isHighlighted
+          ? lyricsSettings.highlighted.lineSpacing
+          : lyricsSettings.unhighlighted.lineSpacing,
+        windowWidth: typeof window !== 'undefined' ? window.innerWidth : 0,
+        windowHeight: typeof window !== 'undefined' ? window.innerHeight : 0,
+        dpr: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
+      });
+    });
+  }, [
+    lyricsSettings,
+    visibleLinesCount,
+    isHighlighted,
+    isPreview,
+  ]);
 
   useLayoutEffect(() => {
     recalculateLayout();
@@ -128,33 +230,58 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
     next2Line?.text,
     isHighlighted,
     isPreview,
+    recalculateLayout,
   ]);
 
   useEffect(() => {
-    const stageEl = stageRef.current;
-    if (!stageEl) return;
-
-    const observer = new ResizeObserver(() => {
-      recalculateLayout();
-    });
-
-    observer.observe(stageEl);
-
-    const handleGlobalResize = () => {
+    // 1. Re-calculate when web fonts finish loading
+    const handleFontLoad = () => {
       recalculateLayout();
     };
 
-    window.addEventListener('resize', handleGlobalResize);
-    window.addEventListener('orientationchange', handleGlobalResize);
-    document.addEventListener('fullscreenchange', handleGlobalResize);
+    if (typeof document !== 'undefined' && document.fonts) {
+      if (document.fonts.ready) {
+        document.fonts.ready.then(handleFontLoad).catch(() => {});
+      }
+      try {
+        document.fonts.addEventListener('loadingdone', handleFontLoad);
+      } catch (e) {
+        // Fallback for older browsers
+      }
+    }
+
+    const stageEl = stageRef.current;
+    const groupEl = groupRef.current;
+
+    const handleResize = () => {
+      recalculateLayout();
+    };
+
+    const observer = new ResizeObserver(handleResize);
+    if (stageEl) observer.observe(stageEl);
+    if (groupEl) observer.observe(groupEl);
+
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+    document.addEventListener('fullscreenchange', handleResize);
+
+    // Initial trigger after mount
+    handleResize();
+    const rafId = requestAnimationFrame(handleResize);
 
     return () => {
       observer.disconnect();
-      window.removeEventListener('resize', handleGlobalResize);
-      window.removeEventListener('orientationchange', handleGlobalResize);
-      document.removeEventListener('fullscreenchange', handleGlobalResize);
+      if (typeof document !== 'undefined' && document.fonts) {
+        try {
+          document.fonts.removeEventListener('loadingdone', handleFontLoad);
+        } catch (e) {}
+      }
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
+      document.removeEventListener('fullscreenchange', handleResize);
+      cancelAnimationFrame(rafId);
     };
-  }, [lyricsSettings, visibleLinesCount]);
+  }, [recalculateLayout]);
 
   const alignment = lyricsSettings.alignment || 'center';
   const flexJustifyClass =
@@ -169,9 +296,66 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
       ref={stageRef}
       className="w-full flex-1 h-full min-h-0 flex flex-col justify-center items-center overflow-hidden relative select-none"
     >
+      {/* TV Diagnostic Overlay Toggle Button */}
+      <button
+        type="button"
+        onClick={() => setShowDebug((prev) => !prev)}
+        className="absolute bottom-2 right-2 z-50 text-[10px] font-mono bg-black/70 hover:bg-black/90 text-zinc-300 border border-white/20 px-2 py-1 rounded-md opacity-60 hover:opacity-100 transition-opacity flex items-center gap-1 cursor-pointer"
+        title="Toggle TV Diagnostics HUD"
+      >
+        <Bug className="w-3 h-3 text-[#FF4FA3]" />
+        <span>TV DEBUG</span>
+      </button>
+
+      {/* TV Diagnostic Readout HUD */}
+      {showDebug && (
+        <div className="absolute top-2 right-2 z-50 bg-black/90 border border-[#FF4FA3]/40 text-emerald-400 font-mono text-[11px] p-3 rounded-xl shadow-2xl max-w-xs space-y-1 pointer-events-auto leading-tight text-left backdrop-blur-md">
+          <div className="text-white font-bold border-b border-white/20 pb-1 mb-1.5 flex justify-between items-center">
+            <span className="flex items-center gap-1 text-[#FF4FA3]">
+              <Tv className="w-3.5 h-3.5" />
+              TV Diagnostics
+            </span>
+            <span className="text-zinc-400 text-[9px]">{diagData.dpr}x DPR</span>
+          </div>
+          <div>
+            Container:{' '}
+            <span className="text-white font-bold">
+              {Math.round(diagData.containerWidth)} x {Math.round(diagData.containerHeight)} px
+            </span>
+          </div>
+          <div>
+            Unscaled Group:{' '}
+            <span className="text-white font-bold">
+              {Math.round(diagData.unscaledGroupWidth)} x {Math.round(diagData.unscaledGroupHeight)} px
+            </span>
+          </div>
+          <div className="pt-0.5 border-t border-white/10 mt-1">
+            Calculated Scale:{' '}
+            <span className="text-amber-300 font-bold">{diagData.scale}</span>
+          </div>
+          <div>
+            Calculated Gap:{' '}
+            <span className="text-amber-300 font-bold">{diagData.gap}px</span>
+          </div>
+          <div>
+            Font Sizes:{' '}
+            <span className="text-zinc-300">
+              Curr {diagData.currFontSize}px / Unhigh {diagData.unhighFontSize}px
+            </span>
+          </div>
+          <div>
+            Line Height Multiplier:{' '}
+            <span className="text-zinc-300">{diagData.lineSpacing}</span>
+          </div>
+          <div className="pt-1 border-t border-white/10 text-zinc-400 text-[10px]">
+            Window: {diagData.windowWidth} x {diagData.windowHeight}
+          </div>
+        </div>
+      )}
+
       <div
         ref={groupRef}
-        className={`w-full max-w-5xl mx-auto flex flex-col justify-center items-center overflow-visible transition-all duration-200 ease-out ${getAlignmentClass(
+        className={`w-full max-w-5xl mx-auto flex flex-col justify-center items-center overflow-visible ${getAlignmentClass(
           alignment
         )}`}
         style={{
@@ -183,7 +367,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
       >
         {/* Line -2 (if 5 lines mode) */}
         {visibleLinesCount === 5 && (
-          <div className={`flex items-center shrink-0 w-full overflow-visible py-0.5 ${flexJustifyClass}`}>
+          <div className={`lyric-line-row flex items-center shrink-0 w-full overflow-visible py-0.5 ${flexJustifyClass}`}>
             <AnimatePresence mode="wait">
               {prev2Line ? (
                 <motion.p
@@ -217,7 +401,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
 
         {/* Line -1: Previous Lyric */}
         {visibleLinesCount >= 3 && (
-          <div className={`flex items-center shrink-0 w-full overflow-visible py-1 ${flexJustifyClass}`}>
+          <div className={`lyric-line-row flex items-center shrink-0 w-full overflow-visible py-1 ${flexJustifyClass}`}>
             <AnimatePresence mode="wait">
               {prev1Line ? (
                 <motion.p
@@ -250,7 +434,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
         )}
 
         {/* Line 0: Current Lyric (Visually dominant and centered) */}
-        <div className={`flex items-center shrink-0 w-full overflow-visible py-1.5 px-2 ${flexJustifyClass}`}>
+        <div className={`lyric-line-row flex items-center shrink-0 w-full overflow-visible py-1.5 px-2 ${flexJustifyClass}`}>
           <AnimatePresence mode="wait">
             {currLine ? (
               <motion.p
@@ -314,7 +498,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
 
         {/* Line +1: Next Lyric */}
         {visibleLinesCount >= 3 && (
-          <div className={`flex items-center shrink-0 w-full overflow-visible py-1 ${flexJustifyClass}`}>
+          <div className={`lyric-line-row flex items-center shrink-0 w-full overflow-visible py-1 ${flexJustifyClass}`}>
             <AnimatePresence mode="wait">
               {next1Line ? (
                 <motion.p
@@ -348,7 +532,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
 
         {/* Line +2 (if 5 lines mode) */}
         {visibleLinesCount === 5 && (
-          <div className={`flex items-center shrink-0 w-full overflow-visible py-0.5 ${flexJustifyClass}`}>
+          <div className={`lyric-line-row flex items-center shrink-0 w-full overflow-visible py-0.5 ${flexJustifyClass}`}>
             <AnimatePresence mode="wait">
               {next2Line ? (
                 <motion.p
