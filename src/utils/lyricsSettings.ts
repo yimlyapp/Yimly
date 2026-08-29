@@ -16,6 +16,7 @@ export interface LyricsAppearanceSettings {
   visibleLines: number; // 1 | 3 | 5
   highlightCurrentLine: boolean; // on / off
   animationDuration: number; // in seconds, e.g. 0.25
+  elrcHighlightMode?: 'karaoke' | 'current_only'; // 'karaoke' (past + current) or 'current_only'
 }
 
 export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
@@ -42,7 +43,8 @@ export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
   alignment: 'center',
   visibleLines: 3,
   highlightCurrentLine: true,
-  animationDuration: 0.25
+  animationDuration: 0.25,
+  elrcHighlightMode: 'karaoke'
 };
 
 const STORAGE_KEY = 'yimly_lyrics_appearance_settings_v1';
@@ -83,7 +85,8 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
     alignment: validAlignments.includes(parsed.alignment) ? parsed.alignment : DEFAULT_LYRICS_SETTINGS.alignment,
     visibleLines: [1, 3, 5].includes(parsed.visibleLines) ? parsed.visibleLines : DEFAULT_LYRICS_SETTINGS.visibleLines,
     highlightCurrentLine: typeof parsed.highlightCurrentLine === 'boolean' ? parsed.highlightCurrentLine : DEFAULT_LYRICS_SETTINGS.highlightCurrentLine,
-    animationDuration: typeof parsed.animationDuration === 'number' && !isNaN(parsed.animationDuration) ? parsed.animationDuration : DEFAULT_LYRICS_SETTINGS.animationDuration
+    animationDuration: typeof parsed.animationDuration === 'number' && !isNaN(parsed.animationDuration) ? parsed.animationDuration : DEFAULT_LYRICS_SETTINGS.animationDuration,
+    elrcHighlightMode: ['karaoke', 'current_only'].includes(parsed.elrcHighlightMode) ? parsed.elrcHighlightMode : DEFAULT_LYRICS_SETTINGS.elrcHighlightMode
   };
 }
 

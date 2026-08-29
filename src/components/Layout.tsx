@@ -1,6 +1,6 @@
 import { useEffect, useState, ReactNode } from 'react';
 import { Outlet, useNavigate, NavLink, useLocation } from 'react-router-dom';
-import { Home, Music, Mic, Settings, Users, LogOut, Loader2, Disc, Menu, X, Radio, Download } from 'lucide-react';
+import { Home, Music, Mic, Settings, Users, LogOut, Loader2, Disc, Menu, X, Radio, Download, Play } from 'lucide-react';
 
 export default function Layout() {
   const [user, setUser] = useState<any>(null);
@@ -80,6 +80,7 @@ export default function Layout() {
             <NavItem to="/" icon={<Home className="w-4 h-4" />} label="Home" />
             <NavItem to="/library" icon={<Music className="w-4 h-4" />} label="Library" />
             <NavItem to="/rooms" icon={<Radio className="w-4 h-4" />} label="Karaoke Rooms" badge="Live" />
+            <NavItem to="/elrc-test" icon={<Play className="w-4 h-4 text-pink-400" />} label="eLRC Test" badge="Test" />
 
             {user?.role === 'administrator' && (
               <div className="pt-6">
@@ -146,6 +147,7 @@ export default function Layout() {
               <NavItem to="/" icon={<Home className="w-5 h-5" />} label="Home" />
               <NavItem to="/library" icon={<Music className="w-5 h-5" />} label="Library" />
               <NavItem to="/rooms" icon={<Radio className="w-5 h-5" />} label="Karaoke Rooms" />
+              <NavItem to="/elrc-test" icon={<Play className="w-5 h-5 text-pink-400" />} label="eLRC Test" />
 
               {user?.role === 'administrator' && (
                 <div className="pt-6">

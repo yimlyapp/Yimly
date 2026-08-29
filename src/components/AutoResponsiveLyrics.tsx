@@ -500,35 +500,44 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                         ? currLine.words![wIdx + 1].start
                         : (next1Line?.time ?? (word.start + 3));
 
+                      const elrcMode = lyricsSettings.elrcHighlightMode || 'karaoke';
+                      const isWordPast = isHighlighted && (isPreview ? wIdx === 0 : (adjustedTime >= wordStartTime));
                       const isWordCurrent = isHighlighted && (isPreview ? wIdx === 0 : (adjustedTime >= wordStartTime && adjustedTime < nextWordStartTime));
 
-                      const wordColor = isWordCurrent
+                      const isWordHighlighted = isHighlighted && (
+                        elrcMode === 'current_only' ? isWordCurrent : isWordPast
+                      );
+
+                      const wordColor = isWordHighlighted
                         ? (lyricsSettings.highlighted.color || '#FF4FA3')
                         : (lyricsSettings.unhighlighted.color || '#d4d4d8');
 
-                      const wordOpacity = isWordCurrent
+                      const wordOpacity = isWordHighlighted
                         ? (lyricsSettings.highlighted.opacity ?? 1.0)
                         : (lyricsSettings.unhighlighted.opacity ?? 0.45);
+
+                      const activeScale = isWordCurrent ? 1.08 : 1;
+                      const activeGlow = isWordCurrent
+                        ? `0 0 25px ${lyricsSettings.highlighted.color || '#FF4FA3'}80`
+                        : 'none';
 
                       return (
                         <motion.span
                           key={`word-${wIdx}-${word.text}`}
                           animate={{
-                            scale: isWordCurrent ? 1.08 : 1,
+                            scale: activeScale,
                             color: wordColor,
                             opacity: wordOpacity,
                           }}
                           transition={{ duration: 0.15, ease: 'easeOut' }}
                           className="inline-block transition-colors"
                           style={{
-                            textShadow: isWordCurrent
-                              ? `0 0 25px ${lyricsSettings.highlighted.color || '#FF4FA3'}80`
-                              : 'none',
+                            textShadow: activeGlow,
                           }}
                         >
                           {applyTextCase(
                             word.text,
-                            isHighlighted
+                            isWordHighlighted
                               ? lyricsSettings.highlighted.textCase
                               : lyricsSettings.unhighlighted.textCase
                           )}

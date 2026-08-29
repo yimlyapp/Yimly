@@ -8,21 +8,26 @@ const SAMPLE_ELRC = `[00:02.00] <00:02.00>This <00:03.50>is <00:05.00>a <00:06.5
 
 export default function ElrcTestPage() {
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioStatus, setAudioStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(25);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   // Parse eLrc
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
 
   useEffect(() => {
-    // Generate synthetic audio using OfflineAudioContext (25s of gentle synth tone/beeps)
     async function generateAudio() {
       try {
-        const sampleRate = 8000;
+        setAudioStatus('loading');
+        const AudioCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+        if (!AudioCtx) {
+          throw new Error('OfflineAudioContext not supported in this browser');
+        }
+        const sampleRate = 22050;
         const dur = 25;
-        const ctx = new OfflineAudioContext(1, sampleRate * dur, sampleRate);
+        const ctx = new AudioCtx(1, sampleRate * dur, sampleRate);
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.type = 'sine';
@@ -34,12 +39,14 @@ export default function ElrcTestPage() {
         osc.stop(dur);
         const buffer = await ctx.startRendering();
 
-        // Convert to WAV
         const wavBytes = audioBufferToWav(buffer);
         const blob = new Blob([wavBytes], { type: 'audio/wav' });
-        setAudioUrl(URL.createObjectURL(blob));
-      } catch (e) {
+        const url = URL.createObjectURL(blob);
+        setAudioUrl(url);
+      } catch (e: any) {
         console.error('Failed to generate test audio:', e);
+        setAudioStatus('error');
+        setErrorMessage(e?.message || 'Audio generation failed');
       }
     }
 
@@ -105,7 +112,7 @@ export default function ElrcTestPage() {
 
   // Helper for AudioBuffer to WAV
   function audioBufferToWav(buffer: AudioBuffer): ArrayBuffer {
-    const numOfChan = buffer.numberChannels;
+    const numOfChan = buffer.numberOfChannels;
     const length = buffer.length * numOfChan * 2 + 44;
     const out = new ArrayBuffer(length);
     const view = new DataView(out);
@@ -221,12 +228,17 @@ export default function ElrcTestPage() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="font-semibold text-lg">Synthetic Test Audio & Player</h2>
-            <p className="text-xs text-zinc-400">Uses real HTML5 &lt;audio&gt; element and natural currentTime progression</p>
+            <p className="text-xs text-zinc-400">
+              Audio Status:{' '}
+              <span className={audioStatus === 'ready' ? 'text-emerald-400 font-bold' : audioStatus === 'error' ? 'text-rose-400 font-bold' : 'text-amber-400 font-bold'}>
+                {audioStatus === 'ready' ? 'Audio: Ready' : audioStatus === 'error' ? `Audio: Error (${errorMessage || 'Failed'})` : 'Audio: Loading...'}
+              </span>
+            </p>
           </div>
           <div className="flex items-center gap-3">
             <button
               onClick={togglePlay}
-              disabled={!audioUrl}
+              disabled={audioStatus !== 'ready'}
               className="flex items-center gap-2 px-5 py-2.5 bg-pink-600 hover:bg-pink-500 disabled:opacity-50 text-white font-medium rounded-xl transition shadow-lg shadow-pink-600/20"
             >
               {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
@@ -247,6 +259,12 @@ export default function ElrcTestPage() {
             ref={audioRef}
             src={audioUrl}
             onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)}
+            onLoadedMetadata={() => setAudioStatus('ready')}
+            onCanPlayThrough={() => setAudioStatus('ready')}
+            onError={(e) => {
+              setAudioStatus('error');
+              setErrorMessage(audioRef.current?.error?.message || 'Playback error');
+            }}
             onEnded={() => setIsPlaying(false)}
             onPause={() => setIsPlaying(false)}
             onPlay={() => setIsPlaying(true)}

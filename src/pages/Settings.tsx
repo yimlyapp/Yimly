@@ -896,6 +896,38 @@ export default function Settings() {
                   </div>
                 </div>
               </div>
+
+              {/* eLRC Word Highlighting Mode */}
+              <div className="pt-4 border-t border-white/10">
+                <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
+                  eLRC Word Highlighting
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg">
+                  {[
+                    { id: 'karaoke', label: 'Karaoke — Past + Current', desc: 'Accumulates left to right' },
+                    { id: 'current_only', label: 'Current Word Only', desc: 'Only active word highlighted' }
+                  ].map((mode) => (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      onClick={() =>
+                        updateSetting((prev) => ({ ...prev, elrcHighlightMode: mode.id as any }))
+                      }
+                      className={`py-3 px-4 rounded-2xl border font-bold text-xs flex flex-col items-start gap-1 transition-all ${
+                        (lyricsSettings.elrcHighlightMode || 'karaoke') === mode.id
+                          ? 'bg-[#FF4FA3] text-white border-[#FF4FA3] shadow-lg shadow-[#FF4FA3]/25'
+                          : 'bg-[#08090E] text-zinc-400 border-white/10 hover:text-white hover:border-white/20'
+                      }`}
+                    >
+                      <span className="text-sm font-black">{mode.label}</span>
+                      <span className="text-[10px] font-normal opacity-80">{mode.desc}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-zinc-500 mt-2">
+                  Controls word-level highlighting behavior for Enhanced LRC (.elrc.lrc) files.
+                </p>
+              </div>
             </div>
           )}
         </div>
