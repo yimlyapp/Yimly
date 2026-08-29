@@ -23,6 +23,9 @@ const playlistUpdateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().max(500).optional(),
   isPublic: z.boolean().optional(),
+  userId: z.number().optional(),
+  ownerId: z.number().optional(),
+  ownerUsername: z.string().optional(),
 });
 
 // List all playlists belonging to the user AND shared with the user (or all if admin)
@@ -65,7 +68,7 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
       })
       .from(playlists)
       .leftJoin(users, eq(playlists.userId, users.id))
-      .leftJoin(playlistShares, eq(playlists.id, playlistShares.playlistId))
+      .leftJoin(playlistShares, and(eq(playlists.id, playlistShares.playlistId), eq(playlistShares.userId, userId!)))
       .where(or(eq(playlists.userId, userId!), eq(playlistShares.userId, userId!), eq(playlists.isPublic, 1)))
       .orderBy(asc(playlists.name));
     }
@@ -75,7 +78,7 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
       isPublic: p.isPublic === 1,
       isOwner: p.userId === userId,
       canEdit: p.userId === userId || isAdmin || p.sharePermission === 'edit',
-      permission: p.userId === userId ? 'owner' : (p.sharePermission || 'none'),
+      permission: p.userId === userId ? 'owner' : (isAdmin ? 'admin' : (p.sharePermission || (p.isPublic === 1 ? 'view' : 'none'))),
       coverImageUrl: p.coverPath ? `/api/playlists/${p.id}/cover` : null,
     }));
 
@@ -464,7 +467,7 @@ router.delete('/:id/cover', async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// Update playlist details (PUT/PATCH) -> Owner ONLY
+// Update playlist details (PUT/PATCH) -> Owner or Admin
 const handlePlaylistUpdate = async (req: AuthenticatedRequest, res: any) => {
   try {
     const id = parseInt(req.params.id);
@@ -474,7 +477,7 @@ const handlePlaylistUpdate = async (req: AuthenticatedRequest, res: any) => {
     if (!playlist) return res.status(404).json({ error: 'Playlist not found' });
 
     if (!access?.isOwner && !access?.isAdmin) {
-      return res.status(403).json({ error: 'Forbidden. Only the owner can edit playlist details.' });
+      return res.status(403).json({ error: 'Forbidden. Only the owner or administrator can edit playlist details.' });
     }
 
     const parsed = playlistUpdateSchema.parse(req.body);
@@ -483,15 +486,50 @@ const handlePlaylistUpdate = async (req: AuthenticatedRequest, res: any) => {
     if (parsed.description !== undefined) updateData.description = parsed.description?.trim() || null;
     if (parsed.isPublic !== undefined) updateData.isPublic = parsed.isPublic ? 1 : 0;
 
+    // Admin-only ownership change
+    if (access.isAdmin) {
+      const targetUserId = parsed.userId || parsed.ownerId;
+      if (targetUserId) {
+        const targetUser = await db.select().from(users).where(eq(users.id, targetUserId)).limit(1);
+        if (targetUser.length > 0) {
+          updateData.userId = targetUserId;
+        }
+      } else if (parsed.ownerUsername) {
+        const targetUser = await db.select().from(users).where(eq(users.username, parsed.ownerUsername.trim())).limit(1);
+        if (targetUser.length > 0) {
+          updateData.userId = targetUser[0].id;
+        }
+      }
+    }
+
     const updated = await db.update(playlists).set(updateData).where(eq(playlists.id, id)).returning();
 
+    // Re-fetch with owner name
+    const updatedWithUser = await db.select({
+      id: playlists.id,
+      userId: playlists.userId,
+      name: playlists.name,
+      description: playlists.description,
+      isPublic: playlists.isPublic,
+      coverPath: playlists.coverPath,
+      createdAt: playlists.createdAt,
+      updatedAt: playlists.updatedAt,
+      ownerName: users.username,
+    })
+    .from(playlists)
+    .leftJoin(users, eq(playlists.userId, users.id))
+    .where(eq(playlists.id, id))
+    .limit(1);
+
+    const result = updatedWithUser[0] || updated[0];
+
     res.json({
-      ...updated[0],
-      isPublic: updated[0].isPublic === 1,
-      isOwner: true,
+      ...result,
+      isPublic: result.isPublic === 1,
+      isOwner: result.userId === req.user?.id,
       canEdit: true,
-      permission: 'owner',
-      coverImageUrl: updated[0].coverPath ? `/api/playlists/${id}/cover` : null,
+      permission: result.userId === req.user?.id ? 'owner' : (access.isAdmin ? 'admin' : (access.sharePermission || 'none')),
+      coverImageUrl: result.coverPath ? `/api/playlists/${id}/cover` : null,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -504,6 +542,130 @@ const handlePlaylistUpdate = async (req: AuthenticatedRequest, res: any) => {
 
 router.put('/:id', handlePlaylistUpdate);
 router.patch('/:id', handlePlaylistUpdate);
+
+// Duplicate playlist (View permission required)
+router.post('/:id/duplicate', async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid playlist ID' });
+
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { playlist: p, access } = await getPlaylistAndAccess(id, req.user);
+    if (!p) return res.status(404).json({ error: 'Playlist not found' });
+
+    if (!access?.canView) {
+      return res.status(403).json({ error: 'Forbidden. Access denied.' });
+    }
+
+    const now = new Date();
+    const newName = req.body?.name?.trim() || `${p.name} (Copy)`;
+
+    // If original has cover, duplicate cover file
+    let newCoverFilename: string | null = null;
+    const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
+    if (p.coverPath) {
+      const oldCoverFile = path.join(dataDir, 'playlist_covers', path.basename(p.coverPath));
+      if (fs.existsSync(oldCoverFile)) {
+        const ext = path.extname(p.coverPath);
+        newCoverFilename = `playlist_copy_${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`;
+        const newCoverFile = path.join(dataDir, 'playlist_covers', newCoverFilename);
+        try {
+          fs.copyFileSync(oldCoverFile, newCoverFile);
+        } catch (e) {
+          newCoverFilename = null;
+        }
+      }
+    }
+
+    const created = await db.insert(playlists).values({
+      userId,
+      name: newName,
+      description: p.description,
+      isPublic: 0,
+      coverPath: newCoverFilename,
+      createdAt: now,
+      updatedAt: now,
+    }).returning();
+
+    const newPlaylistId = created[0].id;
+
+    // Copy songs
+    const originalSongs = await db.select().from(playlistSongs)
+      .where(eq(playlistSongs.playlistId, id))
+      .orderBy(asc(playlistSongs.position), asc(playlistSongs.addedAt));
+
+    if (originalSongs.length > 0) {
+      for (const s of originalSongs) {
+        await db.insert(playlistSongs).values({
+          playlistId: newPlaylistId,
+          songId: s.songId,
+          position: s.position,
+          addedAt: now,
+        });
+      }
+    }
+
+    res.status(201).json({
+      ...created[0],
+      isPublic: false,
+      isOwner: true,
+      canEdit: true,
+      permission: 'owner',
+      songCount: originalSongs.length,
+      coverImageUrl: newCoverFilename ? `/api/playlists/${newPlaylistId}/cover` : null,
+    });
+  } catch (error) {
+    console.error('Failed to duplicate playlist:', error);
+    res.status(500).json({ error: 'Failed to duplicate playlist' });
+  }
+});
+
+// Clear all songs from playlist (Edit permission required)
+router.post('/:id/clear', async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid playlist ID' });
+
+    const { playlist, access } = await getPlaylistAndAccess(id, req.user);
+    if (!playlist) return res.status(404).json({ error: 'Playlist not found' });
+
+    if (!access?.canEdit) {
+      return res.status(403).json({ error: 'Forbidden. You do not have permission to clear this playlist.' });
+    }
+
+    await db.delete(playlistSongs).where(eq(playlistSongs.playlistId, id));
+    await db.update(playlists).set({ updatedAt: new Date() }).where(eq(playlists.id, id));
+
+    res.json({ message: 'Playlist cleared successfully' });
+  } catch (error) {
+    console.error('Failed to clear playlist:', error);
+    res.status(500).json({ error: 'Failed to clear playlist' });
+  }
+});
+
+router.delete('/:id/songs', async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid playlist ID' });
+
+    const { playlist, access } = await getPlaylistAndAccess(id, req.user);
+    if (!playlist) return res.status(404).json({ error: 'Playlist not found' });
+
+    if (!access?.canEdit) {
+      return res.status(403).json({ error: 'Forbidden. You do not have permission to clear this playlist.' });
+    }
+
+    await db.delete(playlistSongs).where(eq(playlistSongs.playlistId, id));
+    await db.update(playlists).set({ updatedAt: new Date() }).where(eq(playlists.id, id));
+
+    res.json({ message: 'Playlist cleared successfully' });
+  } catch (error) {
+    console.error('Failed to clear playlist songs:', error);
+    res.status(500).json({ error: 'Failed to clear playlist songs' });
+  }
+});
 
 // Delete playlist -> Owner ONLY
 router.delete('/:id', async (req: AuthenticatedRequest, res) => {

@@ -1,26 +1,43 @@
 import { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { Search, Play, Plus, Music, Disc, Mic, RefreshCw, Calendar, FileText, ChevronRight, ArrowLeft, AlertCircle, Check } from 'lucide-react';
+import { Search, Play, Plus, Music, Disc, Mic, RefreshCw, Calendar, FileText, ChevronRight, ArrowLeft, AlertCircle, Check, ListMusic } from 'lucide-react';
+import { Playlist, PlaylistSongItem } from '../types';
+import CreatePlaylistModal from '../components/playlist/CreatePlaylistModal';
+import EditPlaylistModal from '../components/playlist/EditPlaylistModal';
+import SharePlaylistModal from '../components/playlist/SharePlaylistModal';
+import AddSongsModal from '../components/playlist/AddSongsModal';
+import PlaylistsGrid from '../components/playlist/PlaylistsGrid';
+import PlaylistDetailView from '../components/playlist/PlaylistDetailView';
 
 export default function Library() {
   const { user } = useOutletContext<{ user: any }>();
-  const [tab, setTab] = useState<'artists' | 'albums' | 'songs'>('artists');
+  const [tab, setTab] = useState<'artists' | 'albums' | 'songs' | 'playlists'>('artists');
   const [search, setSearch] = useState('');
-  const [stats, setStats] = useState({ artists: 0, albums: 0, songs: 0 });
+  const [stats, setStats] = useState({ artists: 0, albums: 0, songs: 0, playlists: 0 });
   
   const [artists, setArtists] = useState<any[]>([]);
   const [albums, setAlbums] = useState<any[]>([]);
   const [songs, setSongs] = useState<any[]>([]);
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [searchResults, setSearchResults] = useState<any[]>([]);
 
   // Detailed view states
   const [selectedArtist, setSelectedArtist] = useState<any | null>(null);
   const [selectedAlbum, setSelectedAlbum] = useState<any | null>(null);
+  const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
+
+  // Modals state
+  const [isCreatePlaylistOpen, setIsCreatePlaylistOpen] = useState(false);
+  const [isEditPlaylistOpen, setIsEditPlaylistOpen] = useState(false);
+  const [isSharePlaylistOpen, setIsSharePlaylistOpen] = useState(false);
+  const [isAddSongsOpen, setIsAddSongsOpen] = useState(false);
+  const [activeModalPlaylist, setActiveModalPlaylist] = useState<Playlist | null>(null);
 
   const [scanning, setScanning] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [queuedSongId, setQueuedSongId] = useState<number | null>(null);
+  const [playingAll, setPlayingAll] = useState(false);
 
   useEffect(() => {
     loadAllData();
@@ -33,14 +50,18 @@ export default function Library() {
     try {
       // 1. Fetch stats
       const statsRes = await fetch('/api/libraries/stats');
-      if (!statsRes.ok || !statsRes.headers.get('content-type')?.includes('application/json')) {
-        throw new Error(`Failed to fetch stats`);
+      if (statsRes.ok && statsRes.headers.get('content-type')?.includes('application/json')) {
+        const statsData = await statsRes.json();
+        setStats(prev => ({ ...prev, ...statsData }));
       }
-      const statsData = await statsRes.json();
-      setStats(statsData);
 
       // 2. Fetch tab data
-      const endpoint = tab === 'artists' ? '/api/artists' : tab === 'albums' ? '/api/albums' : '/api/songs';
+      const endpoint = 
+        tab === 'artists' ? '/api/artists' : 
+        tab === 'albums' ? '/api/albums' : 
+        tab === 'songs' ? '/api/songs' : 
+        '/api/playlists';
+
       const dataRes = await fetch(endpoint);
       if (!dataRes.ok || !dataRes.headers.get('content-type')?.includes('application/json')) {
         throw new Error(`Failed to fetch ${tab}`);
@@ -50,6 +71,7 @@ export default function Library() {
       if (tab === 'artists') setArtists(Array.isArray(data) ? data : []);
       else if (tab === 'albums') setAlbums(Array.isArray(data) ? data : []);
       else if (tab === 'songs') setSongs(Array.isArray(data) ? data : []);
+      else if (tab === 'playlists') setPlaylists(Array.isArray(data) ? data : []);
 
       setLoading(false);
     } catch (err: any) {
@@ -114,6 +136,7 @@ export default function Library() {
       const data = await res.json();
       setSelectedArtist(data);
       setSelectedAlbum(null);
+      setSelectedPlaylist(null);
     } catch (e: any) {
       console.error(e);
       alert(e.message || 'Could not load artist details');
@@ -129,9 +152,26 @@ export default function Library() {
       const data = await res.json();
       setSelectedAlbum(data);
       setSelectedArtist(null);
+      setSelectedPlaylist(null);
     } catch (e: any) {
       console.error(e);
       alert(e.message || 'Could not load album details');
+    }
+  };
+
+  const openPlaylist = async (playlistId: number) => {
+    try {
+      const res = await fetch(`/api/playlists/${playlistId}`);
+      if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) {
+        throw new Error('Failed to fetch playlist details');
+      }
+      const data: Playlist = await res.json();
+      setSelectedPlaylist(data);
+      setSelectedArtist(null);
+      setSelectedAlbum(null);
+    } catch (e: any) {
+      console.error(e);
+      alert(e.message || 'Could not load playlist details');
     }
   };
 
@@ -163,6 +203,221 @@ export default function Library() {
     } catch (e) {
       console.error(e);
       alert('Failed to add song to queue');
+    }
+  };
+
+  const handlePlayAll = async (playlist: Playlist) => {
+    try {
+      setPlayingAll(true);
+      const activeRoomsRes = await fetch('/api/karaoke/active-sessions');
+      if (!activeRoomsRes.ok || !activeRoomsRes.headers.get('content-type')?.includes('application/json')) {
+        alert("No active karaoke rooms found. Please host or join a room first from Karaoke Rooms.");
+        setPlayingAll(false);
+        return;
+      }
+      const rooms = await activeRoomsRes.json();
+      if (!Array.isArray(rooms) || rooms.length === 0) {
+        alert("No active karaoke rooms found. Please host or join a room first from Karaoke Rooms.");
+        setPlayingAll(false);
+        return;
+      }
+      const sessionId = rooms[0].id;
+
+      // Ensure we have playlist songs
+      let targetSongs = playlist.songs;
+      if (!targetSongs) {
+        const pRes = await fetch(`/api/playlists/${playlist.id}`);
+        if (pRes.ok) {
+          const pData = await pRes.json();
+          targetSongs = pData.songs;
+        }
+      }
+
+      if (!targetSongs || targetSongs.length === 0) {
+        alert("This playlist has no songs to play.");
+        setPlayingAll(false);
+        return;
+      }
+
+      // Add each song sequentially into room queue
+      let count = 0;
+      for (const s of targetSongs) {
+        await fetch(`/api/karaoke/sessions/${sessionId}/queue`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ songId: s.id }),
+        });
+        count++;
+      }
+
+      alert(`Added ${count} songs from "${playlist.name}" to the active Karaoke room queue!`);
+    } catch (e: any) {
+      console.error(e);
+      alert('Failed to play all songs in room');
+    } finally {
+      setPlayingAll(false);
+    }
+  };
+
+  const handleDuplicatePlaylist = async (playlist: Playlist) => {
+    try {
+      const res = await fetch(`/api/playlists/${playlist.id}/duplicate`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: 'Duplicate failed' }));
+        throw new Error(data.error || 'Failed to duplicate playlist');
+      }
+      const cloned = await res.json();
+      setPlaylists(prev => [cloned, ...prev]);
+      setStats(prev => ({ ...prev, playlists: prev.playlists + 1 }));
+    } catch (e: any) {
+      alert(e.message || 'Failed to duplicate playlist');
+    }
+  };
+
+  const handleClearPlaylist = async (playlist: Playlist) => {
+    if (!confirm(`Are you sure you want to remove all songs from "${playlist.name}"?`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/playlists/${playlist.id}/clear`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        throw new Error('Failed to clear playlist songs');
+      }
+      if (selectedPlaylist?.id === playlist.id) {
+        setSelectedPlaylist(prev => prev ? { ...prev, songs: [], songCount: 0 } : null);
+      }
+      setPlaylists(prev => prev.map(p => p.id === playlist.id ? { ...p, songCount: 0, songs: [] } : p));
+    } catch (e: any) {
+      alert(e.message || 'Failed to clear playlist');
+    }
+  };
+
+  const handleDeletePlaylist = async (playlist: Playlist) => {
+    if (!confirm(`Are you sure you want to delete playlist "${playlist.name}"? This action cannot be undone.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/playlists/${playlist.id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: 'Delete failed' }));
+        throw new Error(data.error || 'Failed to delete playlist');
+      }
+      if (selectedPlaylist?.id === playlist.id) {
+        setSelectedPlaylist(null);
+      }
+      setPlaylists(prev => prev.filter(p => p.id !== playlist.id));
+      setStats(prev => ({ ...prev, playlists: Math.max(0, prev.playlists - 1) }));
+    } catch (e: any) {
+      alert(e.message || 'Failed to delete playlist');
+    }
+  };
+
+  const handleCoverUpload = async (playlistId: number, file: File) => {
+    try {
+      const buffer = await file.arrayBuffer();
+      const res = await fetch(`/api/playlists/${playlistId}/cover`, {
+        method: 'POST',
+        headers: { 'Content-Type': file.type || 'image/jpeg' },
+        body: buffer,
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: 'Upload failed' }));
+        throw new Error(data.error || 'Failed to upload cover');
+      }
+      const updated = await res.json();
+      const newImageUrl = `/api/playlists/${playlistId}/cover?t=${Date.now()}`;
+
+      if (selectedPlaylist?.id === playlistId) {
+        setSelectedPlaylist(prev => prev ? { ...prev, ...updated, coverImageUrl: newImageUrl } : null);
+      }
+      setPlaylists(prev => prev.map(p => p.id === playlistId ? { ...p, ...updated, coverImageUrl: newImageUrl } : p));
+    } catch (e: any) {
+      alert(e.message || 'Failed to upload cover image');
+    }
+  };
+
+  const handleCoverRemove = async (playlistId: number) => {
+    if (!confirm('Are you sure you want to remove the cover artwork for this playlist?')) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/playlists/${playlistId}/cover`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        throw new Error('Failed to remove cover');
+      }
+      if (selectedPlaylist?.id === playlistId) {
+        setSelectedPlaylist(prev => prev ? { ...prev, coverPath: null, coverImageUrl: null } : null);
+      }
+      setPlaylists(prev => prev.map(p => p.id === playlistId ? { ...p, coverPath: null, coverImageUrl: null } : p));
+    } catch (e: any) {
+      alert(e.message || 'Failed to remove cover');
+    }
+  };
+
+  const handleRemoveSong = async (playlistSongId: number) => {
+    if (!selectedPlaylist) return;
+    try {
+      const res = await fetch(`/api/playlists/${selectedPlaylist.id}/songs/${playlistSongId}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        throw new Error('Failed to remove song');
+      }
+      setSelectedPlaylist(prev => {
+        if (!prev) return null;
+        const newSongs = (prev.songs || []).filter(s => s.playlistSongId !== playlistSongId);
+        return { ...prev, songs: newSongs, songCount: newSongs.length };
+      });
+      setPlaylists(prev => prev.map(p => {
+        if (p.id === selectedPlaylist.id) {
+          const count = Math.max(0, (p.songCount || 1) - 1);
+          return { ...p, songCount: count };
+        }
+        return p;
+      }));
+    } catch (e: any) {
+      alert(e.message || 'Failed to remove song');
+    }
+  };
+
+  const handleReorderSong = async (playlistSongId: number, direction: 'up' | 'down') => {
+    if (!selectedPlaylist || !selectedPlaylist.songs) return;
+    const currentSongs = [...selectedPlaylist.songs];
+    const currentIndex = currentSongs.findIndex(s => s.playlistSongId === playlistSongId);
+    if (currentIndex === -1) return;
+
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= currentSongs.length) return;
+
+    // Swap items locally
+    const [moved] = currentSongs.splice(currentIndex, 1);
+    currentSongs.splice(targetIndex, 0, moved);
+
+    // Recalculate positions
+    const reordered = currentSongs.map((s, idx) => ({ ...s, position: idx }));
+    setSelectedPlaylist({ ...selectedPlaylist, songs: reordered });
+
+    // Send to backend
+    try {
+      const songOrders = reordered.map((s, idx) => ({
+        playlistSongId: s.playlistSongId,
+        position: idx,
+      }));
+      await fetch(`/api/playlists/${selectedPlaylist.id}/songs/reorder`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ songOrders }),
+      });
+    } catch (e) {
+      console.error('Failed to save song reorder:', e);
     }
   };
 
@@ -201,6 +456,96 @@ export default function Library() {
     }
     return <span className="text-zinc-300">{item.artist || 'Unknown Artist'}</span>;
   };
+
+  // -----------------------------------------------------------------
+  // VIEW: Selected Playlist Drill-down
+  // -----------------------------------------------------------------
+  if (selectedPlaylist) {
+    return (
+      <>
+        <PlaylistDetailView
+          playlist={selectedPlaylist}
+          currentUser={user}
+          onBack={() => setSelectedPlaylist(null)}
+          onOpenArtist={openArtist}
+          onOpenAlbum={openAlbum}
+          onAddToQueue={addToQueue}
+          onPlayAll={handlePlayAll}
+          onOpenAddSongs={() => {
+            setActiveModalPlaylist(selectedPlaylist);
+            setIsAddSongsOpen(true);
+          }}
+          onOpenEdit={() => {
+            setActiveModalPlaylist(selectedPlaylist);
+            setIsEditPlaylistOpen(true);
+          }}
+          onOpenShare={() => {
+            setActiveModalPlaylist(selectedPlaylist);
+            setIsSharePlaylistOpen(true);
+          }}
+          onDuplicate={() => handleDuplicatePlaylist(selectedPlaylist)}
+          onClear={() => handleClearPlaylist(selectedPlaylist)}
+          onDelete={() => handleDeletePlaylist(selectedPlaylist)}
+          onCoverUpload={(file) => handleCoverUpload(selectedPlaylist.id, file)}
+          onCoverRemove={() => handleCoverRemove(selectedPlaylist.id)}
+          onRemoveSong={handleRemoveSong}
+          onReorderSong={handleReorderSong}
+          queuedSongId={queuedSongId}
+          playingAll={playingAll}
+        />
+
+        <AddSongsModal
+          isOpen={isAddSongsOpen}
+          playlist={activeModalPlaylist || selectedPlaylist}
+          onClose={() => {
+            setIsAddSongsOpen(false);
+            setActiveModalPlaylist(null);
+          }}
+          onSongAdded={(song) => {
+            setSelectedPlaylist(prev => {
+              if (!prev) return null;
+              const newSongs = [...(prev.songs || []), song];
+              return { ...prev, songs: newSongs, songCount: newSongs.length };
+            });
+            setPlaylists(prev => prev.map(p => {
+              if (p.id === selectedPlaylist.id) {
+                return { ...p, songCount: (p.songCount || 0) + 1 };
+              }
+              return p;
+            }));
+          }}
+        />
+
+        <EditPlaylistModal
+          isOpen={isEditPlaylistOpen}
+          playlist={activeModalPlaylist || selectedPlaylist}
+          currentUser={user}
+          onClose={() => {
+            setIsEditPlaylistOpen(false);
+            setActiveModalPlaylist(null);
+          }}
+          onUpdated={(updated) => {
+            setSelectedPlaylist(prev => prev ? { ...prev, ...updated } : null);
+            setPlaylists(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated } : p));
+          }}
+        />
+
+        <SharePlaylistModal
+          isOpen={isSharePlaylistOpen}
+          playlist={activeModalPlaylist || selectedPlaylist}
+          currentUser={user}
+          onClose={() => {
+            setIsSharePlaylistOpen(false);
+            setActiveModalPlaylist(null);
+          }}
+          onUpdated={(updated) => {
+            setSelectedPlaylist(prev => prev ? { ...prev, ...updated } : null);
+            setPlaylists(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated } : p));
+          }}
+        />
+      </>
+    );
+  }
 
   // -----------------------------------------------------------------
   // VIEW: Selected Artist Drill-down
@@ -435,7 +780,7 @@ export default function Library() {
         <div>
           <h1 className="text-3xl md:text-4xl font-extrabold text-white tracking-tight">Karaoke Media Library</h1>
           <p className="text-sm text-zinc-400 mt-1">
-            <span className="text-[#FF4FA3] font-semibold">{stats.artists}</span> Artists • <span className="text-[#FF4FA3] font-semibold">{stats.albums}</span> Albums • <span className="text-[#FF4FA3] font-semibold">{stats.songs}</span> Songs
+            <span className="text-[#FF4FA3] font-semibold">{stats.artists}</span> Artists • <span className="text-[#FF4FA3] font-semibold">{stats.albums}</span> Albums • <span className="text-[#FF4FA3] font-semibold">{stats.songs}</span> Songs • <span className="text-[#FF4FA3] font-semibold">{stats.playlists || playlists.length}</span> Playlists
           </p>
         </div>
 
@@ -567,24 +912,30 @@ export default function Library() {
       )}
 
       {/* Tabs */}
-      <div className="flex border-b border-white/10 gap-8">
+      <div className="flex border-b border-white/10 gap-8 overflow-x-auto">
         <button 
           onClick={() => setTab('artists')}
-          className={`pb-3 font-semibold text-sm border-b-2 transition-all ${tab === 'artists' ? 'border-[#FF4FA3] text-white' : 'border-transparent text-zinc-400 hover:text-zinc-200'}`}
+          className={`pb-3 font-semibold text-sm border-b-2 transition-all shrink-0 ${tab === 'artists' ? 'border-[#FF4FA3] text-white' : 'border-transparent text-zinc-400 hover:text-zinc-200'}`}
         >
           Artists ({stats.artists})
         </button>
         <button 
           onClick={() => setTab('albums')}
-          className={`pb-3 font-semibold text-sm border-b-2 transition-all ${tab === 'albums' ? 'border-[#FF4FA3] text-white' : 'border-transparent text-zinc-400 hover:text-zinc-200'}`}
+          className={`pb-3 font-semibold text-sm border-b-2 transition-all shrink-0 ${tab === 'albums' ? 'border-[#FF4FA3] text-white' : 'border-transparent text-zinc-400 hover:text-zinc-200'}`}
         >
           Albums ({stats.albums})
         </button>
         <button 
           onClick={() => setTab('songs')}
-          className={`pb-3 font-semibold text-sm border-b-2 transition-all ${tab === 'songs' ? 'border-[#FF4FA3] text-white' : 'border-transparent text-zinc-400 hover:text-zinc-200'}`}
+          className={`pb-3 font-semibold text-sm border-b-2 transition-all shrink-0 ${tab === 'songs' ? 'border-[#FF4FA3] text-white' : 'border-transparent text-zinc-400 hover:text-zinc-200'}`}
         >
           Songs ({stats.songs})
+        </button>
+        <button 
+          onClick={() => setTab('playlists')}
+          className={`pb-3 font-semibold text-sm border-b-2 transition-all shrink-0 ${tab === 'playlists' ? 'border-[#FF4FA3] text-white' : 'border-transparent text-zinc-400 hover:text-zinc-200'}`}
+        >
+          Playlists ({stats.playlists || playlists.length})
         </button>
       </div>
 
@@ -736,8 +1087,69 @@ export default function Library() {
               </table>
             </div>
           )}
+
+          {/* Playlists Grid */}
+          {tab === 'playlists' && (
+            <PlaylistsGrid
+              playlists={playlists}
+              currentUser={user}
+              onOpenPlaylist={openPlaylist}
+              onCreateNew={() => setIsCreatePlaylistOpen(true)}
+              onEdit={(playlist) => {
+                setActiveModalPlaylist(playlist);
+                setIsEditPlaylistOpen(true);
+              }}
+              onShare={(playlist) => {
+                setActiveModalPlaylist(playlist);
+                setIsSharePlaylistOpen(true);
+              }}
+              onDuplicate={handleDuplicatePlaylist}
+              onClear={handleClearPlaylist}
+              onDelete={handleDeletePlaylist}
+              onCoverUpload={handleCoverUpload}
+              onCoverRemove={handleCoverRemove}
+              onPlayAll={handlePlayAll}
+            />
+          )}
         </>
       )}
+
+      {/* Global Modals for Playlists Tab */}
+      <CreatePlaylistModal
+        isOpen={isCreatePlaylistOpen}
+        onClose={() => setIsCreatePlaylistOpen(false)}
+        onCreated={(created) => {
+          setPlaylists(prev => [created, ...prev]);
+          setStats(prev => ({ ...prev, playlists: prev.playlists + 1 }));
+          openPlaylist(created.id);
+        }}
+      />
+
+      <EditPlaylistModal
+        isOpen={isEditPlaylistOpen}
+        playlist={activeModalPlaylist}
+        currentUser={user}
+        onClose={() => {
+          setIsEditPlaylistOpen(false);
+          setActiveModalPlaylist(null);
+        }}
+        onUpdated={(updated) => {
+          setPlaylists(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated } : p));
+        }}
+      />
+
+      <SharePlaylistModal
+        isOpen={isSharePlaylistOpen}
+        playlist={activeModalPlaylist}
+        currentUser={user}
+        onClose={() => {
+          setIsSharePlaylistOpen(false);
+          setActiveModalPlaylist(null);
+        }}
+        onUpdated={(updated) => {
+          setPlaylists(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated } : p));
+        }}
+      />
     </div>
   );
 }
