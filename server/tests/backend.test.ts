@@ -961,6 +961,58 @@ test('Enhanced LRC (eLRC) support test scenarios (Test A, B, C, D, E)', async ()
   assert.strictEqual(resF.status, 200);
   const textF = await resF.text();
   assert.strictEqual(textF.includes('Valid fallback standard lyrics'), true);
+  // Test G: Library Scanner discovery with all 3 cases:
+  // Case 1 (Both exist): Song1.mp3, Song1.lrc, Song1.elrc.lrc
+  // Case 2 (Only LRC): Song2.mp3, Song2.lrc
+  // Case 3 (Only eLRC): Song3.mp3, Song3.elrc.lrc
+  const scanLibPath = path.join(process.cwd(), 'data', 'scan_elrc_lib');
+  if (!fsSync.existsSync(scanLibPath)) fsSync.mkdirSync(scanLibPath, { recursive: true });
+
+  // Case 1: Both exist
+  fsSync.writeFileSync(path.join(scanLibPath, 'Adele - Case1 Both.mp3'), 'audio1');
+  fsSync.writeFileSync(path.join(scanLibPath, 'Adele - Case1 Both.lrc'), '[00:01.00]Standard Line Case 1');
+  fsSync.writeFileSync(path.join(scanLibPath, 'Adele - Case1 Both.elrc.lrc'), '[00:01.00] <00:01.00>Word <00:01.50>Case1');
+
+  // Case 2: Only LRC
+  fsSync.writeFileSync(path.join(scanLibPath, 'Adele - Case2 LRC.mp3'), 'audio2');
+  fsSync.writeFileSync(path.join(scanLibPath, 'Adele - Case2 LRC.lrc'), '[00:02.00]Standard Line Case 2');
+
+  // Case 3: Only eLRC
+  fsSync.writeFileSync(path.join(scanLibPath, 'Adele - Case3 eLRC.mp3'), 'audio3');
+  fsSync.writeFileSync(path.join(scanLibPath, 'Adele - Case3 eLRC.elrc.lrc'), '[00:03.00] <00:03.00>Word <00:03.50>Case3');
+
+  const { scanLibrary } = await import('../lib/scanner.js');
+  const scanLibRes = await db.insert(libraries).values({ name: 'Scan eLRC Lib', path: scanLibPath }).returning();
+  await scanLibrary(scanLibRes[0].id, scanLibPath);
+
+  // Verify Case 1 in DB and via API:
+  const songCase1 = await db.select().from(songs).where(eq(songs.title, 'Case1 Both')).limit(1);
+  assert.strictEqual(songCase1.length, 1);
+  const lrcRecordCase1 = await db.select().from(lyrics).where(eq(lyrics.songId, songCase1[0].id)).limit(1);
+  assert.strictEqual(lrcRecordCase1.length, 1);
+  assert.strictEqual(lrcRecordCase1[0].lrcPath.endsWith('.elrc.lrc'), true);
+
+  const resCase1 = await fetch(`${baseUrl}/api/songs/${songCase1[0].id}/lyrics`);
+  assert.strictEqual(resCase1.status, 200);
+  const textCase1 = await resCase1.text();
+  assert.strictEqual(textCase1.includes('<00:01.00>Word'), true);
+  assert.strictEqual(textCase1.includes('Standard Line Case 1'), false);
+
+  // Verify Case 2 via API:
+  const songCase2 = await db.select().from(songs).where(eq(songs.title, 'Case2 LRC')).limit(1);
+  assert.strictEqual(songCase2.length, 1);
+  const resCase2 = await fetch(`${baseUrl}/api/songs/${songCase2[0].id}/lyrics`);
+  assert.strictEqual(resCase2.status, 200);
+  const textCase2 = await resCase2.text();
+  assert.strictEqual(textCase2.includes('Standard Line Case 2'), true);
+
+  // Verify Case 3 via API:
+  const songCase3 = await db.select().from(songs).where(eq(songs.title, 'Case3 eLRC')).limit(1);
+  assert.strictEqual(songCase3.length, 1);
+  const resCase3 = await fetch(`${baseUrl}/api/songs/${songCase3[0].id}/lyrics`);
+  assert.strictEqual(resCase3.status, 200);
+  const textCase3 = await resCase3.text();
+  assert.strictEqual(textCase3.includes('<00:03.00>Word'), true);
 });
 
 test('Close server', async () => {
