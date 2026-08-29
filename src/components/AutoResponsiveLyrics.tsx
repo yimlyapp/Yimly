@@ -516,10 +516,40 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                         ? (lyricsSettings.highlighted.opacity ?? 1.0)
                         : (lyricsSettings.unhighlighted.opacity ?? 0.45);
 
-                      const activeScale = isWordCurrent ? 1.08 : 1;
-                      const activeGlow = isWordCurrent
-                        ? `0 0 25px ${lyricsSettings.highlighted.color || '#FF4FA3'}80`
-                        : 'none';
+                      const wordAnimMode = lyricsSettings.wordHighlightAnimation || 'smooth';
+
+                      let activeScale = 1;
+                      let activeGlow = 'none';
+                      let wordTransition: any = { duration: 0.15, ease: 'easeOut' };
+                      let wordClassName = 'inline-block transition-colors';
+
+                      if (wordAnimMode === 'smooth') {
+                        activeScale = isWordCurrent ? 1.08 : 1;
+                        activeGlow = isWordCurrent
+                          ? `0 0 25px ${lyricsSettings.highlighted.color || '#FF4FA3'}80`
+                          : 'none';
+                        wordTransition = { duration: 0.15, ease: 'easeOut' };
+                        wordClassName = 'inline-block transition-colors';
+                      } else if (wordAnimMode === 'instant') {
+                        activeScale = isWordCurrent ? 1.08 : 1;
+                        activeGlow = isWordCurrent
+                          ? `0 0 25px ${lyricsSettings.highlighted.color || '#FF4FA3'}80`
+                          : 'none';
+                        wordTransition = { duration: 0 };
+                        wordClassName = 'inline-block';
+                      } else if (wordAnimMode === 'fade') {
+                        activeScale = 1;
+                        activeGlow = isWordCurrent
+                          ? `0 0 20px ${lyricsSettings.highlighted.color || '#FF4FA3'}70`
+                          : 'none';
+                        wordTransition = { duration: 0.25, ease: 'easeInOut' };
+                        wordClassName = 'inline-block transition-colors';
+                      } else if (wordAnimMode === 'off') {
+                        activeScale = 1;
+                        activeGlow = 'none';
+                        wordTransition = { duration: 0 };
+                        wordClassName = 'inline-block';
+                      }
 
                       return (
                         <motion.span
@@ -529,8 +559,8 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                             color: wordColor,
                             opacity: wordOpacity,
                           }}
-                          transition={{ duration: 0.15, ease: 'easeOut' }}
-                          className="inline-block transition-colors"
+                          transition={wordTransition}
+                          className={wordClassName}
                           style={{
                             textShadow: activeGlow,
                           }}

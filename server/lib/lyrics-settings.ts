@@ -16,6 +16,8 @@ export interface LyricsAppearanceSettings {
   visibleLines: number;
   highlightCurrentLine: boolean;
   animationDuration: number;
+  elrcHighlightMode?: 'karaoke' | 'current_only';
+  wordHighlightAnimation?: 'smooth' | 'instant' | 'fade' | 'off';
 }
 
 export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
@@ -42,7 +44,9 @@ export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
   alignment: 'center',
   visibleLines: 3,
   highlightCurrentLine: true,
-  animationDuration: 0.25
+  animationDuration: 0.25,
+  elrcHighlightMode: 'karaoke',
+  wordHighlightAnimation: 'smooth'
 };
 
 export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
@@ -77,6 +81,8 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
     alignment: validAlignments.includes(parsed.alignment) ? parsed.alignment : DEFAULT_LYRICS_SETTINGS.alignment,
     visibleLines: [1, 3, 5].includes(parsed.visibleLines) ? parsed.visibleLines : DEFAULT_LYRICS_SETTINGS.visibleLines,
     highlightCurrentLine: typeof parsed.highlightCurrentLine === 'boolean' ? parsed.highlightCurrentLine : DEFAULT_LYRICS_SETTINGS.highlightCurrentLine,
-    animationDuration: typeof parsed.animationDuration === 'number' && !isNaN(parsed.animationDuration) ? parsed.animationDuration : DEFAULT_LYRICS_SETTINGS.animationDuration
+    animationDuration: typeof parsed.animationDuration === 'number' && !isNaN(parsed.animationDuration) ? parsed.animationDuration : DEFAULT_LYRICS_SETTINGS.animationDuration,
+    elrcHighlightMode: ['karaoke', 'current_only'].includes(parsed.elrcHighlightMode) ? parsed.elrcHighlightMode : DEFAULT_LYRICS_SETTINGS.elrcHighlightMode,
+    wordHighlightAnimation: ['smooth', 'instant', 'fade', 'off'].includes(parsed.wordHighlightAnimation) ? parsed.wordHighlightAnimation : DEFAULT_LYRICS_SETTINGS.wordHighlightAnimation
   };
 }

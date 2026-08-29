@@ -19,6 +19,7 @@ export interface LyricsAppearanceSettings {
   highlightCurrentLine: boolean; // on / off
   animationDuration: number; // in seconds, e.g. 0.25
   elrcHighlightMode?: 'karaoke' | 'current_only'; // 'karaoke' (past + current) or 'current_only'
+  wordHighlightAnimation?: 'smooth' | 'instant' | 'fade' | 'off'; // 'smooth' | 'instant' | 'fade' | 'off'
   customFontName?: string | null;
   customFontFileName?: string | null;
 }
@@ -48,7 +49,8 @@ export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
   visibleLines: 3,
   highlightCurrentLine: true,
   animationDuration: 0.25,
-  elrcHighlightMode: 'karaoke'
+  elrcHighlightMode: 'karaoke',
+  wordHighlightAnimation: 'smooth'
 };
 
 const STORAGE_KEY = 'yimly_lyrics_appearance_settings_v1';
@@ -91,6 +93,7 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
     highlightCurrentLine: typeof parsed.highlightCurrentLine === 'boolean' ? parsed.highlightCurrentLine : DEFAULT_LYRICS_SETTINGS.highlightCurrentLine,
     animationDuration: typeof parsed.animationDuration === 'number' && !isNaN(parsed.animationDuration) ? parsed.animationDuration : DEFAULT_LYRICS_SETTINGS.animationDuration,
     elrcHighlightMode: ['karaoke', 'current_only'].includes(parsed.elrcHighlightMode) ? parsed.elrcHighlightMode : DEFAULT_LYRICS_SETTINGS.elrcHighlightMode,
+    wordHighlightAnimation: ['smooth', 'instant', 'fade', 'off'].includes(parsed.wordHighlightAnimation) ? parsed.wordHighlightAnimation : DEFAULT_LYRICS_SETTINGS.wordHighlightAnimation,
     customFontName: typeof parsed.customFontName === 'string' && parsed.customFontName.trim() ? parsed.customFontName.trim() : null,
     customFontFileName: typeof parsed.customFontFileName === 'string' && parsed.customFontFileName.trim() ? parsed.customFontFileName.trim() : null
   };
