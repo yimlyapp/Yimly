@@ -27,7 +27,7 @@ interface AutoResponsiveLyricsProps {
   next2Line?: LyricLine | null;
   visibleLinesCount?: number;
   applyTextCase: (text: string, textCase?: string) => string;
-  getFontFamilyStyle: (fontId?: string) => string;
+  getFontFamilyStyle: (fontId?: string, customFontName?: string | null) => string;
   getAlignmentClass: (alignment?: string) => string;
   // Optional preview mode flag for Settings screen
   isPreview?: boolean;
@@ -390,7 +390,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                   exit={{ opacity: 0, y: -6 }}
                   transition={{ duration: animDuration, ease: 'easeOut' }}
                   style={{
-                    fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
+                    fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font, lyricsSettings.customFontName),
                     fontSize: `${Math.max(12, lyricsSettings.unhighlighted.size - 2)}px`,
                     fontWeight: lyricsSettings.unhighlighted.weight,
                     color: lyricsSettings.unhighlighted.color || '#d4d4d8',
@@ -424,7 +424,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                   exit={{ opacity: 0, y: -6 }}
                   transition={{ duration: animDuration, ease: 'easeOut' }}
                   style={{
-                    fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
+                    fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font, lyricsSettings.customFontName),
                     fontSize: `${lyricsSettings.unhighlighted.size}px`,
                     fontWeight: lyricsSettings.unhighlighted.weight,
                     color: lyricsSettings.unhighlighted.color || '#d4d4d8',
@@ -461,8 +461,8 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                 transition={{ duration: animDuration, ease: 'easeOut' }}
                 style={{
                   fontFamily: isHighlighted
-                    ? getFontFamilyStyle(lyricsSettings.highlighted.font)
-                    : getFontFamilyStyle(lyricsSettings.unhighlighted.font),
+                    ? getFontFamilyStyle(lyricsSettings.highlighted.font, lyricsSettings.customFontName)
+                    : getFontFamilyStyle(lyricsSettings.unhighlighted.font, lyricsSettings.customFontName),
                   fontSize: `${
                     isHighlighted
                       ? lyricsSettings.highlighted.size
@@ -577,7 +577,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                   exit={{ opacity: 0, y: 6 }}
                   transition={{ duration: animDuration, ease: 'easeOut' }}
                   style={{
-                    fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
+                    fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font, lyricsSettings.customFontName),
                     fontSize: `${lyricsSettings.unhighlighted.size}px`,
                     fontWeight: lyricsSettings.unhighlighted.weight,
                     color: lyricsSettings.unhighlighted.color || '#d4d4d8',
@@ -611,7 +611,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                   exit={{ opacity: 0, y: 6 }}
                   transition={{ duration: animDuration, ease: 'easeOut' }}
                   style={{
-                    fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font),
+                    fontFamily: getFontFamilyStyle(lyricsSettings.unhighlighted.font, lyricsSettings.customFontName),
                     fontSize: `${Math.max(12, lyricsSettings.unhighlighted.size - 2)}px`,
                     fontWeight: lyricsSettings.unhighlighted.weight,
                     color: lyricsSettings.unhighlighted.color || '#d4d4d8',

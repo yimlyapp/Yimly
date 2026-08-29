@@ -19,6 +19,7 @@ import {
   getAlignmentClass,
   LYRICS_FONT_OPTIONS
 } from '../utils/lyricsSettings';
+import { saveCustomFontStorage, removeCustomFontStorage } from '../utils/customFontStorage';
 
 export default function Settings() {
   const context = useOutletContext<{ user: any }>();
@@ -371,12 +372,14 @@ export default function Settings() {
                   </label>
                   <select
                     value={lyricsSettings.highlighted.font}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const val = e.target.value;
                       updateSetting((prev) => ({
                         ...prev,
-                        highlighted: { ...prev.highlighted, font: e.target.value }
-                      }))
-                    }
+                        highlighted: { ...prev.highlighted, font: val },
+                        unhighlighted: { ...prev.unhighlighted, font: val }
+                      }));
+                    }}
                     className="w-full bg-[#08090E] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF4FA3]"
                   >
                     {LYRICS_FONT_OPTIONS.map((opt) => (
@@ -385,6 +388,68 @@ export default function Settings() {
                       </option>
                     ))}
                   </select>
+
+                  {lyricsSettings.highlighted.font === 'custom' && (
+                    <div className="mt-3 p-3 bg-white/5 border border-white/10 rounded-xl">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-zinc-300 font-medium">
+                          {lyricsSettings.customFontFileName ? `Loaded: ${lyricsSettings.customFontFileName}` : 'No custom font uploaded'}
+                        </span>
+                        {lyricsSettings.customFontName && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (lyricsSettings.customFontName) {
+                                try {
+                                  await removeCustomFontStorage(lyricsSettings.customFontName);
+                                } catch (e) {}
+                              }
+                              updateSetting((prev) => ({
+                                ...prev,
+                                customFontName: null,
+                                customFontFileName: null,
+                                highlighted: { ...prev.highlighted, font: 'system' },
+                                unhighlighted: { ...prev.unhighlighted, font: 'system' }
+                              }));
+                            }}
+                            className="text-xs text-rose-400 hover:text-rose-300 underline"
+                          >
+                            Remove Font
+                          </button>
+                        )}
+                      </div>
+                      <input
+                        type="file"
+                        accept=".ttf,.otf,.woff,.woff2"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          try {
+                            const buffer = await file.arrayBuffer();
+                            const fontNameClean = file.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+                            const uniqueFontName = `YimlyCustom_${fontNameClean}_${Date.now()}`;
+                            await saveCustomFontStorage(uniqueFontName, buffer);
+
+                            const fontFace = new FontFace(uniqueFontName, buffer);
+                            await fontFace.load();
+                            document.fonts.add(fontFace);
+
+                            updateSetting((prev) => ({
+                              ...prev,
+                              customFontName: uniqueFontName,
+                              customFontFileName: file.name,
+                              highlighted: { ...prev.highlighted, font: 'custom' },
+                              unhighlighted: { ...prev.unhighlighted, font: 'custom' }
+                            }));
+                          } catch (err) {
+                            console.error('Failed to load custom font:', err);
+                            alert('Failed to load custom font file. Please ensure it is a valid TTF, OTF, WOFF, or WOFF2 file.');
+                          }
+                        }}
+                        className="block w-full text-xs text-zinc-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-[#FF4FA3] file:text-white hover:file:bg-[#e03d90] cursor-pointer"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 {/* Weight */}

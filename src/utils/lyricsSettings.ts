@@ -1,3 +1,5 @@
+import { loadAndRegisterCustomFont } from './customFontStorage';
+
 export interface LyricStyleSettings {
   font: string; // 'system' | 'sans' | 'serif' | 'mono' | 'display' | 'rounded'
   size: number; // in px, e.g. 48
@@ -17,6 +19,8 @@ export interface LyricsAppearanceSettings {
   highlightCurrentLine: boolean; // on / off
   animationDuration: number; // in seconds, e.g. 0.25
   elrcHighlightMode?: 'karaoke' | 'current_only'; // 'karaoke' (past + current) or 'current_only'
+  customFontName?: string | null;
+  customFontFileName?: string | null;
 }
 
 export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
@@ -86,7 +90,9 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
     visibleLines: [1, 3, 5].includes(parsed.visibleLines) ? parsed.visibleLines : DEFAULT_LYRICS_SETTINGS.visibleLines,
     highlightCurrentLine: typeof parsed.highlightCurrentLine === 'boolean' ? parsed.highlightCurrentLine : DEFAULT_LYRICS_SETTINGS.highlightCurrentLine,
     animationDuration: typeof parsed.animationDuration === 'number' && !isNaN(parsed.animationDuration) ? parsed.animationDuration : DEFAULT_LYRICS_SETTINGS.animationDuration,
-    elrcHighlightMode: ['karaoke', 'current_only'].includes(parsed.elrcHighlightMode) ? parsed.elrcHighlightMode : DEFAULT_LYRICS_SETTINGS.elrcHighlightMode
+    elrcHighlightMode: ['karaoke', 'current_only'].includes(parsed.elrcHighlightMode) ? parsed.elrcHighlightMode : DEFAULT_LYRICS_SETTINGS.elrcHighlightMode,
+    customFontName: typeof parsed.customFontName === 'string' && parsed.customFontName.trim() ? parsed.customFontName.trim() : null,
+    customFontFileName: typeof parsed.customFontFileName === 'string' && parsed.customFontFileName.trim() ? parsed.customFontFileName.trim() : null
   };
 }
 
@@ -100,6 +106,8 @@ export function getLyricsSettings(): LyricsAppearanceSettings {
     if (saved) {
       const parsed = JSON.parse(saved);
       const canonical = resolveLyricsSettings(parsed);
+      loadAndRegisterCustomFont(canonical.highlighted.font, canonical.customFontName);
+      loadAndRegisterCustomFont(canonical.unhighlighted.font, canonical.customFontName);
       console.log('[LyricsSettings] Successfully loaded persisted settings from localStorage:', canonical);
       return canonical;
     }
@@ -231,11 +239,19 @@ export const LYRICS_FONT_OPTIONS: LyricFontOption[] = [
     value: 'rounded',
     label: 'Rounded',
     fontFamily: '"SF Pro Rounded", "Arial Rounded MT Bold", "Nunito", "Quicksand", sans-serif'
+  },
+  {
+    value: 'custom',
+    label: 'Custom Font',
+    fontFamily: 'custom'
   }
 ];
 
-export function getFontFamilyStyle(fontKey: string): string {
+export function getFontFamilyStyle(fontKey: string, customFontName?: string | null): string {
   const normalized = (fontKey || '').toLowerCase().trim();
+  if (normalized === 'custom' && customFontName) {
+    return `"${customFontName}", sans-serif`;
+  }
   if (normalized === 'huggable') {
     return '"Huggable", "SF Pro Rounded", "Arial Rounded MT Bold", "Nunito", "Quicksand", system-ui, sans-serif';
   }
