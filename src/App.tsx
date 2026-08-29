@@ -18,6 +18,7 @@ import Rooms from './pages/Rooms.tsx';
 import RoomSession from './pages/RoomSession.tsx';
 import Join from './pages/Join.tsx';
 import Download from './pages/Download.tsx';
+import ElrcTestPage from './pages/ElrcTestPage.tsx';
 
 export default function App() {
   const [setupStatus, setSetupStatus] = useState<boolean | null>(null);
@@ -53,6 +54,7 @@ export default function App() {
             
             {/* Dedicated Guest Join Route & Public Karaoke Room */}
             <Route path="/join" element={<Join />} />
+            <Route path="/elrc-test" element={<ElrcTestPage />} />
             <Route path="/rooms/:sessionId" element={<RoomSession />} />
 
             <Route path="/" element={<Layout />}>
