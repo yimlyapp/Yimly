@@ -829,6 +829,113 @@ test('Song LRC management and complete song deletion test scenario (using test a
   assert.strictEqual(unrelatedCheck.length, 1);
 });
 
+test('Enhanced LRC (eLRC) support test scenarios (Test A, B, C, D, E)', async () => {
+  const tempElrcPath = path.join(process.cwd(), 'data', 'elrc_test_lib');
+  if (!fsSync.existsSync(tempElrcPath)) fsSync.mkdirSync(tempElrcPath, { recursive: true });
+
+  const libRes = await db.insert(libraries).values({ name: 'eLRC Test Library', path: tempElrcPath }).returning();
+  const libId = libRes[0].id;
+
+  let artId: number;
+  const existingArt = await db.select().from(artists).where(eq(artists.name, 'Adele')).limit(1);
+  if (existingArt.length > 0) {
+    artId = existingArt[0].id;
+  } else {
+    const artRes = await db.insert(artists).values({ name: 'Adele' }).returning();
+    artId = artRes[0].id;
+  }
+
+  // Test A: Both files exist (.elrc.lrc and .lrc)
+  const songAName = 'Adele - Easy On Me';
+  const audioPathA = path.join(tempElrcPath, `${songAName}.mp3`);
+  const elrcPathA = path.join(tempElrcPath, `${songAName}.elrc.lrc`);
+  const lrcPathA = path.join(tempElrcPath, `${songAName}.lrc`);
+
+  fsSync.writeFileSync(audioPathA, 'fake audio');
+  const elrcContentA = '[by:usersync]\n[re:usersync (whisperx wav2vec2)]\n[00:13.05] <00:13.01>There <00:13.55>ain\'t <00:13.87>no <00:14.47>gold <00:16.55>in <00:16.81>this <00:17.23>river <00:18.39>';
+  fsSync.writeFileSync(elrcPathA, elrcContentA);
+  fsSync.writeFileSync(lrcPathA, '[00:13.05]Standard LRC fallback content without word timestamps');
+
+  const songAIns = await db.insert(songs).values({
+    libraryId: libId,
+    artistId: artId,
+    title: 'Easy On Me',
+    mainAudioPath: audioPathA,
+    duration: 200,
+  }).returning();
+  const songAId = songAIns[0].id;
+
+  // Fetch lyrics for Song A -> should pick .elrc.lrc (Test A)
+  const resA = await fetch(`${baseUrl}/api/songs/${songAId}/lyrics`);
+  assert.strictEqual(resA.status, 200);
+  const textA = await resA.text();
+  assert.strictEqual(textA.includes('<00:13.01>There'), true);
+  assert.strictEqual(textA.includes('[by:usersync]'), true); // Test E metadata preserved
+
+  // Test C: Only .elrc.lrc exists
+  const songCName = 'Adele - When We Were Young';
+  const audioPathC = path.join(tempElrcPath, `${songCName}.mp3`);
+  const elrcPathC = path.join(tempElrcPath, `${songCName}.elrc.lrc`);
+
+  fsSync.writeFileSync(audioPathC, 'fake audio');
+  const elrcContentC = '[00:05.00] <00:05.00>Hello <00:05.50>it\'s <00:06.00>me';
+  fsSync.writeFileSync(elrcPathC, elrcContentC);
+
+  const songCIns = await db.insert(songs).values({
+    libraryId: libId,
+    artistId: artId,
+    title: 'When We Were Young',
+    mainAudioPath: audioPathC,
+    duration: 180,
+  }).returning();
+  const songCId = songCIns[0].id;
+
+  const resC = await fetch(`${baseUrl}/api/songs/${songCId}/lyrics`);
+  assert.strictEqual(resC.status, 200);
+  const textC = await resC.text();
+  assert.strictEqual(textC.includes('<00:05.00>Hello'), true);
+
+  // Test B: Only .lrc exists
+  const songBName = 'Adele - Hello';
+  const audioPathB = path.join(tempElrcPath, `${songBName}.mp3`);
+  const lrcPathB = path.join(tempElrcPath, `${songBName}.lrc`);
+
+  fsSync.writeFileSync(audioPathB, 'fake audio');
+  const lrcContentB = '[00:10.00]Standard lyrics only';
+  fsSync.writeFileSync(lrcPathB, lrcContentB);
+
+  const songBIns = await db.insert(songs).values({
+    libraryId: libId,
+    artistId: artId,
+    title: 'Hello',
+    mainAudioPath: audioPathB,
+    duration: 250,
+  }).returning();
+  const songBId = songBIns[0].id;
+
+  const resB = await fetch(`${baseUrl}/api/songs/${songBId}/lyrics`);
+  assert.strictEqual(resB.status, 200);
+  const textB = await resB.text();
+  assert.strictEqual(textB.includes('Standard lyrics only'), true);
+
+  // Test D: Neither exists
+  const songDName = 'Adele - No Lyrics Song';
+  const audioPathD = path.join(tempElrcPath, `${songDName}.mp3`);
+  fsSync.writeFileSync(audioPathD, 'fake audio');
+
+  const songDIns = await db.insert(songs).values({
+    libraryId: libId,
+    artistId: artId,
+    title: 'No Lyrics Song',
+    mainAudioPath: audioPathD,
+    duration: 150,
+  }).returning();
+  const songDId = songDIns[0].id;
+
+  const resD = await fetch(`${baseUrl}/api/songs/${songDId}/lyrics`);
+  assert.strictEqual(resD.status, 404);
+});
+
 test('Close server', async () => {
   await new Promise<void>((resolve) => {
     server.close(() => resolve());

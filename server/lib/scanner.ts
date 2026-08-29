@@ -147,6 +147,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     baseName: string;
     cleanBaseName: string;
     dir: string;
+    isElrc: boolean;
   }
 
   const audioList: DiscoveredAudio[] = [];
@@ -322,6 +323,21 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
         dir,
         songKey: key,
       });
+    } else if (filename.toLowerCase().endsWith('.elrc.lrc')) {
+      foundFilePaths.add(fullPath);
+      const elrcBase = filename.slice(0, -9);
+      const lrcItem: DiscoveredLrc = {
+        fullPath,
+        filename,
+        baseName: elrcBase,
+        cleanBaseName: cleanVariantFromBaseName(elrcBase),
+        dir,
+        isElrc: true,
+      };
+      if (!dirLrcMap.has(dir)) {
+        dirLrcMap.set(dir, []);
+      }
+      dirLrcMap.get(dir)!.push(lrcItem);
     } else if (ext === '.lrc') {
       foundFilePaths.add(fullPath);
       const lrcItem: DiscoveredLrc = {
@@ -330,6 +346,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
         baseName,
         cleanBaseName: cleanVariantFromBaseName(baseName),
         dir,
+        isElrc: false,
       };
       if (!dirLrcMap.has(dir)) {
         dirLrcMap.set(dir, []);
@@ -340,7 +357,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
 
   await walk(dirPath);
 
-  // Match LRC files to songs using filesystem path and base filename
+  // Match LRC files to songs using filesystem path and base filename (.elrc.lrc prioritized over .lrc)
   for (const audio of audioList) {
     const songInfo = songsMap.get(audio.songKey);
     if (!songInfo || songInfo.lrc) continue;
@@ -351,33 +368,54 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     const normAudioBase = normalizeBaseName(audio.baseName);
     const cleanAudioBase = audio.cleanBaseName;
 
-    // 1. Exact base filename match (case-insensitive & whitespace trimmed)
-    // e.g., "Song Name.mp3" <-> "Song Name.lrc" or "song name.lrc"
-    const exactMatch = dirLrcs.find(lrc => normalizeBaseName(lrc.baseName) === normAudioBase);
-    if (exactMatch) {
-      songInfo.lrc = exactMatch.fullPath;
-      continue;
+    const elrcs = dirLrcs.filter(l => l.isElrc);
+    const stdLrcs = dirLrcs.filter(l => !l.isElrc);
+
+    let matchedPath: string | null = null;
+
+    for (const pool of [elrcs, stdLrcs]) {
+      if (pool.length === 0) continue;
+
+      // 1. Exact base filename match (case-insensitive & whitespace trimmed)
+      const exactMatch = pool.find(lrc => normalizeBaseName(lrc.baseName) === normAudioBase);
+      if (exactMatch) {
+        matchedPath = exactMatch.fullPath;
+        break;
+      }
+
+      // 2. Cleaned base filename match (without variant suffix like Instrumental)
+      const cleanMatch = pool.find(lrc => lrc.cleanBaseName === cleanAudioBase);
+      if (cleanMatch) {
+        matchedPath = cleanMatch.fullPath;
+        break;
+      }
+
+      // 3. Match against song's clean title if title appears as exact base filename in same dir
+      const songTitleNorm = normalizeBaseName(songInfo.title);
+      const titleMatch = pool.find(lrc => normalizeBaseName(lrc.baseName) === songTitleNorm || lrc.cleanBaseName === songTitleNorm);
+      if (titleMatch) {
+        matchedPath = titleMatch.fullPath;
+        break;
+      }
     }
 
-    // 2. Cleaned base filename match (without variant suffix like Instrumental)
-    const cleanMatch = dirLrcs.find(lrc => lrc.cleanBaseName === cleanAudioBase);
-    if (cleanMatch) {
-      songInfo.lrc = cleanMatch.fullPath;
-      continue;
-    }
-
-    // 3. Match against song's clean title if title appears as exact base filename in same dir
-    const songTitleNorm = normalizeBaseName(songInfo.title);
-    const titleMatch = dirLrcs.find(lrc => normalizeBaseName(lrc.baseName) === songTitleNorm || lrc.cleanBaseName === songTitleNorm);
-    if (titleMatch) {
-      songInfo.lrc = titleMatch.fullPath;
-      continue;
+    if (matchedPath) {
+      songInfo.lrc = matchedPath;
     }
   }
 
-  // Fallback for any unmatched LRCs: if LRC is elsewhere or loose matching is needed
-  for (const [dir, dirLrcs] of dirLrcMap.entries()) {
+  // Fallback for any unmatched LRCs: elrcs first, then stdLrcs
+  const allElrcs: DiscoveredLrc[] = [];
+  const allStdLrcs: DiscoveredLrc[] = [];
+  for (const dirLrcs of dirLrcMap.values()) {
     for (const lrc of dirLrcs) {
+      if (lrc.isElrc) allElrcs.push(lrc);
+      else allStdLrcs.push(lrc);
+    }
+  }
+
+  for (const lrcPool of [allElrcs, allStdLrcs]) {
+    for (const lrc of lrcPool) {
       const lrcBaseNorm = normalizeBaseName(lrc.baseName);
       const lrcClean = lrc.cleanBaseName;
 

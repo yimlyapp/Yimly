@@ -288,30 +288,55 @@ router.get('/:id/lyrics', async (req, res) => {
         const cleanBase = audioBase.replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim();
 
         const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-        const lrcFiles = entries.filter(e => e.isFile() && e.name.toLowerCase().endsWith('.lrc')).map(e => e.name);
+        const lrcEntries = entries.filter(e => e.isFile() && (e.name.toLowerCase().endsWith('.elrc.lrc') || e.name.toLowerCase().endsWith('.lrc')));
 
-        // 1. Direct base match (e.g. Song.mp3 -> Song.lrc or song.lrc)
-        const exactLrc = lrcFiles.find(name => {
-          const lrcBase = name.slice(0, -4);
-          return lrcBase.trim().toLowerCase() === audioBase.trim().toLowerCase();
+        const parsedLrcs = lrcEntries.map(e => {
+          const lower = e.name.toLowerCase();
+          const isElrc = lower.endsWith('.elrc.lrc');
+          const extLen = isElrc ? 9 : 4;
+          const lrcBase = e.name.slice(0, -extLen);
+          const cleanLrcBase = lrcBase.replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim();
+          return {
+            name: e.name,
+            fullPath: path.join(dir, e.name),
+            lrcBase,
+            cleanLrcBase,
+            isElrc,
+          };
         });
 
-        // 2. Clean variant match
-        const cleanLrc = lrcFiles.find(name => {
-          const lrcBase = name.slice(0, -4).replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim();
-          return lrcBase.toLowerCase() === cleanBase.toLowerCase();
-        });
+        const elrcFiles = parsedLrcs.filter(l => l.isElrc);
+        const stdLrcFiles = parsedLrcs.filter(l => !l.isElrc);
 
-        // 3. Title match
-        const titleNorm = song[0].title.trim().toLowerCase();
-        const titleLrc = lrcFiles.find(name => {
-          const lrcBase = name.slice(0, -4).trim().toLowerCase();
-          return lrcBase === titleNorm;
-        });
+        let matchedPath: string | null = null;
 
-        const targetLrcName = exactLrc || cleanLrc || titleLrc;
-        if (targetLrcName) {
-          const matchedPath = path.join(dir, targetLrcName);
+        for (const pool of [elrcFiles, stdLrcFiles]) {
+          if (pool.length === 0) continue;
+
+          // 1. Direct base match (e.g. Song.mp3 -> Song.elrc.lrc / Song.lrc)
+          const exact = pool.find(l => l.lrcBase.trim().toLowerCase() === audioBase.trim().toLowerCase());
+          if (exact) {
+            matchedPath = exact.fullPath;
+            break;
+          }
+
+          // 2. Clean variant match
+          const clean = pool.find(l => l.cleanLrcBase.toLowerCase() === cleanBase.toLowerCase());
+          if (clean) {
+            matchedPath = clean.fullPath;
+            break;
+          }
+
+          // 3. Title match
+          const titleNorm = song[0].title.trim().toLowerCase();
+          const titleMatch = pool.find(l => l.lrcBase.trim().toLowerCase() === titleNorm);
+          if (titleMatch) {
+            matchedPath = titleMatch.fullPath;
+            break;
+          }
+        }
+
+        if (matchedPath) {
           // Persist match to database for future queries
           if (lrc.length === 0) {
             await db.insert(lyrics).values({ songId: id, lrcPath: matchedPath });
@@ -498,8 +523,11 @@ router.delete('/:id', requireAdmin, async (req: AuthenticatedRequest, res) => {
         try {
           const entries = fs.readdirSync(dir, { withFileTypes: true });
           for (const entry of entries) {
-            if (entry.isFile() && entry.name.toLowerCase().endsWith('.lrc')) {
-              const lrcBase = path.basename(entry.name, '.lrc');
+            const lowerName = entry.name.toLowerCase();
+            if (entry.isFile() && (lowerName.endsWith('.elrc.lrc') || lowerName.endsWith('.lrc'))) {
+              const isElrc = lowerName.endsWith('.elrc.lrc');
+              const extLen = isElrc ? 9 : 4;
+              const lrcBase = entry.name.slice(0, -extLen);
               const cleanLrcBase = lrcBase.replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim().toLowerCase();
               if (cleanLrcBase === cleanBase || lrcBase.toLowerCase() === baseName.toLowerCase()) {
                 const fullLrcPath = path.join(dir, entry.name);
