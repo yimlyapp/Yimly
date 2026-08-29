@@ -835,47 +835,52 @@ export default function RoomSession() {
         continue;
       }
 
+      // Match leading bracketed timestamp(s) at the start of the line
+      const leadingMatch = trimmed.match(/^(\s*\[\d{1,2}:\d{2}(?:\.\d{1,3})?\])+/);
+      if (!leadingMatch) continue;
+
       const timeRegex = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]/g;
       let match;
       const lineTimestamps: number[] = [];
-      let lastIndex = 0;
 
-      while ((match = timeRegex.exec(trimmed)) !== null) {
-        const time = parseTimestamp(match[1], match[2], match[3]);
-        lineTimestamps.push(time);
-        lastIndex = timeRegex.lastIndex;
+      while ((match = timeRegex.exec(leadingMatch[0])) !== null) {
+        lineTimestamps.push(parseTimestamp(match[1], match[2], match[3]));
       }
 
       if (lineTimestamps.length === 0) {
         continue;
       }
 
-      const remainder = trimmed.slice(lastIndex).trim();
+      const remainder = trimmed.slice(leadingMatch[0].length).trim();
 
+      // Check for word timestamps: <mm:ss.xx>word
       const wordRegex = /<(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?>([^<]+)/g;
       let wordMatch;
       const words: { text: string; start: number }[] = [];
 
       while ((wordMatch = wordRegex.exec(remainder)) !== null) {
         const wTime = parseTimestamp(wordMatch[1], wordMatch[2], wordMatch[3]);
-        const wText = wordMatch[4].trim();
+        const wText = wordMatch[4].replace(/\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]/g, '').trim();
         if (wText) {
           words.push({ text: wText, start: wTime });
         }
       }
 
-      const cleanText = remainder.replace(/<[^>]+>/g, '').trim();
+      const cleanText = remainder
+        .replace(/<[^>]+>/g, '')
+        .replace(/\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]/g, '')
+        .trim();
 
       if (words.length > 0) {
         const fullText = words.map(w => w.text).join(' ');
-        for (const t of lineTimestamps) {
-          result.push({
-            time: t,
-            text: fullText,
-            words: words,
-          });
-        }
+        // For eLRC lines with word timestamps, use the first leading line timestamp
+        result.push({
+          time: lineTimestamps[0],
+          text: fullText,
+          words: words,
+        });
       } else if (cleanText) {
+        // For normal LRC lines, multiple leading timestamps indicate repeated lines
         for (const t of lineTimestamps) {
           result.push({
             time: t,
