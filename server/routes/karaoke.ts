@@ -196,9 +196,21 @@ router.get('/active-sessions', async (req, res) => {
 });
 
 // Explicitly End Session Endpoint
-router.post('/sessions/:sessionId/end', async (req, res) => {
+router.post('/sessions/:sessionId/end', async (req: any, res: any) => {
   try {
     const { sessionId } = req.params;
+    const sessionRes = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    
+    if (sessionRes.length === 0) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    
+    const session = sessionRes[0];
+    
+    if (req.user?.role !== 'administrator' && session.hostId !== req.user?.id) {
+      return res.status(403).json({ error: 'Forbidden. You are not the host of this session.' });
+    }
+    
     await db.update(sessions).set({ status: 'closed' }).where(eq(sessions.id, sessionId));
     await db.delete(queueItems).where(eq(queueItems.sessionId, sessionId));
     closeSessionWS(sessionId);
