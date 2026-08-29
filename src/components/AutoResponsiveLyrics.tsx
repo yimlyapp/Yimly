@@ -3,9 +3,15 @@ import { motion, AnimatePresence } from 'motion/react';
 import { LyricsAppearanceSettings } from '../utils/lyricsSettings';
 import { Tv, Bug } from 'lucide-react';
 
+export interface LyricWord {
+  text: string;
+  start: number;
+}
+
 export interface LyricLine {
   time: number;
   text: string;
+  words?: LyricWord[];
 }
 
 interface AutoResponsiveLyricsProps {
@@ -25,6 +31,8 @@ interface AutoResponsiveLyricsProps {
   getAlignmentClass: (alignment?: string) => string;
   // Optional preview mode flag for Settings screen
   isPreview?: boolean;
+  currentTime?: number;
+  lyricOffset?: number;
 }
 
 interface DiagnosticData {
@@ -58,6 +66,8 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
   getFontFamilyStyle,
   getAlignmentClass,
   isPreview = false,
+  currentTime = 0,
+  lyricOffset = 0,
 }) => {
   const stageRef = useRef<HTMLDivElement>(null);
   const groupRef = useRef<HTMLDivElement>(null);
@@ -481,11 +491,59 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                 }}
                 className="w-full whitespace-normal break-words leading-tight"
               >
-                {applyTextCase(
-                  currLine.text || '♪ ♪ ♪',
-                  isHighlighted
-                    ? lyricsSettings.highlighted.textCase
-                    : lyricsSettings.unhighlighted.textCase
+                {currLine.words && currLine.words.length > 0 ? (
+                  <span className="inline-flex flex-wrap items-center gap-x-[0.3em] gap-y-1">
+                    {currLine.words.map((word, wIdx) => {
+                      const adjustedTime = currentTime + (lyricOffset / 1000);
+                      const wordStartTime = word.start;
+                      const nextWordStartTime = (wIdx + 1 < currLine.words!.length)
+                        ? currLine.words![wIdx + 1].start
+                        : (next1Line?.time ?? (word.start + 3));
+
+                      const isWordSungOrCurrent = isHighlighted && (isPreview || adjustedTime >= wordStartTime);
+                      const isWordCurrent = isHighlighted && !isPreview && (adjustedTime >= wordStartTime && adjustedTime < nextWordStartTime);
+
+                      const wordColor = isWordSungOrCurrent
+                        ? (lyricsSettings.highlighted.color || '#FF4FA3')
+                        : (lyricsSettings.unhighlighted.color || '#d4d4d8');
+
+                      const wordOpacity = isWordSungOrCurrent
+                        ? (lyricsSettings.highlighted.opacity ?? 1.0)
+                        : (lyricsSettings.unhighlighted.opacity ?? 0.45);
+
+                      return (
+                        <motion.span
+                          key={`word-${wIdx}-${word.text}`}
+                          animate={{
+                            scale: isWordCurrent ? 1.08 : 1,
+                            color: wordColor,
+                            opacity: wordOpacity,
+                          }}
+                          transition={{ duration: 0.15, ease: 'easeOut' }}
+                          className="inline-block transition-colors"
+                          style={{
+                            textShadow: isWordCurrent
+                              ? `0 0 25px ${lyricsSettings.highlighted.color || '#FF4FA3'}80`
+                              : 'none',
+                          }}
+                        >
+                          {applyTextCase(
+                            word.text,
+                            isHighlighted
+                              ? lyricsSettings.highlighted.textCase
+                              : lyricsSettings.unhighlighted.textCase
+                          )}
+                        </motion.span>
+                      );
+                    })}
+                  </span>
+                ) : (
+                  applyTextCase(
+                    currLine.text || '♪ ♪ ♪',
+                    isHighlighted
+                      ? lyricsSettings.highlighted.textCase
+                      : lyricsSettings.unhighlighted.textCase
+                  )
                 )}
               </motion.p>
             ) : (

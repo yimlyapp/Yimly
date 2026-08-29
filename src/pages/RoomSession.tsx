@@ -22,9 +22,15 @@ import {
 } from 'lucide-react';
 import { filterSongs, SearchableSong } from '../lib/search-utils';
 
-interface LyricLine {
+export interface LyricWord {
+  text: string;
+  start: number;
+}
+
+export interface LyricLine {
   time: number;
   text: string;
+  words?: LyricWord[];
 }
 
 interface SongItem extends SearchableSong {}
@@ -797,18 +803,71 @@ export default function RoomSession() {
   function parseLrc(lrcText: string): LyricLine[] {
     const lines = lrcText.split('\n');
     const result: LyricLine[] = [];
-    const regex = /\[(\d{2}):(\d{2})(?:\.(\d{2,3}))?\](.*)/;
-    for (const line of lines) {
-      const match = line.match(regex);
-      if (match) {
-        const minutes = parseInt(match[1], 10);
-        const seconds = parseInt(match[2], 10);
-        const millis = match[3] ? parseInt(match[3].padEnd(3, '0').slice(0, 3), 10) : 0;
-        const time = minutes * 60 + seconds + millis / 1000;
-        const text = match[4].trim();
-        result.push({ time, text });
+
+    function parseTimestamp(minStr: string, secStr: string, milliStr?: string): number {
+      const minutes = parseInt(minStr, 10);
+      const seconds = parseInt(secStr, 10);
+      const millis = milliStr ? parseInt(milliStr.padEnd(3, '0').slice(0, 3), 10) : 0;
+      return minutes * 60 + seconds + millis / 1000;
+    }
+
+    for (const rawLine of lines) {
+      const trimmed = rawLine.trim();
+      if (!trimmed) continue;
+      if (/^\[(by|re|ti|ar|al|au|length|offset):/i.test(trimmed)) {
+        continue;
+      }
+
+      const timeRegex = /\[(\d{2}):(\d{2})(?:\.(\d{2,3}))?\]/g;
+      let match;
+      const lineTimestamps: number[] = [];
+      let lastIndex = 0;
+
+      while ((match = timeRegex.exec(trimmed)) !== null) {
+        const time = parseTimestamp(match[1], match[2], match[3]);
+        lineTimestamps.push(time);
+        lastIndex = timeRegex.lastIndex;
+      }
+
+      if (lineTimestamps.length === 0) {
+        continue;
+      }
+
+      const remainder = trimmed.slice(lastIndex).trim();
+
+      const wordRegex = /<(\d{2}):(\d{2})(?:\.(\d{2,3}))?>([^<]+)/g;
+      let wordMatch;
+      const words: { text: string; start: number }[] = [];
+
+      while ((wordMatch = wordRegex.exec(remainder)) !== null) {
+        const wTime = parseTimestamp(wordMatch[1], wordMatch[2], wordMatch[3]);
+        const wText = wordMatch[4].trim();
+        if (wText) {
+          words.push({ text: wText, start: wTime });
+        }
+      }
+
+      const cleanText = remainder.replace(/<[^>]+>/g, '').trim();
+
+      if (words.length > 0) {
+        const fullText = words.map(w => w.text).join(' ');
+        for (const t of lineTimestamps) {
+          result.push({
+            time: t,
+            text: fullText,
+            words: words,
+          });
+        }
+      } else if (cleanText) {
+        for (const t of lineTimestamps) {
+          result.push({
+            time: t,
+            text: cleanText,
+          });
+        }
       }
     }
+
     return result.sort((a, b) => a.time - b.time);
   }
 
@@ -1445,6 +1504,8 @@ export default function RoomSession() {
                   applyTextCase={applyTextCase}
                   getFontFamilyStyle={getFontFamilyStyle}
                   getAlignmentClass={getAlignmentClass}
+                  currentTime={currentTime}
+                  lyricOffset={lyricOffset}
                 />
               ) : (
                 /* Fallback when no synced LRC is available */
