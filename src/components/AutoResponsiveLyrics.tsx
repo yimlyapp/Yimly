@@ -500,14 +500,13 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                         ? currLine.words![wIdx + 1].start
                         : (next1Line?.time ?? (word.start + 3));
 
-                      const isWordSungOrCurrent = isHighlighted && (isPreview || adjustedTime >= wordStartTime);
-                      const isWordCurrent = isHighlighted && !isPreview && (adjustedTime >= wordStartTime && adjustedTime < nextWordStartTime);
+                      const isWordCurrent = isHighlighted && (isPreview ? wIdx === 0 : (adjustedTime >= wordStartTime && adjustedTime < nextWordStartTime));
 
-                      const wordColor = isWordSungOrCurrent
+                      const wordColor = isWordCurrent
                         ? (lyricsSettings.highlighted.color || '#FF4FA3')
                         : (lyricsSettings.unhighlighted.color || '#d4d4d8');
 
-                      const wordOpacity = isWordSungOrCurrent
+                      const wordOpacity = isWordCurrent
                         ? (lyricsSettings.highlighted.opacity ?? 1.0)
                         : (lyricsSettings.unhighlighted.opacity ?? 0.45);
 
