@@ -741,6 +741,8 @@ export default function RoomSession() {
 
   // Fetch song details and lyrics whenever currentSong changes
   useEffect(() => {
+    let isCancelled = false;
+
     if (lastSongIdRef.current !== null && lastSongIdRef.current !== currentSong?.songId) {
       const currentSettings = getLyricsSettings();
       const currentJson = JSON.stringify(currentSettings);
@@ -750,8 +752,13 @@ export default function RoomSession() {
     }
     lastSongIdRef.current = currentSong?.songId ?? null;
 
+    // Reset lyrics immediately upon song switch to ensure no stale lyrics state
+    setLyrics([]);
+
     if (currentSong?.songId) {
-      fetch(`/api/songs/${currentSong.songId}`)
+      const songId = currentSong.songId;
+
+      fetch(`/api/songs/${songId}`)
         .then(async res => {
           if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
             return await res.json();
@@ -759,7 +766,7 @@ export default function RoomSession() {
           return null;
         })
         .then(data => {
-          if (data) {
+          if (!isCancelled && data) {
             setCurrentSongDetails(data);
             if (data.lyricOffset !== undefined && typeof data.lyricOffset === 'number') {
               setLyricOffset(data.lyricOffset);
@@ -768,21 +775,30 @@ export default function RoomSession() {
         })
         .catch(err => console.error('Failed to fetch song details:', err));
 
-      fetch(`/api/songs/${currentSong.songId}/lyrics`)
+      fetch(`/api/songs/${songId}/lyrics`)
         .then(res => {
           if (!res.ok) throw new Error('No lyrics');
           return res.text();
         })
         .then(text => {
-          setLyrics(parseLrc(text));
+          if (!isCancelled) {
+            const parsed = parseLrc(text);
+            setLyrics(parsed);
+          }
         })
         .catch(() => {
-          setLyrics([]);
+          if (!isCancelled) {
+            setLyrics([]);
+          }
         });
     } else {
       setCurrentSongDetails(null);
       setLyrics([]);
     }
+
+    return () => {
+      isCancelled = true;
+    };
   }, [currentSong?.songId]);
 
   // Load songs for song picker modal (guests only)
@@ -801,6 +817,7 @@ export default function RoomSession() {
   }, [showLibrary]);
 
   function parseLrc(lrcText: string): LyricLine[] {
+    if (!lrcText || typeof lrcText !== 'string') return [];
     const lines = lrcText.split('\n');
     const result: LyricLine[] = [];
 
@@ -814,11 +831,11 @@ export default function RoomSession() {
     for (const rawLine of lines) {
       const trimmed = rawLine.trim();
       if (!trimmed) continue;
-      if (/^\[(by|re|ti|ar|al|au|length|offset):/i.test(trimmed)) {
+      if (/^\[(by|re|ti|ar|al|au|length|offset|tool|ve|kana):/i.test(trimmed)) {
         continue;
       }
 
-      const timeRegex = /\[(\d{2}):(\d{2})(?:\.(\d{2,3}))?\]/g;
+      const timeRegex = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]/g;
       let match;
       const lineTimestamps: number[] = [];
       let lastIndex = 0;
@@ -835,7 +852,7 @@ export default function RoomSession() {
 
       const remainder = trimmed.slice(lastIndex).trim();
 
-      const wordRegex = /<(\d{2}):(\d{2})(?:\.(\d{2,3}))?>([^<]+)/g;
+      const wordRegex = /<(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?>([^<]+)/g;
       let wordMatch;
       const words: { text: string; start: number }[] = [];
 

@@ -47,6 +47,37 @@ export function computeEffectiveLyricsProviders(
 }
 
 /**
+ * Checks if a string contains valid parseable lyrics or timestamps.
+ * Returns true if the content has at least one valid timestamp line or parseable lyric lines.
+ */
+export function isLrcContentValid(content: string): boolean {
+  if (!content || typeof content !== 'string') return false;
+  const trimmed = content.trim();
+  if (trimmed.length === 0) return false;
+
+  const lines = trimmed.split('\n');
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    // Skip file metadata tags like [by:xyz], [offset:0], [re:xyz], [ti:xyz], [ar:xyz], [al:xyz], [au:xyz], [length:xyz]
+    if (/^\[(by|re|ti|ar|al|au|length|offset|tool|ve|kana):/i.test(line)) {
+      continue;
+    }
+    // Check for timestamp tag [mm:ss.xx] or word timestamp <mm:ss.xx>
+    if (/\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]/.test(line) || /<\d{1,2}:\d{2}(?:\.\d{1,3})?>/.test(line)) {
+      return true;
+    }
+  }
+
+  // Fallback: Check if there's any non-tag text line
+  const nonTagLines = lines.filter(l => {
+    const t = l.trim();
+    return t.length > 0 && !t.startsWith('[') && !t.startsWith('#');
+  });
+  return nonTagLines.length > 0;
+}
+
+/**
  * Removes timestamp tags from synced LRC lyrics to produce clean plain lyrics text.
  * Matches Downtify's _strip_lrc_timestamps logic.
  */

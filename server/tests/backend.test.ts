@@ -871,6 +871,8 @@ test('Enhanced LRC (eLRC) support test scenarios (Test A, B, C, D, E)', async ()
   const textA = await resA.text();
   assert.strictEqual(textA.includes('<00:13.01>There'), true);
   assert.strictEqual(textA.includes('[by:usersync]'), true); // Test E metadata preserved
+  assert.strictEqual(textA.includes('Standard LRC fallback content'), false);
+  assert.strictEqual(textA, elrcContentA);
 
   // Test C: Only .elrc.lrc exists
   const songCName = 'Adele - When We Were Young';
@@ -934,6 +936,31 @@ test('Enhanced LRC (eLRC) support test scenarios (Test A, B, C, D, E)', async ()
 
   const resD = await fetch(`${baseUrl}/api/songs/${songDId}/lyrics`);
   assert.strictEqual(resD.status, 404);
+
+  // Test F: Invalid/unparseable .elrc.lrc gracefully falls back to valid .lrc
+  const songFName = 'Adele - Corrupted eLRC Fallback';
+  const audioPathF = path.join(tempElrcPath, `${songFName}.mp3`);
+  const elrcPathF = path.join(tempElrcPath, `${songFName}.elrc.lrc`);
+  const lrcPathF = path.join(tempElrcPath, `${songFName}.lrc`);
+
+  fsSync.writeFileSync(audioPathF, 'fake audio');
+  // Empty or invalid/corrupted eLRC content
+  fsSync.writeFileSync(elrcPathF, '');
+  fsSync.writeFileSync(lrcPathF, '[00:15.00]Valid fallback standard lyrics');
+
+  const songFIns = await db.insert(songs).values({
+    libraryId: libId,
+    artistId: artId,
+    title: 'Corrupted eLRC Fallback',
+    mainAudioPath: audioPathF,
+    duration: 210,
+  }).returning();
+  const songFId = songFIns[0].id;
+
+  const resF = await fetch(`${baseUrl}/api/songs/${songFId}/lyrics`);
+  assert.strictEqual(resF.status, 200);
+  const textF = await resF.text();
+  assert.strictEqual(textF.includes('Valid fallback standard lyrics'), true);
 });
 
 test('Close server', async () => {

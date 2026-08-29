@@ -7,6 +7,7 @@ import { libraries, artists, albums, songs, lyrics, songArtists } from '../db/sc
 import { eq, and, isNull, isNotNull, inArray, sql } from 'drizzle-orm';
 import * as mm from 'music-metadata';
 import { parseArtists, getOrCreateArtist, syncSongArtists, normalizeMultiArtistsInDatabase } from './artist-utils.js';
+import { isLrcContentValid } from './lyrics.js';
 
 // Setup artwork cache directory
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
@@ -376,15 +377,28 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     for (const pool of [elrcs, stdLrcs]) {
       if (pool.length === 0) continue;
 
+      // Filter pool to only candidates that exist and have valid parseable lyrics content
+      const validCandidates = pool.filter(lrc => {
+        try {
+          if (!fsSync.existsSync(lrc.fullPath)) return false;
+          const content = fsSync.readFileSync(lrc.fullPath, 'utf-8');
+          return isLrcContentValid(content);
+        } catch {
+          return false;
+        }
+      });
+
+      if (validCandidates.length === 0) continue;
+
       // 1. Exact base filename match (case-insensitive & whitespace trimmed)
-      const exactMatch = pool.find(lrc => normalizeBaseName(lrc.baseName) === normAudioBase);
+      const exactMatch = validCandidates.find(lrc => normalizeBaseName(lrc.baseName) === normAudioBase);
       if (exactMatch) {
         matchedPath = exactMatch.fullPath;
         break;
       }
 
       // 2. Cleaned base filename match (without variant suffix like Instrumental)
-      const cleanMatch = pool.find(lrc => lrc.cleanBaseName === cleanAudioBase);
+      const cleanMatch = validCandidates.find(lrc => lrc.cleanBaseName === cleanAudioBase);
       if (cleanMatch) {
         matchedPath = cleanMatch.fullPath;
         break;
@@ -392,7 +406,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
 
       // 3. Match against song's clean title if title appears as exact base filename in same dir
       const songTitleNorm = normalizeBaseName(songInfo.title);
-      const titleMatch = pool.find(lrc => normalizeBaseName(lrc.baseName) === songTitleNorm || lrc.cleanBaseName === songTitleNorm);
+      const titleMatch = validCandidates.find(lrc => normalizeBaseName(lrc.baseName) === songTitleNorm || lrc.cleanBaseName === songTitleNorm);
       if (titleMatch) {
         matchedPath = titleMatch.fullPath;
         break;
@@ -416,6 +430,14 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
 
   for (const lrcPool of [allElrcs, allStdLrcs]) {
     for (const lrc of lrcPool) {
+      try {
+        if (!fsSync.existsSync(lrc.fullPath)) continue;
+        const content = fsSync.readFileSync(lrc.fullPath, 'utf-8');
+        if (!isLrcContentValid(content)) continue;
+      } catch {
+        continue;
+      }
+
       const lrcBaseNorm = normalizeBaseName(lrc.baseName);
       const lrcClean = lrc.cleanBaseName;
 

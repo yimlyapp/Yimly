@@ -5,6 +5,7 @@ import { eq, like, or, inArray, asc } from 'drizzle-orm';
 import { requireAuth, requireAdmin, AuthenticatedRequest } from '../middleware/auth.js';
 import { formatArtistDisplay } from '../lib/artist-utils.js';
 import { broadcastSongOffsetToRooms } from '../ws/index.js';
+import { isLrcContentValid } from '../lib/lyrics.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -270,23 +271,30 @@ router.get('/:id/audio', async (req, res) => {
 router.get('/:id/lyrics', async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const lrc = await db.select().from(lyrics).where(eq(lyrics.songId, id)).limit(1);
-    
-    if (lrc.length > 0 && fs.existsSync(lrc[0].lrcPath)) {
-      const content = await fs.promises.readFile(lrc[0].lrcPath, 'utf-8');
-      return res.type('text/plain').send(content);
-    }
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid song ID' });
 
-    // On-demand filesystem discovery if not yet indexed in database
     const song = await db.select().from(songs).where(eq(songs.id, id)).limit(1);
-    if (song.length > 0) {
-      const audioPath = song[0].mainAudioPath || song[0].instrumentalAudioPath;
-      if (audioPath && fs.existsSync(audioPath)) {
-        const dir = path.dirname(audioPath);
-        const audioExt = path.extname(audioPath);
-        const audioBase = path.basename(audioPath, audioExt);
-        const cleanBase = audioBase.replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim();
+    if (song.length === 0) return res.status(404).json({ error: 'Song not found' });
 
+    const audioPath = song[0].mainAudioPath || song[0].instrumentalAudioPath;
+    const lrcRecord = await db.select().from(lyrics).where(eq(lyrics.songId, id)).limit(1);
+
+    // Candidates collections separated by format hierarchy:
+    // 1. .elrc.lrc (Preferred format)
+    // 2. .lrc (Fallback format)
+    // 3. Other fallbacks
+    const candidateElrcs: string[] = [];
+    const candidateStdLrcs: string[] = [];
+    const otherFallbacks: string[] = [];
+
+    if (audioPath && fs.existsSync(audioPath)) {
+      const dir = path.dirname(audioPath);
+      const audioExt = path.extname(audioPath);
+      const audioBase = path.basename(audioPath, audioExt);
+      const cleanBase = audioBase.replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim();
+      const songTitle = (song[0].title || '').trim();
+
+      if (fs.existsSync(dir)) {
         const entries = await fs.promises.readdir(dir, { withFileTypes: true });
         const lrcEntries = entries.filter(e => e.isFile() && (e.name.toLowerCase().endsWith('.elrc.lrc') || e.name.toLowerCase().endsWith('.lrc')));
 
@@ -305,52 +313,109 @@ router.get('/:id/lyrics', async (req, res) => {
           };
         });
 
-        const elrcFiles = parsedLrcs.filter(l => l.isElrc);
-        const stdLrcFiles = parsedLrcs.filter(l => !l.isElrc);
+        const elrcPool = parsedLrcs.filter(l => l.isElrc);
+        const stdPool = parsedLrcs.filter(l => !l.isElrc);
 
-        let matchedPath: string | null = null;
-
-        for (const pool of [elrcFiles, stdLrcFiles]) {
-          if (pool.length === 0) continue;
-
-          // 1. Direct base match (e.g. Song.mp3 -> Song.elrc.lrc / Song.lrc)
+        const rankFiles = (pool: typeof parsedLrcs) => {
+          const ranked: string[] = [];
+          // 1. Exact base match (e.g. Song.mp3 -> Song.elrc.lrc / Song.lrc)
           const exact = pool.find(l => l.lrcBase.trim().toLowerCase() === audioBase.trim().toLowerCase());
-          if (exact) {
-            matchedPath = exact.fullPath;
-            break;
-          }
+          if (exact && !ranked.includes(exact.fullPath)) ranked.push(exact.fullPath);
 
           // 2. Clean variant match
           const clean = pool.find(l => l.cleanLrcBase.toLowerCase() === cleanBase.toLowerCase());
-          if (clean) {
-            matchedPath = clean.fullPath;
-            break;
+          if (clean && !ranked.includes(clean.fullPath)) ranked.push(clean.fullPath);
+
+          // 3. Song title match
+          if (songTitle) {
+            const titleMatch = pool.find(l => l.lrcBase.trim().toLowerCase() === songTitle.toLowerCase() || l.cleanLrcBase.toLowerCase() === songTitle.toLowerCase());
+            if (titleMatch && !ranked.includes(titleMatch.fullPath)) ranked.push(titleMatch.fullPath);
           }
 
-          // 3. Title match
-          const titleNorm = song[0].title.trim().toLowerCase();
-          const titleMatch = pool.find(l => l.lrcBase.trim().toLowerCase() === titleNorm);
-          if (titleMatch) {
-            matchedPath = titleMatch.fullPath;
-            break;
-          }
+          return ranked;
+        };
+
+        candidateElrcs.push(...rankFiles(elrcPool));
+        candidateStdLrcs.push(...rankFiles(stdPool));
+      }
+    }
+
+    // Also consider previously indexed database record
+    if (lrcRecord.length > 0 && lrcRecord[0].lrcPath) {
+      const dbPath = lrcRecord[0].lrcPath;
+      const lowerDb = dbPath.toLowerCase();
+      if (lowerDb.endsWith('.elrc.lrc')) {
+        if (!candidateElrcs.includes(dbPath)) candidateElrcs.push(dbPath);
+      } else if (lowerDb.endsWith('.lrc')) {
+        if (!candidateStdLrcs.includes(dbPath)) candidateStdLrcs.push(dbPath);
+      } else {
+        if (!otherFallbacks.includes(dbPath)) otherFallbacks.push(dbPath);
+      }
+    }
+
+    // Helper to persist/sync active path in database
+    const persistMatchedPath = async (p: string) => {
+      try {
+        if (lrcRecord.length === 0) {
+          await db.insert(lyrics).values({ songId: id, lrcPath: p });
+        } else if (lrcRecord[0].lrcPath !== p) {
+          await db.update(lyrics).set({ lrcPath: p }).where(eq(lyrics.id, lrcRecord[0].id));
         }
+      } catch (err) {
+        console.warn('Failed to sync lyrics path to DB:', err);
+      }
+    };
 
-        if (matchedPath) {
-          // Persist match to database for future queries
-          if (lrc.length === 0) {
-            await db.insert(lyrics).values({ songId: id, lrcPath: matchedPath });
+    // 1. Preferred / First Choice: Check .elrc.lrc candidates
+    for (const filePath of candidateElrcs) {
+      if (fs.existsSync(filePath)) {
+        try {
+          const content = await fs.promises.readFile(filePath, 'utf-8');
+          if (isLrcContentValid(content)) {
+            await persistMatchedPath(filePath);
+            return res.type('text/plain').send(content);
           } else {
-            await db.update(lyrics).set({ lrcPath: matchedPath }).where(eq(lyrics.id, lrc[0].id));
+            console.warn(`[Lyrics] .elrc.lrc at ${filePath} is invalid/unparseable; falling back to .lrc`);
           }
-          const content = await fs.promises.readFile(matchedPath, 'utf-8');
-          return res.type('text/plain').send(content);
+        } catch (e) {
+          console.warn(`[Lyrics] Could not read .elrc.lrc at ${filePath}:`, e);
         }
+      }
+    }
+
+    // 2. Fallback: Check .lrc candidates if .elrc.lrc is missing or invalid
+    for (const filePath of candidateStdLrcs) {
+      if (fs.existsSync(filePath)) {
+        try {
+          const content = await fs.promises.readFile(filePath, 'utf-8');
+          if (isLrcContentValid(content)) {
+            await persistMatchedPath(filePath);
+            return res.type('text/plain').send(content);
+          } else {
+            console.warn(`[Lyrics] .lrc at ${filePath} is invalid/unparseable; checking other fallbacks`);
+          }
+        } catch (e) {
+          console.warn(`[Lyrics] Could not read .lrc at ${filePath}:`, e);
+        }
+      }
+    }
+
+    // 3. Other existing lyrics fallbacks (e.g. non-timestamped raw text)
+    for (const filePath of otherFallbacks) {
+      if (fs.existsSync(filePath)) {
+        try {
+          const content = await fs.promises.readFile(filePath, 'utf-8');
+          if (content && content.trim().length > 0) {
+            await persistMatchedPath(filePath);
+            return res.type('text/plain').send(content);
+          }
+        } catch (e) {}
       }
     }
 
     return res.status(404).json({ error: 'Lyrics not found' });
   } catch (error) {
+    console.error('Failed to fetch lyrics:', error);
     res.status(500).json({ error: 'Failed to fetch lyrics' });
   }
 });
