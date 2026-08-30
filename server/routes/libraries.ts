@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
-import { libraries, songs, artists, albums, lyrics, queueItems, playlists } from '../db/schema.js';
+import { libraries, songs, artists, albums, lyrics, queueItems, playlists, playlistSongs, favorites, songArtists } from '../db/schema.js';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { scanLibrary } from '../lib/scanner.js';
+import { cleanupOrphanedRecords } from '../lib/artist-utils.js';
 import fs from 'fs';
 
 const router = Router();
@@ -96,12 +97,16 @@ router.delete('/:id', requireAdmin, async (req, res) => {
       for (let i = 0; i < songIds.length; i += chunkSize) {
         const chunk = songIds.slice(i, i + chunkSize);
         await db.delete(lyrics).where(inArray(lyrics.songId, chunk));
+        await db.delete(playlistSongs).where(inArray(playlistSongs.songId, chunk));
+        await db.delete(favorites).where(inArray(favorites.songId, chunk));
         await db.delete(queueItems).where(inArray(queueItems.songId, chunk));
+        await db.delete(songArtists).where(inArray(songArtists.songId, chunk));
         await db.delete(songs).where(inArray(songs.id, chunk));
       }
     }
 
     await db.delete(libraries).where(eq(libraries.id, id));
+    await cleanupOrphanedRecords();
     
     res.json({ message: 'Library removed' });
   } catch (error) {

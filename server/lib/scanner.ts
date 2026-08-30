@@ -3,10 +3,10 @@ import fsSync from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { db } from '../db/index.js';
-import { libraries, artists, albums, songs, lyrics, songArtists } from '../db/schema.js';
+import { libraries, artists, albums, songs, lyrics, songArtists, playlistSongs, favorites, queueItems } from '../db/schema.js';
 import { eq, and, isNull, isNotNull, inArray, sql } from 'drizzle-orm';
 import * as mm from 'music-metadata';
-import { parseArtists, getOrCreateArtist, syncSongArtists, normalizeMultiArtistsInDatabase } from './artist-utils.js';
+import { parseArtists, getOrCreateArtist, syncSongArtists, normalizeMultiArtistsInDatabase, cleanupOrphanedRecords } from './artist-utils.js';
 import { isLrcContentValid } from './lyrics.js';
 
 // Setup artwork cache directory
@@ -562,23 +562,40 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     }
   }
 
-  // Handle removed files: check existing songs in db for this library, if mainAudioPath / instrumentalAudioPath no longer exist on disk, remove them
+  // Handle removed files: check existing songs in db for this library, if mainAudioPath / instrumentalAudioPath no longer exist on disk, remove or adjust them
   const dbSongs = await db.select().from(songs).where(eq(songs.libraryId, libraryId));
   for (const dbSong of dbSongs) {
     const mainExists = fsSync.existsSync(dbSong.mainAudioPath);
     const instExists = dbSong.instrumentalAudioPath ? fsSync.existsSync(dbSong.instrumentalAudioPath) : false;
+
     if (!mainExists && !instExists) {
-      // Remove associated lyrics first
+      // Remove all associated records and song
       await db.delete(lyrics).where(eq(lyrics.songId, dbSong.id));
-      // Remove song_artists relationships
+      await db.delete(playlistSongs).where(eq(playlistSongs.songId, dbSong.id));
+      await db.delete(favorites).where(eq(favorites.songId, dbSong.id));
+      await db.delete(queueItems).where(eq(queueItems.songId, dbSong.id));
       await db.delete(songArtists).where(eq(songArtists.songId, dbSong.id));
-      // Remove song record
       await db.delete(songs).where(eq(songs.id, dbSong.id));
+    } else if (!mainExists && instExists) {
+      // Main audio was removed but instrumental still exists
+      await db.update(songs).set({
+        mainAudioPath: dbSong.instrumentalAudioPath!,
+        instrumentalAudioPath: null,
+        variant: 'instrumental',
+      }).where(eq(songs.id, dbSong.id));
+    } else if (mainExists && !instExists && dbSong.instrumentalAudioPath) {
+      // Instrumental audio was removed but main audio exists
+      await db.update(songs).set({
+        instrumentalAudioPath: null,
+      }).where(eq(songs.id, dbSong.id));
     }
   }
 
   // Clean up any obsolete semicolon-separated artist records from previous legacy scans
   await normalizeMultiArtistsInDatabase();
+
+  // Clean up any orphaned albums, artists, and song_artists relationships
+  await cleanupOrphanedRecords();
 
   // Backfill any albums without artwork from their child songs
   const albumsWithoutArtwork = await db.select().from(albums).where(isNull(albums.artworkPath));

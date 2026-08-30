@@ -1,5 +1,5 @@
 import { db } from '../db/index.js';
-import { artists, songs, songArtists, albums } from '../db/schema.js';
+import { artists, songs, songArtists, albums, lyrics } from '../db/schema.js';
 import { eq, sql, and, like, isNull, isNotNull, inArray } from 'drizzle-orm';
 
 /**
@@ -196,3 +196,54 @@ export async function normalizeMultiArtistsInDatabase(): Promise<void> {
     console.error('Error normalizing multi-artists in database:', error);
   }
 }
+
+/**
+ * Cleans up orphaned albums, artists, and song_artists relationships from the database.
+ *
+ * Rules:
+ * 1. Remove song_artists rows referencing non-existent songs or non-existent artists.
+ * 2. Remove lyrics rows referencing non-existent songs.
+ * 3. Remove album records that have 0 associated songs.
+ * 4. Remove artist records that have 0 associated songs (neither as primary artist in songs nor in song_artists)
+ *    and no remaining albums.
+ */
+export async function cleanupOrphanedRecords(): Promise<{
+  deletedSongArtists: number;
+  deletedAlbums: number;
+  deletedArtists: number;
+}> {
+  try {
+    // 1. Delete orphaned song_artists where song no longer exists or artist no longer exists
+    await db.delete(songArtists).where(sql`
+      ${songArtists.songId} NOT IN (SELECT id FROM ${songs})
+      OR ${songArtists.artistId} NOT IN (SELECT id FROM ${artists})
+    `);
+
+    // 2. Delete orphaned lyrics where song no longer exists
+    await db.delete(lyrics).where(sql`
+      ${lyrics.songId} NOT IN (SELECT id FROM ${songs})
+    `);
+
+    // 3. Delete orphaned albums (albums with 0 songs)
+    await db.delete(albums).where(sql`
+      NOT EXISTS (SELECT 1 FROM ${songs} WHERE ${songs.albumId} = ${albums.id})
+    `);
+
+    // 4. Delete orphaned artists (artists with 0 songs and 0 albums)
+    await db.delete(artists).where(sql`
+      NOT EXISTS (SELECT 1 FROM ${songs} WHERE ${songs.artistId} = ${artists.id})
+      AND NOT EXISTS (SELECT 1 FROM ${songArtists} WHERE ${songArtists.artistId} = ${artists.id})
+      AND NOT EXISTS (SELECT 1 FROM ${albums} WHERE ${albums.artistId} = ${artists.id})
+    `);
+
+    return {
+      deletedSongArtists: 0,
+      deletedAlbums: 0,
+      deletedArtists: 0,
+    };
+  } catch (error) {
+    console.error('Error during cleanupOrphanedRecords:', error);
+    throw error;
+  }
+}
+

@@ -3,7 +3,7 @@ import { db } from '../db/index.js';
 import { songs, artists, albums, lyrics, songArtists, playlistSongs, favorites, queueItems } from '../db/schema.js';
 import { eq, like, or, inArray, asc } from 'drizzle-orm';
 import { requireAuth, requireAdmin, AuthenticatedRequest } from '../middleware/auth.js';
-import { formatArtistDisplay } from '../lib/artist-utils.js';
+import { formatArtistDisplay, cleanupOrphanedRecords } from '../lib/artist-utils.js';
 import { broadcastSongOffsetToRooms } from '../ws/index.js';
 import { isLrcContentValid } from '../lib/lyrics.js';
 import fs from 'fs';
@@ -622,6 +622,8 @@ router.delete('/:id', requireAdmin, async (req: AuthenticatedRequest, res) => {
     await db.delete(queueItems).where(eq(queueItems.songId, id));
     await db.delete(songArtists).where(eq(songArtists.songId, id));
     await db.delete(songs).where(eq(songs.id, id));
+
+    await cleanupOrphanedRecords();
 
     res.json({
       success: true,

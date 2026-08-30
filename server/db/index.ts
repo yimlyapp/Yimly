@@ -332,13 +332,14 @@ export async function setupDatabase() {
     // Column already exists, safe to ignore
   }
 
-  // Normalize multi-artist metadata and backfill song_artists
+  // Normalize multi-artist metadata, backfill song_artists, and cleanup orphaned records
   try {
-    const { normalizeMultiArtistsInDatabase } = await import('../lib/artist-utils.js');
+    const { normalizeMultiArtistsInDatabase, cleanupOrphanedRecords } = await import('../lib/artist-utils.js');
     await normalizeMultiArtistsInDatabase();
-    console.log('Multi-artist metadata normalized.');
+    await cleanupOrphanedRecords();
+    console.log('Multi-artist metadata normalized and orphaned records cleaned.');
   } catch (err) {
-    console.error('Failed to normalize multi-artist metadata:', err);
+    console.error('Failed to normalize multi-artist metadata and clean orphaned records:', err);
   }
 
   // Cleanup any sessions that were left active when the server last shut down/crashed

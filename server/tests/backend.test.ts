@@ -16,6 +16,9 @@ import favoritesRoutes from '../routes/favorites.js';
 import authRoutes from '../routes/auth.js';
 import songsRoutes from '../routes/songs.js';
 import karaokeRoutes from '../routes/karaoke.js';
+import librariesRoutes from '../routes/libraries.js';
+import artistsRoutes from '../routes/artists.js';
+import albumsRoutes from '../routes/albums.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_for_dev';
 
@@ -27,6 +30,9 @@ app.use('/api/songs', songsRoutes);
 app.use('/api/playlists', playlistsRoutes);
 app.use('/api/favorites', favoritesRoutes);
 app.use('/api/karaoke', karaokeRoutes);
+app.use('/api/libraries', librariesRoutes);
+app.use('/api/artists', artistsRoutes);
+app.use('/api/albums', albumsRoutes);
 
 let server: http.Server;
 let baseUrl: string;
@@ -1013,6 +1019,147 @@ test('Enhanced LRC (eLRC) support test scenarios (Test A, B, C, D, E)', async ()
   assert.strictEqual(resCase3.status, 200);
   const textCase3 = await resCase3.text();
   assert.strictEqual(textCase3.includes('<00:03.00>Word'), true);
+});
+
+test('Issue 3: Library Rescan Must Remove Orphaned Artists and Albums', async () => {
+  const { scanLibrary } = await import('../lib/scanner.js');
+  const { songArtists, albums, artists, songs, libraries } = await import('../db/schema.js');
+
+  const testDir = path.join(process.cwd(), 'data', 'orphan_rescan_test_lib');
+  if (fsSync.existsSync(testDir)) {
+    fsSync.rmSync(testDir, { recursive: true, force: true });
+  }
+  fsSync.mkdirSync(testDir, { recursive: true });
+
+  // 1. Setup library directory with structured files:
+  // - "Artist Alpha" -> "Album Alpha 1" (Song A1, Song A2) & "Album Alpha 2" (Song A3)
+  // - "Artist Beta"  -> "Album Beta 1" (Song B1)
+  // - Multi-Artist "Artist Gamma; Artist Delta" -> "Album GammaDelta" (Song GD1)
+  // - "Artist Gamma" solo -> "Album Gamma Solo" (Song G1)
+  
+  const fileA1 = path.join(testDir, 'Artist Alpha - Song A1.mp3');
+  const fileA2 = path.join(testDir, 'Artist Alpha - Song A2.mp3');
+  const fileA3 = path.join(testDir, 'Artist Alpha - Song A3.mp3');
+  const fileB1 = path.join(testDir, 'Artist Beta - Song B1.mp3');
+  const fileGD1 = path.join(testDir, 'Artist Gamma; Artist Delta - Song GD1.mp3');
+  const fileG1 = path.join(testDir, 'Artist Gamma - Song G1.mp3');
+
+  fsSync.writeFileSync(fileA1, 'dummy audio a1');
+  fsSync.writeFileSync(fileA2, 'dummy audio a2');
+  fsSync.writeFileSync(fileA3, 'dummy audio a3');
+  fsSync.writeFileSync(fileB1, 'dummy audio b1');
+  fsSync.writeFileSync(fileGD1, 'dummy audio gd1');
+  fsSync.writeFileSync(fileG1, 'dummy audio g1');
+
+  // Create test library in DB
+  const libRes = await db.insert(libraries).values({
+    name: 'Orphan Rescan Test Lib',
+    path: testDir,
+  }).returning();
+  const testLibId = libRes[0].id;
+
+  // Step 1: Initial full scan with all files present
+  await scanLibrary(testLibId, testDir);
+
+  // Verify all 4 artists exist: Alpha, Beta, Gamma, Delta
+  const artAlpha = await db.select().from(artists).where(eq(artists.name, 'Artist Alpha')).limit(1);
+  const artBeta = await db.select().from(artists).where(eq(artists.name, 'Artist Beta')).limit(1);
+  const artGamma = await db.select().from(artists).where(eq(artists.name, 'Artist Gamma')).limit(1);
+  const artDelta = await db.select().from(artists).where(eq(artists.name, 'Artist Delta')).limit(1);
+
+  assert.strictEqual(artAlpha.length, 1, 'Artist Alpha must exist');
+  assert.strictEqual(artBeta.length, 1, 'Artist Beta must exist');
+  assert.strictEqual(artGamma.length, 1, 'Artist Gamma must exist');
+  assert.strictEqual(artDelta.length, 1, 'Artist Delta must exist');
+
+  const initialSongs = await db.select().from(songs).where(eq(songs.libraryId, testLibId));
+  assert.strictEqual(initialSongs.length, 6, 'Should have 6 songs initially');
+
+  // Multi-artist check: Song GD1 must be linked to both Gamma and Delta in song_artists
+  const songGD1 = initialSongs.find(s => s.title === 'Song GD1');
+  assert.ok(songGD1, 'Song GD1 must exist');
+  const saLinks = await db.select().from(songArtists).where(eq(songArtists.songId, songGD1.id));
+  assert.strictEqual(saLinks.length, 2, 'Song GD1 must link to 2 artists in song_artists');
+
+  // Step 2: Delete one song (fileA1) and rescan
+  // fileA2 still exists, so Artist Alpha must remain and its album must remain
+  fsSync.unlinkSync(fileA1);
+  await scanLibrary(testLibId, testDir);
+
+  const songsAfterStep2 = await db.select().from(songs).where(eq(songs.libraryId, testLibId));
+  assert.strictEqual(songsAfterStep2.length, 5, 'Should have 5 songs after deleting Song A1');
+  assert.strictEqual(songsAfterStep2.some(s => s.title === 'Song A1'), false, 'Song A1 must be removed');
+  assert.strictEqual(songsAfterStep2.some(s => s.title === 'Song A2'), true, 'Song A2 must remain');
+
+  const artAlphaAfterStep2 = await db.select().from(artists).where(eq(artists.name, 'Artist Alpha')).limit(1);
+  assert.strictEqual(artAlphaAfterStep2.length, 1, 'Artist Alpha must remain because Song A2 & A3 exist');
+
+  // Step 3: Delete remaining songs for Artist Beta (fileB1) and rescan
+  // Artist Beta and its album must be completely cleaned up
+  fsSync.unlinkSync(fileB1);
+  await scanLibrary(testLibId, testDir);
+
+  const songsAfterStep3 = await db.select().from(songs).where(eq(songs.libraryId, testLibId));
+  assert.strictEqual(songsAfterStep3.length, 4, 'Should have 4 songs after deleting Song B1');
+  const artBetaAfterStep3 = await db.select().from(artists).where(eq(artists.name, 'Artist Beta')).limit(1);
+  assert.strictEqual(artBetaAfterStep3.length, 0, 'Artist Beta must be deleted because it has 0 remaining songs');
+
+  // Step 4: Delete multi-artist song (fileGD1) and rescan
+  // Artist Delta had ONLY Song GD1 -> Artist Delta must be deleted
+  // Artist Gamma still has Song G1 -> Artist Gamma must remain
+  fsSync.unlinkSync(fileGD1);
+  await scanLibrary(testLibId, testDir);
+
+  const songsAfterStep4 = await db.select().from(songs).where(eq(songs.libraryId, testLibId));
+  assert.strictEqual(songsAfterStep4.length, 3, 'Should have 3 songs remaining');
+
+  const artDeltaAfterStep4 = await db.select().from(artists).where(eq(artists.name, 'Artist Delta')).limit(1);
+  assert.strictEqual(artDeltaAfterStep4.length, 0, 'Artist Delta must be deleted after its only song was deleted');
+
+  const artGammaAfterStep4 = await db.select().from(artists).where(eq(artists.name, 'Artist Gamma')).limit(1);
+  assert.strictEqual(artGammaAfterStep4.length, 1, 'Artist Gamma must remain because Song G1 still exists');
+
+  // Confirm no orphaned song_artists records exist anywhere
+  const orphanedSA = await db.select().from(songArtists).where(eq(songArtists.songId, songGD1.id));
+  assert.strictEqual(orphanedSA.length, 0, 'song_artists for deleted song must be removed');
+
+  // Step 5: Test API endpoints (/api/artists, /api/albums, /api/libraries/stats)
+  const artistsRes = await fetch(`${baseUrl}/api/artists`, {
+    headers: { Authorization: `Bearer ${tokenA}` }
+  });
+  assert.strictEqual(artistsRes.status, 200);
+  const artistsList = await artistsRes.json() as any[];
+  assert.strictEqual(artistsList.some(a => a.name === 'Artist Beta'), false, 'API /api/artists must not include Artist Beta');
+  assert.strictEqual(artistsList.some(a => a.name === 'Artist Delta'), false, 'API /api/artists must not include Artist Delta');
+  assert.strictEqual(artistsList.some(a => a.name === 'Artist Alpha'), true, 'API /api/artists must include Artist Alpha');
+  assert.strictEqual(artistsList.some(a => a.name === 'Artist Gamma'), true, 'API /api/artists must include Artist Gamma');
+
+  // Confirm all artists in DB and API have at least 1 song
+  for (const art of artistsList) {
+    if (art.name === 'Artist Alpha' || art.name === 'Artist Gamma') {
+      assert.ok(art.songCount > 0, `Artist ${art.name} must have songCount > 0`);
+    }
+  }
+
+  // Step 6: Delete all remaining files (fileA2, fileA3, fileG1) and rescan
+  fsSync.unlinkSync(fileA2);
+  fsSync.unlinkSync(fileA3);
+  fsSync.unlinkSync(fileG1);
+  await scanLibrary(testLibId, testDir);
+
+  const finalSongs = await db.select().from(songs).where(eq(songs.libraryId, testLibId));
+  assert.strictEqual(finalSongs.length, 0, 'All songs in library must be 0');
+
+  const finalAlpha = await db.select().from(artists).where(eq(artists.name, 'Artist Alpha')).limit(1);
+  const finalGamma = await db.select().from(artists).where(eq(artists.name, 'Artist Gamma')).limit(1);
+  assert.strictEqual(finalAlpha.length, 0, 'Artist Alpha must be deleted when all its songs are gone');
+  assert.strictEqual(finalGamma.length, 0, 'Artist Gamma must be deleted when all its songs are gone');
+
+  // Clean up test library
+  await db.delete(libraries).where(eq(libraries.id, testLibId));
+  if (fsSync.existsSync(testDir)) {
+    fsSync.rmSync(testDir, { recursive: true, force: true });
+  }
 });
 
 test('Close server', async () => {
