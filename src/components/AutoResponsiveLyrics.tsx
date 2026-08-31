@@ -33,6 +33,7 @@ interface AutoResponsiveLyricsProps {
   isPreview?: boolean;
   currentTime?: number;
   lyricOffset?: number;
+  showDebugHUD?: boolean;
 }
 
 interface DiagnosticData {
@@ -68,6 +69,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
   isPreview = false,
   currentTime = 0,
   lyricOffset = 0,
+  showDebugHUD,
 }) => {
   const stageRef = useRef<HTMLDivElement>(null);
   const groupRef = useRef<HTMLDivElement>(null);
@@ -78,10 +80,26 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
   const [scale, setScale] = useState<number>(1);
   const [effectiveGap, setEffectiveGap] = useState<number>(12);
 
+  const isDebugEnabled = Boolean(
+    showDebugHUD ||
+    (typeof window !== 'undefined' && (() => {
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        return urlParams.has('debug') || urlParams.has('tvdebug');
+      } catch {
+        return false;
+      }
+    })())
+  );
+
   const [showDebug, setShowDebug] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
-      const urlParams = new URLSearchParams(window.location.search);
-      return urlParams.has('debug') || urlParams.has('tvdebug');
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        return urlParams.has('debug') || urlParams.has('tvdebug');
+      } catch {
+        return false;
+      }
     }
     return false;
   });
@@ -306,61 +324,65 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
       ref={stageRef}
       className="w-full flex-1 h-full min-h-0 flex flex-col justify-center items-center overflow-hidden relative select-none"
     >
-      {/* TV Diagnostic Overlay Toggle Button */}
-      <button
-        type="button"
-        onClick={() => setShowDebug((prev) => !prev)}
-        className="absolute bottom-2 right-2 z-50 text-[10px] font-mono bg-black/70 hover:bg-black/90 text-zinc-300 border border-white/20 px-2 py-1 rounded-md opacity-60 hover:opacity-100 transition-opacity flex items-center gap-1 cursor-pointer"
-        title="Toggle TV Diagnostics HUD"
-      >
-        <Bug className="w-3 h-3 text-[#FF4FA3]" />
-        <span>TV DEBUG</span>
-      </button>
+      {/* TV Diagnostic Overlay Toggle Button (Dev/Troubleshooting Mode) */}
+      {isDebugEnabled && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowDebug((prev) => !prev)}
+            className="absolute bottom-2 right-2 z-50 text-[10px] font-mono bg-black/70 hover:bg-black/90 text-zinc-300 border border-white/20 px-2 py-1 rounded-md opacity-60 hover:opacity-100 transition-opacity flex items-center gap-1 cursor-pointer"
+            title="Toggle TV Diagnostics HUD"
+          >
+            <Bug className="w-3 h-3 text-[#FF4FA3]" />
+            <span>TV DEBUG</span>
+          </button>
 
-      {/* TV Diagnostic Readout HUD */}
-      {showDebug && (
-        <div className="absolute top-2 right-2 z-50 bg-black/90 border border-[#FF4FA3]/40 text-emerald-400 font-mono text-[11px] p-3 rounded-xl shadow-2xl max-w-xs space-y-1 pointer-events-auto leading-tight text-left backdrop-blur-md">
-          <div className="text-white font-bold border-b border-white/20 pb-1 mb-1.5 flex justify-between items-center">
-            <span className="flex items-center gap-1 text-[#FF4FA3]">
-              <Tv className="w-3.5 h-3.5" />
-              TV Diagnostics
-            </span>
-            <span className="text-zinc-400 text-[9px]">{diagData.dpr}x DPR</span>
-          </div>
-          <div>
-            Container:{' '}
-            <span className="text-white font-bold">
-              {Math.round(diagData.containerWidth)} x {Math.round(diagData.containerHeight)} px
-            </span>
-          </div>
-          <div>
-            Unscaled Group:{' '}
-            <span className="text-white font-bold">
-              {Math.round(diagData.unscaledGroupWidth)} x {Math.round(diagData.unscaledGroupHeight)} px
-            </span>
-          </div>
-          <div className="pt-0.5 border-t border-white/10 mt-1">
-            Calculated Scale:{' '}
-            <span className="text-amber-300 font-bold">{diagData.scale}</span>
-          </div>
-          <div>
-            Calculated Gap:{' '}
-            <span className="text-amber-300 font-bold">{diagData.gap}px</span>
-          </div>
-          <div>
-            Font Sizes:{' '}
-            <span className="text-zinc-300">
-              Curr {diagData.currFontSize}px / Unhigh {diagData.unhighFontSize}px
-            </span>
-          </div>
-          <div>
-            Line Height Multiplier:{' '}
-            <span className="text-zinc-300">{diagData.lineSpacing}</span>
-          </div>
-          <div className="pt-1 border-t border-white/10 text-zinc-400 text-[10px]">
-            Window: {diagData.windowWidth} x {diagData.windowHeight}
-          </div>
-        </div>
+          {/* TV Diagnostic Readout HUD */}
+          {showDebug && (
+            <div className="absolute top-2 right-2 z-50 bg-black/90 border border-[#FF4FA3]/40 text-emerald-400 font-mono text-[11px] p-3 rounded-xl shadow-2xl max-w-xs space-y-1 pointer-events-auto leading-tight text-left backdrop-blur-md">
+              <div className="text-white font-bold border-b border-white/20 pb-1 mb-1.5 flex justify-between items-center">
+                <span className="flex items-center gap-1 text-[#FF4FA3]">
+                  <Tv className="w-3.5 h-3.5" />
+                  TV Diagnostics
+                </span>
+                <span className="text-zinc-400 text-[9px]">{diagData.dpr}x DPR</span>
+              </div>
+              <div>
+                Container:{' '}
+                <span className="text-white font-bold">
+                  {Math.round(diagData.containerWidth)} x {Math.round(diagData.containerHeight)} px
+                </span>
+              </div>
+              <div>
+                Unscaled Group:{' '}
+                <span className="text-white font-bold">
+                  {Math.round(diagData.unscaledGroupWidth)} x {Math.round(diagData.unscaledGroupHeight)} px
+                </span>
+              </div>
+              <div className="pt-0.5 border-t border-white/10 mt-1">
+                Calculated Scale:{' '}
+                <span className="text-amber-300 font-bold">{diagData.scale}</span>
+              </div>
+              <div>
+                Calculated Gap:{' '}
+                <span className="text-amber-300 font-bold">{diagData.gap}px</span>
+              </div>
+              <div>
+                Font Sizes:{' '}
+                <span className="text-zinc-300">
+                  Curr {diagData.currFontSize}px / Unhigh {diagData.unhighFontSize}px
+                </span>
+              </div>
+              <div>
+                Line Height Multiplier:{' '}
+                <span className="text-zinc-300">{diagData.lineSpacing}</span>
+              </div>
+              <div className="pt-1 border-t border-white/10 text-zinc-400 text-[10px]">
+                Window: {diagData.windowWidth} x {diagData.windowHeight}
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       <div

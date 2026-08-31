@@ -137,28 +137,33 @@ router.post('/sessions', async (req, res) => {
 
 router.post('/sessions/join', async (req, res) => {
   try {
-    const { roomCode, displayName, username } = req.body;
-    if (!roomCode) {
+    const { roomCode, code, session, sessionId, displayName, username } = req.body;
+    const rawInput = (roomCode || code || session || sessionId || '').toString().trim();
+    if (!rawInput) {
       return res.status(400).json({ error: 'Room code is required' });
     }
     const user = (req as any).user;
     const device = req.headers['user-agent'] || 'Unknown Device';
 
-    const normalizedCode = String(roomCode).replace(/\s+/g, '');
-    const formattedCode = `${normalizedCode.slice(0, 3)} ${normalizedCode.slice(3)}`;
+    const normalizedCode = rawInput.replace(/[\s-]+/g, '');
+    const formattedCode = normalizedCode.length >= 6 
+      ? `${normalizedCode.slice(0, 3)} ${normalizedCode.slice(3)}` 
+      : normalizedCode;
 
-    const session = await db.select().from(sessions).where(
+    const matchedSession = await db.select().from(sessions).where(
       and(
         or(
-          eq(sessions.roomCode, roomCode),
+          eq(sessions.roomCode, rawInput),
           eq(sessions.roomCode, formattedCode),
-          eq(sessions.roomCode, normalizedCode)
+          eq(sessions.roomCode, normalizedCode),
+          eq(sessions.id, rawInput),
+          eq(sessions.id, normalizedCode)
         ),
         eq(sessions.status, 'active')
       )
     ).limit(1);
 
-    if (session.length === 0) {
+    if (matchedSession.length === 0) {
       return res.status(404).json({ error: 'Room not found or inactive' });
     }
 
@@ -171,14 +176,14 @@ router.post('/sessions/join', async (req, res) => {
     const controllerId = crypto.randomUUID();
     await db.insert(controllers).values({
       id: controllerId,
-      sessionId: session[0].id,
+      sessionId: matchedSession[0].id,
       userId: userId,
       guestName: guestName,
       device: device,
       lastSeenTime: new Date(),
     });
 
-    res.json({ sessionId: session[0].id, controllerId });
+    res.json({ sessionId: matchedSession[0].id, controllerId });
   } catch (error) {
     console.error('Failed to join room:', error);
     res.status(500).json({ error: 'Failed to join room' });

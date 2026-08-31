@@ -167,6 +167,7 @@ router.get('/:id', async (req, res) => {
       instrumentalAudioPath: songs.instrumentalAudioPath,
       hasInstrumental: songs.instrumentalAudioPath,
       hasLrc: lyrics.id,
+      lrcPath: lyrics.lrcPath,
       artworkPath: songs.artworkPath,
       albumArtworkPath: albums.artworkPath,
       lyricOffset: songs.lyricOffset,
@@ -180,6 +181,29 @@ router.get('/:id', async (req, res) => {
 
     if (songRec.length === 0) return res.status(404).json({ error: 'Song not found' });
 
+    let hasElrc = false;
+    let hasLrc = !!songRec[0].hasLrc;
+    const audioPath = songRec[0].mainAudioPath || songRec[0].instrumentalAudioPath;
+    if (songRec[0].lrcPath && songRec[0].lrcPath.toLowerCase().endsWith('.elrc.lrc')) {
+      hasElrc = true;
+      hasLrc = true;
+    }
+    if (audioPath && fs.existsSync(audioPath)) {
+      const dir = path.dirname(audioPath);
+      if (fs.existsSync(dir)) {
+        try {
+          const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+          const lrcEntries = entries.filter(e => e.isFile() && (e.name.toLowerCase().endsWith('.elrc.lrc') || e.name.toLowerCase().endsWith('.lrc')));
+          for (const e of lrcEntries) {
+            hasLrc = true;
+            if (e.name.toLowerCase().endsWith('.elrc.lrc')) {
+              hasElrc = true;
+            }
+          }
+        } catch (e) {}
+      }
+    }
+
     const artistsMap = await getSongArtistsMap([id]);
     const trackArtists = artistsMap.get(id) || (songRec[0].artist ? [{ id: songRec[0].artistId, name: songRec[0].artist }] : []);
 
@@ -188,7 +212,8 @@ router.get('/:id', async (req, res) => {
       artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : songRec[0].artist),
       artists: trackArtists,
       hasArtwork: !!songRec[0].artworkPath || !!songRec[0].albumArtworkPath,
-      hasLrc: !!songRec[0].hasLrc,
+      hasLrc: hasLrc,
+      hasElrc: hasElrc,
       hasInstrumental: !!songRec[0].hasInstrumental,
       lyricOffset: songRec[0].lyricOffset ?? 0,
     });

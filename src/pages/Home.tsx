@@ -91,6 +91,11 @@ export default function Home() {
 
   const handleJoinSession = async (s: any) => {
     try {
+      if (user?.id && s.hostId === user.id) {
+        navigate(`/rooms/${s.id}?role=host`);
+        return;
+      }
+
       const storageKey = `yimly_controller_${s.id}`;
       let controllerId = localStorage.getItem(storageKey);
 
@@ -99,7 +104,8 @@ export default function Home() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            roomCode: s.roomCode
+            roomCode: s.roomCode,
+            sessionId: s.id
           })
         });
         let data: any = {};
@@ -110,7 +116,10 @@ export default function Home() {
             console.error('Failed to parse join response', e);
           }
         }
-        if (!res.ok) throw new Error(data.error || 'Failed to join room');
+        if (!res.ok) {
+          setActiveSessions((prev) => prev.filter((item) => item.id !== s.id));
+          throw new Error(data.error || 'Failed to join room');
+        }
         controllerId = data.controllerId;
         if (controllerId) {
           localStorage.setItem(storageKey, controllerId);
@@ -123,7 +132,7 @@ export default function Home() {
         navigate(`/rooms/${s.id}?role=guest`);
       }
     } catch (err: any) {
-      console.error('Join session error:', err);
+      console.warn('Join session notice:', err?.message || err);
       navigate(`/rooms/${s.id}?role=guest`);
     }
   };

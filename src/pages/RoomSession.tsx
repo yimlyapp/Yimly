@@ -18,7 +18,7 @@ import {
   Play, Pause, SkipForward, RotateCcw, Mic, Music, 
   FileText, ArrowLeft, Plus, Radio, Check, AlertCircle, 
   User, Library as LibraryIcon, Search, X, RefreshCw,
-  Maximize2, Minimize2, Info, LogOut, QrCode
+  Maximize2, Minimize2, Info, LogOut, QrCode, Clock
 } from 'lucide-react';
 import { filterSongs, SearchableSong } from '../lib/search-utils';
 
@@ -134,6 +134,18 @@ export default function RoomSession() {
   }, [sessionId]);
   const [showLibrary, setShowLibrary] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [lyricsFormat, setLyricsFormat] = useState<'elrc' | 'lrc'>('elrc');
+  const rawLyricsRef = useRef<string>('');
+
+  const handleToggleLyricsFormat = () => {
+    if (!currentSongDetails?.hasElrc) return;
+    const newFormat = lyricsFormat === 'elrc' ? 'lrc' : 'elrc';
+    setLyricsFormat(newFormat);
+    if (rawLyricsRef.current) {
+      const parsed = parseLrc(rawLyricsRef.current, newFormat);
+      setLyrics(parsed);
+    }
+  };
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
   const [isRestartingSession, setIsRestartingSession] = useState(false);
 
@@ -775,6 +787,31 @@ export default function RoomSession() {
         })
         .catch(err => console.error('Failed to fetch song details:', err));
 
+      let fetchedHasElrc = false;
+
+      fetch(`/api/songs/${songId}`)
+        .then(async res => {
+          if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+            return await res.json();
+          }
+          return null;
+        })
+        .then(data => {
+          if (!isCancelled && data) {
+            setCurrentSongDetails(data);
+            fetchedHasElrc = !!data.hasElrc;
+            if (data.hasElrc) {
+              setLyricsFormat('elrc');
+            } else {
+              setLyricsFormat('lrc');
+            }
+            if (data.lyricOffset !== undefined && typeof data.lyricOffset === 'number') {
+              setLyricOffset(data.lyricOffset);
+            }
+          }
+        })
+        .catch(err => console.error('Failed to fetch song details:', err));
+
       fetch(`/api/songs/${songId}/lyrics`)
         .then(res => {
           if (!res.ok) throw new Error('No lyrics');
@@ -782,12 +819,17 @@ export default function RoomSession() {
         })
         .then(text => {
           if (!isCancelled) {
-            const parsed = parseLrc(text);
+            rawLyricsRef.current = text;
+            const hasElrcMarker = text.includes('<') && text.includes('>');
+            const initialFormat = fetchedHasElrc || hasElrcMarker ? 'elrc' : 'lrc';
+            setLyricsFormat(initialFormat);
+            const parsed = parseLrc(text, initialFormat);
             setLyrics(parsed);
           }
         })
         .catch(() => {
           if (!isCancelled) {
+            rawLyricsRef.current = '';
             setLyrics([]);
           }
         });
@@ -816,7 +858,7 @@ export default function RoomSession() {
     }
   }, [showLibrary]);
 
-  function parseLrc(lrcText: string): LyricLine[] {
+  function parseLrc(lrcText: string, mode: 'elrc' | 'lrc' = 'elrc'): LyricLine[] {
     if (!lrcText || typeof lrcText !== 'string') return [];
     const lines = lrcText.split('\n');
     const result: LyricLine[] = [];
@@ -858,11 +900,13 @@ export default function RoomSession() {
       let wordMatch;
       const words: { text: string; start: number }[] = [];
 
-      while ((wordMatch = wordRegex.exec(remainder)) !== null) {
-        const wTime = parseTimestamp(wordMatch[1], wordMatch[2], wordMatch[3]);
-        const wText = wordMatch[4].replace(/\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]/g, '').trim();
-        if (wText) {
-          words.push({ text: wText, start: wTime });
+      if (mode === 'elrc') {
+        while ((wordMatch = wordRegex.exec(remainder)) !== null) {
+          const wTime = parseTimestamp(wordMatch[1], wordMatch[2], wordMatch[3]);
+          const wText = wordMatch[4].replace(/\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]/g, '').trim();
+          if (wText) {
+            words.push({ text: wText, start: wTime });
+          }
         }
       }
 
@@ -871,7 +915,7 @@ export default function RoomSession() {
         .replace(/\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]/g, '')
         .trim();
 
-      if (words.length > 0) {
+      if (mode === 'elrc' && words.length > 0) {
         const fullText = words.map(w => w.text).join(' ');
         // For eLRC lines with word timestamps, use the first leading line timestamp
         result.push({
@@ -880,7 +924,7 @@ export default function RoomSession() {
           words: words,
         });
       } else if (cleanText) {
-        // For normal LRC lines, multiple leading timestamps indicate repeated lines
+        // For normal LRC lines, or when mode === 'lrc', multiple leading timestamps indicate repeated lines
         for (const t of lineTimestamps) {
           result.push({
             time: t,
@@ -1420,6 +1464,28 @@ export default function RoomSession() {
               >
                 <Music className="w-3.5 h-3.5" />
                 <span className="hidden xs:inline">Inst:</span> {variant === 'instrumental' ? 'ON' : 'OFF'}
+              </button>
+
+              {/* Lyrics Format Toggle (eLRC / LRC) */}
+              <button 
+                data-tv-id="lyrics-format-toggle"
+                onClick={handleToggleLyricsFormat}
+                disabled={!currentSongDetails?.hasElrc}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all border focus:outline-none focus:ring-4 focus:ring-[#FF4FA3] focus:ring-offset-2 focus:ring-offset-[#08090E] ${
+                  !currentSongDetails?.hasElrc 
+                    ? 'opacity-50 cursor-not-allowed bg-white/5 text-zinc-500 border-white/5'
+                    : lyricsFormat === 'elrc'
+                    ? 'bg-cyan-500 text-white border-cyan-500 shadow-lg shadow-cyan-500/25'
+                    : 'bg-white/5 text-zinc-300 border-white/10 hover:bg-white/10'
+                }`}
+                title={
+                  !currentSongDetails?.hasElrc
+                    ? 'Enhanced LRC (eLRC) not available for this song (LRC mode active)'
+                    : `Switch lyric format (Current: ${lyricsFormat.toUpperCase()})`
+                }
+              >
+                <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                <span className="hidden xs:inline">Lyrics:</span> {lyricsFormat.toUpperCase()}
               </button>
 
               {/* Offset Tuner in Top Navigation */}
