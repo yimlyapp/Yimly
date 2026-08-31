@@ -55,7 +55,7 @@ router.post('/', requireAdmin, async (req, res) => {
     }).returning();
 
     // Start watching the newly added library
-    libraryWatcher.watchLibrary(inserted[0].id, inserted[0].path);
+    await libraryWatcher.watchLibrary(inserted[0].id, inserted[0].path);
 
     res.json(inserted[0]);
   } catch (error) {

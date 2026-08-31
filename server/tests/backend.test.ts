@@ -1348,7 +1348,121 @@ test('Issue 7: Automatically Monitor Media Folder for Changes', async () => {
   }
 });
 
+test('Issue 7: Polling Fallback & Reconciliation when Native Inotify is Unavailable', async () => {
+  const { libraryWatcher } = await import('../lib/watcher.js');
+  const pollLibDir = path.resolve(process.cwd(), 'data/watcher_poll_lib');
+  if (fsSync.existsSync(pollLibDir)) {
+    fsSync.rmSync(pollLibDir, { recursive: true, force: true });
+  }
+  fsSync.mkdirSync(pollLibDir, { recursive: true });
+
+  // Speed up poll interval for testing
+  libraryWatcher.setPollInterval(400);
+
+  const helperWaitFor = async (predicate: () => Promise<boolean>, timeoutMs = 8000, intervalMs = 150): Promise<boolean> => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try {
+        if (await predicate()) return true;
+      } catch {}
+      await new Promise(r => setTimeout(r, intervalMs));
+    }
+    return false;
+  };
+
+  // 1. Create library directly
+  const createLibRes = await fetch(`${baseUrl}/api/libraries`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${(global as any).tokenTest}`,
+    },
+    body: JSON.stringify({
+      name: 'Docker Polling Library',
+      path: pollLibDir,
+    }),
+  });
+  assert.strictEqual(createLibRes.status, 200);
+  const createdLib = await createLibRes.json() as any;
+  const pollLibId = createdLib.id;
+
+  // 2. Add an MP3 file (simulating host file drop without inotify)
+  const mockAudioBuffer = Buffer.from([
+    0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0xFF, 0xFB, 0x90, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  ]);
+  const songFile = path.join(pollLibDir, 'DockerArtist - DockerSong.mp3');
+  fsSync.writeFileSync(songFile, mockAudioBuffer);
+
+  // Trigger poll cycle directly or wait for timer
+  await libraryWatcher.pollLibrary(pollLibId);
+
+  const songImported = await helperWaitFor(async () => {
+    const s = await db.select().from(songs).where(eq(songs.libraryId, pollLibId));
+    return s.some(item => item.title === 'DockerSong');
+  }, 6000, 200);
+  assert.strictEqual(songImported, true, 'Polling reconciler must detect new file without inotify events');
+
+  const importedSong = (await db.select().from(songs).where(eq(songs.libraryId, pollLibId)))[0];
+
+  // 3. Add an LRC file via polling
+  const lrcFile = path.join(pollLibDir, 'DockerArtist - DockerSong.lrc');
+  fsSync.writeFileSync(lrcFile, `[00:01.00] Dockerized polling lyrics line\n[00:04.00] Second line\n`, 'utf-8');
+
+  await libraryWatcher.pollLibrary(pollLibId);
+
+  const lyricsImported = await helperWaitFor(async () => {
+    const lyr = await db.select().from(lyrics).where(eq(lyrics.songId, importedSong.id));
+    return lyr.length > 0;
+  }, 6000, 200);
+  assert.strictEqual(lyricsImported, true, 'Polling reconciler must detect lyrics change');
+
+  // 4. Test Duplicate Event Coalescing: trigger both poll & native event handler simultaneously
+  await Promise.all([
+    libraryWatcher.pollLibrary(pollLibId),
+    libraryWatcher.pollLibrary(pollLibId),
+  ]);
+
+  const songCount = await db.select().from(songs).where(eq(songs.libraryId, pollLibId));
+  assert.strictEqual(songCount.length, 1, 'Duplicate poll / native events must not produce duplicate songs');
+
+  // 5. Test Deletion via polling
+  fsSync.unlinkSync(songFile);
+  fsSync.unlinkSync(lrcFile);
+
+  await libraryWatcher.pollLibrary(pollLibId);
+
+  const songDeleted = await helperWaitFor(async () => {
+    const s = await db.select().from(songs).where(eq(songs.libraryId, pollLibId));
+    return s.length === 0;
+  }, 6000, 200);
+  assert.strictEqual(songDeleted, true, 'Polling reconciler must detect deletion and remove song');
+
+  // 6. Test Watcher Lifecycle (Stop & Restart)
+  libraryWatcher.stopAll();
+  const statusStopped = libraryWatcher.getStatus();
+  assert.strictEqual(statusStopped.monitoredCount, 0);
+
+  await libraryWatcher.start();
+  const statusRestarted = libraryWatcher.getStatus();
+  assert.ok(statusRestarted.monitoredCount >= 1, 'Watcher restart must restore configured libraries');
+
+  // Clean up
+  await fetch(`${baseUrl}/api/libraries/${pollLibId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${(global as any).tokenTest}` }
+  });
+  if (fsSync.existsSync(pollLibDir)) {
+    fsSync.rmSync(pollLibDir, { recursive: true, force: true });
+  }
+
+  // Reset poll interval back to standard
+  libraryWatcher.setPollInterval(3000);
+});
+
 test('Close server', async () => {
+  const { libraryWatcher } = await import('../lib/watcher.js');
+  libraryWatcher.stopAll();
   await new Promise<void>((resolve) => {
     server.close(() => resolve());
   });
