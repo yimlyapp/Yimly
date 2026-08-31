@@ -34,6 +34,12 @@ setupDatabase().then(async () => {
   } catch (qErr) {
     console.error('Failed to initialize download queue on startup:', qErr);
   }
+  try {
+    const { libraryWatcher } = await import('./server/lib/watcher.js');
+    await libraryWatcher.start();
+  } catch (wErr) {
+    console.error('Failed to initialize library watcher on startup:', wErr);
+  }
 });
 
 // Health Check
@@ -235,11 +241,19 @@ async function startServer() {
 
 // Graceful shutdown on restart/termination to prevent SQLite WAL corruption
 process.on('SIGINT', async () => {
+  try {
+    const { libraryWatcher } = await import('./server/lib/watcher.js');
+    libraryWatcher.stopAll();
+  } catch {}
   await checkpointAndCloseDatabase();
   process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
+  try {
+    const { libraryWatcher } = await import('./server/lib/watcher.js');
+    libraryWatcher.stopAll();
+  } catch {}
   await checkpointAndCloseDatabase();
   process.exit(0);
 });

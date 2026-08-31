@@ -1162,6 +1162,192 @@ test('Issue 3: Library Rescan Must Remove Orphaned Artists and Albums', async ()
   }
 });
 
+test('Issue 7: Automatically Monitor Media Folder for Changes', async () => {
+  const { libraryWatcher } = await import('../lib/watcher.js');
+  const watchLibDir = path.resolve(process.cwd(), 'data/watcher_test_lib');
+  if (fsSync.existsSync(watchLibDir)) {
+    fsSync.rmSync(watchLibDir, { recursive: true, force: true });
+  }
+  fsSync.mkdirSync(watchLibDir, { recursive: true });
+
+  const helperWaitFor = async (predicate: () => Promise<boolean>, timeoutMs = 8000, intervalMs = 200): Promise<boolean> => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try {
+        if (await predicate()) return true;
+      } catch {}
+      await new Promise(r => setTimeout(r, intervalMs));
+    }
+    return false;
+  };
+
+  // 1. Create Library via API to verify watcher is attached dynamically
+  const createLibRes = await fetch(`${baseUrl}/api/libraries`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${(global as any).tokenTest}`,
+    },
+    body: JSON.stringify({
+      name: 'Watcher Auto Library',
+      path: watchLibDir,
+    }),
+  });
+  assert.strictEqual(createLibRes.status, 200);
+  const createdLib = await createLibRes.json() as any;
+  const watchLibId = createdLib.id;
+
+  // Verify watcher status endpoint
+  const statusRes = await fetch(`${baseUrl}/api/libraries/watcher/status`, {
+    headers: { Authorization: `Bearer ${(global as any).tokenTest}` }
+  });
+  assert.strictEqual(statusRes.status, 200);
+  const watcherStatus = await statusRes.json() as any;
+  assert.ok(watcherStatus.libraries.some((l: any) => l.libraryId === watchLibId && l.active));
+
+  // 2. Add new music file to monitored folder
+  const songFile1 = path.join(watchLibDir, 'AutoArtist - AutoSong.mp3');
+  // Minimal ID3v2/MP3 frame buffer for metadata reading
+  const mockAudioBuffer = Buffer.from([
+    0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ID3v2 header
+    0xFF, 0xFB, 0x90, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // MP3 header + payload
+  ]);
+  fsSync.writeFileSync(songFile1, mockAudioBuffer);
+
+  // Wait for automatic detection and import
+  const song1Imported = await helperWaitFor(async () => {
+    const s = await db.select().from(songs).where(eq(songs.libraryId, watchLibId));
+    return s.some(item => item.title === 'AutoSong');
+  }, 8000, 300);
+
+  assert.strictEqual(song1Imported, true, 'New song file should be automatically imported by watcher');
+
+  const dbSong1 = (await db.select().from(songs).where(eq(songs.libraryId, watchLibId)))[0];
+  assert.strictEqual(dbSong1.title, 'AutoSong');
+
+  // Verify artist created automatically
+  const art1 = await db.select().from(artists).where(eq(artists.name, 'AutoArtist'));
+  assert.strictEqual(art1.length, 1, 'Artist AutoArtist should be created automatically');
+
+  // Verify Song API returns the new song immediately
+  const songApiRes = await fetch(`${baseUrl}/api/songs/${dbSong1.id}`, {
+    headers: { Authorization: `Bearer ${tokenA}` }
+  });
+  assert.strictEqual(songApiRes.status, 200);
+  const songApiData = await songApiRes.json() as any;
+  assert.strictEqual(songApiData.title, 'AutoSong');
+  assert.strictEqual(songApiData.hasLrc, false);
+
+  // 3. Add .elrc.lrc lyrics file for the song
+  const elrcFile1 = path.join(watchLibDir, 'AutoArtist - AutoSong.elrc.lrc');
+  const elrcContent = `[00:01.00]<00:01.00> Auto <00:01.50> lyrics <00:02.00> test\n[00:03.00]<00:03.00> Second <00:03.50> line\n`;
+  fsSync.writeFileSync(elrcFile1, elrcContent, 'utf-8');
+
+  // Wait for lyrics to be automatically detected and linked
+  const lyricsImported = await helperWaitFor(async () => {
+    const lyr = await db.select().from(lyrics).where(eq(lyrics.songId, dbSong1.id));
+    return lyr.length > 0;
+  }, 8000, 300);
+
+  assert.strictEqual(lyricsImported, true, 'Lyrics file should be automatically imported by watcher');
+
+  // Check lyrics API endpoint
+  const lyricsApiRes = await fetch(`${baseUrl}/api/songs/${dbSong1.id}/lyrics`, {
+    headers: { Authorization: `Bearer ${tokenA}` }
+  });
+  assert.strictEqual(lyricsApiRes.status, 200);
+  const fetchedLyrics = await lyricsApiRes.text();
+  assert.ok(fetchedLyrics.includes('Auto'));
+
+  const songApiWithLyrics = await (await fetch(`${baseUrl}/api/songs/${dbSong1.id}`, {
+    headers: { Authorization: `Bearer ${tokenA}` }
+  })).json() as any;
+  assert.strictEqual(songApiWithLyrics.hasLrc, true);
+  assert.strictEqual(songApiWithLyrics.hasElrc, true);
+
+  // 4. Add nested album directory with 2 songs
+  const albumSubDir = path.join(watchLibDir, 'FolderArtist', 'FolderAlbum');
+  fsSync.mkdirSync(albumSubDir, { recursive: true });
+
+  const subSong1 = path.join(albumSubDir, 'FolderArtist - Track One.mp3');
+  const subSong2 = path.join(albumSubDir, 'FolderArtist - Track Two.mp3');
+  fsSync.writeFileSync(subSong1, mockAudioBuffer);
+  fsSync.writeFileSync(subSong2, mockAudioBuffer);
+
+  const albumSongsImported = await helperWaitFor(async () => {
+    const s = await db.select().from(songs).where(eq(songs.libraryId, watchLibId));
+    return s.some(item => item.title === 'Track One') && s.some(item => item.title === 'Track Two');
+  }, 8000, 300);
+
+  assert.strictEqual(albumSongsImported, true, 'Folder songs should be automatically imported');
+
+  // 5. File Stability Check: simulate a multi-step write
+  const slowFile = path.join(watchLibDir, 'SlowArtist - SlowSong.mp3');
+  fsSync.writeFileSync(slowFile, Buffer.from([0x49, 0x44])); // partial
+  await new Promise(r => setTimeout(r, 200));
+  fsSync.appendFileSync(slowFile, mockAudioBuffer); // complete
+
+  const slowSongImported = await helperWaitFor(async () => {
+    const s = await db.select().from(songs).where(eq(songs.libraryId, watchLibId));
+    return s.some(item => item.title === 'SlowSong');
+  }, 8000, 300);
+
+  assert.strictEqual(slowSongImported, true, 'Slow/chunked file should stabilize and be imported');
+
+  // 6. Rename / Move File
+  const renamedFile = path.join(watchLibDir, 'AutoArtist - AutoSongRenamed.mp3');
+  fsSync.renameSync(songFile1, renamedFile);
+
+  const renameProcessed = await helperWaitFor(async () => {
+    const s = await db.select().from(songs).where(eq(songs.libraryId, watchLibId));
+    const hasNew = s.some(item => item.title === 'AutoSongRenamed' || item.mainAudioPath === renamedFile);
+    const hasOld = s.some(item => item.mainAudioPath === songFile1);
+    return hasNew && !hasOld;
+  }, 8000, 300);
+
+  assert.strictEqual(renameProcessed, true, 'Renamed file should be updated without duplicate stale records');
+
+  // 7. Delete files and confirm automatic orphan cleanup
+  fsSync.unlinkSync(renamedFile);
+  if (fsSync.existsSync(elrcFile1)) fsSync.unlinkSync(elrcFile1);
+  fsSync.unlinkSync(subSong1);
+  fsSync.unlinkSync(subSong2);
+  fsSync.unlinkSync(slowFile);
+
+  const allDeleted = await helperWaitFor(async () => {
+    const s = await db.select().from(songs).where(eq(songs.libraryId, watchLibId));
+    return s.length === 0;
+  }, 8000, 300);
+
+  assert.strictEqual(allDeleted, true, 'All deleted songs should be automatically removed from database');
+
+  // Confirm orphaned artists and albums are cleaned up
+  const orphanedArtist1 = await db.select().from(artists).where(eq(artists.name, 'AutoArtist'));
+  const orphanedArtist2 = await db.select().from(artists).where(eq(artists.name, 'FolderArtist'));
+  const orphanedArtist3 = await db.select().from(artists).where(eq(artists.name, 'SlowArtist'));
+
+  assert.strictEqual(orphanedArtist1.length, 0, 'AutoArtist should be cleaned up automatically');
+  assert.strictEqual(orphanedArtist2.length, 0, 'FolderArtist should be cleaned up automatically');
+  assert.strictEqual(orphanedArtist3.length, 0, 'SlowArtist should be cleaned up automatically');
+
+  // 8. Delete Library via API and confirm watcher is unwatched
+  const delLibRes = await fetch(`${baseUrl}/api/libraries/${watchLibId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${(global as any).tokenTest}` }
+  });
+  assert.strictEqual(delLibRes.status, 200);
+
+  const statusAfterDel = await (await fetch(`${baseUrl}/api/libraries/watcher/status`, {
+    headers: { Authorization: `Bearer ${(global as any).tokenTest}` }
+  })).json() as any;
+  assert.strictEqual(statusAfterDel.libraries.some((l: any) => l.libraryId === watchLibId), false, 'Deleted library must be removed from watcher');
+
+  // Clean up directory
+  if (fsSync.existsSync(watchLibDir)) {
+    fsSync.rmSync(watchLibDir, { recursive: true, force: true });
+  }
+});
+
 test('Close server', async () => {
   await new Promise<void>((resolve) => {
     server.close(() => resolve());

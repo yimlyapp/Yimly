@@ -4,7 +4,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { db } from '../db/index.js';
 import { libraries, artists, albums, songs, lyrics, songArtists, playlistSongs, favorites, queueItems } from '../db/schema.js';
-import { eq, and, isNull, isNotNull, inArray, sql } from 'drizzle-orm';
+import { eq, and, or, isNull, isNotNull, inArray, sql } from 'drizzle-orm';
 import * as mm from 'music-metadata';
 import { parseArtists, getOrCreateArtist, syncSongArtists, normalizeMultiArtistsInDatabase, cleanupOrphanedRecords } from './artist-utils.js';
 import { isLrcContentValid } from './lyrics.js';
@@ -77,26 +77,23 @@ export async function saveEmbeddedArtwork(picture: mm.IPicture): Promise<string>
   return filename;
 }
 
-interface ScannedMediaItem {
+export interface ScannedMediaMetadata {
   artists: string[];
   albumArtist?: string;
   album: string;
   title: string;
-  mainAudio?: string;
-  instrumentalAudio?: string;
-  lrc?: string;
-  duration?: number;
+  duration: number;
   trackNumber?: number;
   discNumber?: number;
   genre?: string;
   year?: number;
-  variant: string;
-  fileSize?: number;
-  format?: string;
+  variant: 'original' | 'instrumental' | 'vocal';
+  fileSize: number;
+  format: string;
   artworkPath?: string;
 }
 
-const SUPPORTED_AUDIO_EXTS = new Set([
+export const SUPPORTED_AUDIO_EXTS = new Set([
   '.mp3',
   '.flac',
   '.m4a',
@@ -116,22 +113,535 @@ const SUPPORTED_AUDIO_EXTS = new Set([
 /**
  * Normalizes a base filename for matching (trims whitespace and lowercases).
  */
-function normalizeBaseName(base: string): string {
+export function normalizeBaseName(base: string): string {
   return base.trim().toLowerCase();
 }
 
 /**
  * Normalizes title/filename by removing variant tags like (Instrumental), (Karaoke), etc.
  */
-function cleanVariantFromBaseName(base: string): string {
+export function cleanVariantFromBaseName(base: string): string {
   return base.replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim().toLowerCase();
 }
 
-export async function scanLibrary(libraryId: number, dirPath: string) {
-  const songsMap = new Map<string, ScannedMediaItem>();
-  const foundFilePaths = new Set<string>();
+/**
+ * Extracts metadata, artwork, and variant information from an audio file.
+ */
+export async function extractSongMetadata(fullPath: string, filename?: string): Promise<ScannedMediaMetadata> {
+  const safeFilename = filename || path.basename(fullPath);
+  const ext = path.extname(safeFilename).toLowerCase();
+  const baseName = path.basename(safeFilename, ext);
 
-  // Collect audio tracks and LRC files by directory
+  let title = baseName;
+  let parsedArtists: string[] = [];
+  let albumArtist: string | undefined = undefined;
+  let album = 'Unknown Album';
+  let duration = 0;
+  let trackNumber: number | undefined = undefined;
+  let discNumber: number | undefined = undefined;
+  let genre: string | undefined = undefined;
+  let year: number | undefined = undefined;
+  let fileSize = 0;
+  let format = ext.replace('.', '');
+  let variant: 'original' | 'instrumental' | 'vocal' = 'original';
+  let artworkFilename: string | undefined = undefined;
+
+  try {
+    const stats = await fs.stat(fullPath);
+    fileSize = stats.size;
+
+    const metadata = await mm.parseFile(fullPath, { duration: true });
+    if (metadata.format.duration) {
+      duration = Math.round(metadata.format.duration);
+    }
+    if (metadata.format.container) {
+      format = metadata.format.container;
+    }
+
+    const common = metadata.common;
+    if (common.title) {
+      title = common.title.trim();
+    }
+
+    if (common.artists && common.artists.length > 0) {
+      parsedArtists = parseArtists(common.artist, common.artists);
+    } else if (common.artist) {
+      parsedArtists = parseArtists(common.artist);
+    } else if (common.albumartist) {
+      parsedArtists = parseArtists(common.albumartist);
+    }
+
+    if (common.albumartist) {
+      albumArtist = common.albumartist.trim();
+    }
+
+    if (common.album) {
+      album = common.album.trim();
+    }
+    if (common.track && common.track.no) {
+      trackNumber = common.track.no;
+    }
+    if (common.disk && common.disk.no) {
+      discNumber = common.disk.no;
+    }
+    if (common.genre && common.genre.length > 0) {
+      genre = common.genre.join(', ');
+    }
+    if (common.year) {
+      year = common.year;
+    }
+
+    if (common.picture && common.picture.length > 0) {
+      const selectedPic = selectFrontCover(common.picture);
+      if (selectedPic) {
+        artworkFilename = await saveEmbeddedArtwork(selectedPic);
+      }
+    }
+  } catch (err) {
+    console.warn(`[Scanner] Failed to read audio metadata for ${safeFilename}, using filename fallbacks:`, err);
+  }
+
+  // Detect variant & filename fallbacks
+  const lowerBase = baseName.toLowerCase();
+  if (lowerBase.includes('instrumental') || lowerBase.includes('inst') || lowerBase.includes('karaoke') || lowerBase.includes('backing')) {
+    variant = 'instrumental';
+  } else if (lowerBase.includes('vocal') || lowerBase.includes('vocals')) {
+    variant = 'vocal';
+  }
+
+  // Filename pattern fallback: "Artist - Title"
+  const match = baseName.match(/^(.*?)\s*-\s*(.*?)(?:\s*\((Instrumental|Karaoke|Vocals|Backing)\))?$/i);
+  if (match) {
+    if (parsedArtists.length === 0 || (parsedArtists.length === 1 && parsedArtists[0] === 'Unknown Artist')) {
+      if (match[1]) {
+        parsedArtists = parseArtists(match[1]);
+      }
+    }
+    if (title === baseName && match[2]) {
+      title = match[2].trim();
+    }
+  }
+
+  if (parsedArtists.length === 0) {
+    parsedArtists = ['Unknown Artist'];
+  }
+
+  const cleanTitle = title
+    .replace(/\s*\((instrumental|karaoke|vocals|backing version)\)\s*/gi, '')
+    .trim() || title;
+
+  return {
+    artists: parsedArtists,
+    albumArtist,
+    album,
+    title: cleanTitle,
+    duration,
+    trackNumber,
+    discNumber,
+    genre,
+    year,
+    variant,
+    fileSize,
+    format,
+    artworkPath: artworkFilename,
+  };
+}
+
+/**
+ * Searches for a matching .elrc.lrc or .lrc sidecar file in the directory of an audio file.
+ * Prioritizes .elrc.lrc over standard .lrc, and validates lyrics content.
+ */
+export async function findLyricsForAudio(audioFullPath: string, songTitle: string): Promise<string | null> {
+  const dir = path.dirname(audioFullPath);
+  if (!fsSync.existsSync(dir)) return null;
+
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    const audioExt = path.extname(audioFullPath);
+    const audioBase = path.basename(audioFullPath, audioExt);
+    const normAudioBase = normalizeBaseName(audioBase);
+    const cleanAudioBase = cleanVariantFromBaseName(audioBase);
+    const songTitleNorm = normalizeBaseName(songTitle);
+
+    const elrcCandidates: string[] = [];
+    const stdLrcCandidates: string[] = [];
+
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const lower = entry.name.toLowerCase();
+      if (lower.endsWith('.elrc.lrc')) {
+        elrcCandidates.push(path.join(dir, entry.name));
+      } else if (lower.endsWith('.lrc')) {
+        stdLrcCandidates.push(path.join(dir, entry.name));
+      }
+    }
+
+    const rankCandidates = (candidates: string[]): string | null => {
+      // 1. Exact base match
+      for (const p of candidates) {
+        const name = path.basename(p);
+        const isElrc = name.toLowerCase().endsWith('.elrc.lrc');
+        const extLen = isElrc ? 9 : 4;
+        const lrcBase = name.slice(0, -extLen);
+        if (normalizeBaseName(lrcBase) === normAudioBase) {
+          if (validateLrcFile(p)) return p;
+        }
+      }
+      // 2. Clean base match
+      for (const p of candidates) {
+        const name = path.basename(p);
+        const isElrc = name.toLowerCase().endsWith('.elrc.lrc');
+        const extLen = isElrc ? 9 : 4;
+        const lrcBase = name.slice(0, -extLen);
+        if (cleanVariantFromBaseName(lrcBase) === cleanAudioBase) {
+          if (validateLrcFile(p)) return p;
+        }
+      }
+      // 3. Title match
+      for (const p of candidates) {
+        const name = path.basename(p);
+        const isElrc = name.toLowerCase().endsWith('.elrc.lrc');
+        const extLen = isElrc ? 9 : 4;
+        const lrcBase = name.slice(0, -extLen);
+        const lrcNorm = normalizeBaseName(lrcBase);
+        const lrcClean = cleanVariantFromBaseName(lrcBase);
+        if (lrcNorm === songTitleNorm || lrcClean === songTitleNorm) {
+          if (validateLrcFile(p)) return p;
+        }
+      }
+      return null;
+    };
+
+    const elrcMatch = rankCandidates(elrcCandidates);
+    if (elrcMatch) return elrcMatch;
+
+    const stdLrcMatch = rankCandidates(stdLrcCandidates);
+    if (stdLrcMatch) return stdLrcMatch;
+
+    return null;
+  } catch (err) {
+    console.warn(`[Scanner] Error searching lyrics for ${audioFullPath}:`, err);
+    return null;
+  }
+}
+
+function validateLrcFile(filePath: string): boolean {
+  try {
+    if (!fsSync.existsSync(filePath)) return false;
+    const content = fsSync.readFileSync(filePath, 'utf-8');
+    return isLrcContentValid(content);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Incrementally imports or updates a single audio file into the database.
+ */
+export async function importSingleAudioFile(libraryId: number, audioFullPath: string): Promise<any> {
+  if (!fsSync.existsSync(audioFullPath)) {
+    return null;
+  }
+
+  const metadata = await extractSongMetadata(audioFullPath);
+  const matchedLyricsPath = await findLyricsForAudio(audioFullPath, metadata.title);
+
+  // 1. Upsert all Artists
+  const artistIds: number[] = [];
+  for (const artistName of metadata.artists) {
+    const aId = await getOrCreateArtist(artistName, metadata.artworkPath);
+    artistIds.push(aId);
+  }
+  const primaryArtistId = artistIds[0] || (await getOrCreateArtist('Unknown Artist', metadata.artworkPath));
+
+  // 2. Upsert Album
+  let albumId: number | null = null;
+  if (metadata.album) {
+    let albumArtistId = primaryArtistId;
+    if (metadata.albumArtist) {
+      albumArtistId = await getOrCreateArtist(metadata.albumArtist, metadata.artworkPath);
+    }
+
+    const albumRec = await db.select().from(albums).where(
+      and(eq(albums.artistId, albumArtistId), eq(albums.title, metadata.album))
+    ).limit(1);
+
+    if (albumRec.length === 0) {
+      const inserted = await db.insert(albums).values({
+        artistId: albumArtistId,
+        title: metadata.album,
+        year: metadata.year,
+        artworkPath: metadata.artworkPath || null,
+      }).returning();
+      albumId = inserted[0].id;
+    } else {
+      albumId = albumRec[0].id;
+      const updates: any = {};
+      if (metadata.year && !albumRec[0].year) updates.year = metadata.year;
+      if (metadata.artworkPath && !albumRec[0].artworkPath) updates.artworkPath = metadata.artworkPath;
+      if (Object.keys(updates).length > 0) {
+        await db.update(albums).set(updates).where(eq(albums.id, albumId));
+      }
+    }
+  }
+
+  // 3. Check for existing song match
+  let existingSong = await db.select().from(songs).where(
+    and(eq(songs.libraryId, libraryId), eq(songs.artistId, primaryArtistId), eq(songs.title, metadata.title))
+  ).limit(1);
+
+  if (existingSong.length === 0) {
+    existingSong = await db.select().from(songs).where(
+      and(
+        eq(songs.libraryId, libraryId),
+        or(eq(songs.mainAudioPath, audioFullPath), eq(songs.instrumentalAudioPath, audioFullPath))
+      )
+    ).limit(1);
+  }
+
+  let songId: number;
+  const isInst = metadata.variant === 'instrumental';
+
+  if (existingSong.length === 0) {
+    const inserted = await db.insert(songs).values({
+      libraryId,
+      artistId: primaryArtistId,
+      albumId,
+      title: metadata.title,
+      mainAudioPath: audioFullPath,
+      instrumentalAudioPath: isInst ? audioFullPath : null,
+      duration: metadata.duration || 0,
+      trackNumber: metadata.trackNumber,
+      discNumber: metadata.discNumber,
+      genre: metadata.genre,
+      year: metadata.year,
+      variant: isInst ? 'instrumental' : 'original',
+      fileSize: metadata.fileSize,
+      format: metadata.format,
+      artworkPath: metadata.artworkPath || null,
+    }).returning();
+    songId = inserted[0].id;
+  } else {
+    songId = existingSong[0].id;
+    const current = existingSong[0];
+    const updates: any = {
+      artistId: primaryArtistId,
+      albumId: albumId || current.albumId,
+      duration: metadata.duration || current.duration,
+      trackNumber: metadata.trackNumber || current.trackNumber,
+      discNumber: metadata.discNumber || current.discNumber,
+      genre: metadata.genre || current.genre,
+      year: metadata.year || current.year,
+      fileSize: metadata.fileSize || current.fileSize,
+      format: metadata.format || current.format,
+      artworkPath: metadata.artworkPath || current.artworkPath,
+    };
+
+    if (isInst) {
+      updates.instrumentalAudioPath = audioFullPath;
+      if (!current.mainAudioPath || !fsSync.existsSync(current.mainAudioPath)) {
+        updates.mainAudioPath = audioFullPath;
+        updates.variant = 'instrumental';
+      }
+    } else {
+      updates.mainAudioPath = audioFullPath;
+      updates.variant = 'original';
+    }
+
+    await db.update(songs).set(updates).where(eq(songs.id, songId));
+  }
+
+  // 4. Sync song_artists
+  await syncSongArtists(songId, artistIds);
+
+  // 5. Upsert Lyrics if matched
+  if (matchedLyricsPath) {
+    const existingLrc = await db.select().from(lyrics).where(eq(lyrics.songId, songId)).limit(1);
+    if (existingLrc.length === 0) {
+      await db.insert(lyrics).values({ songId, lrcPath: matchedLyricsPath });
+    } else {
+      await db.update(lyrics).set({ lrcPath: matchedLyricsPath }).where(eq(lyrics.id, existingLrc[0].id));
+    }
+  }
+
+  // 6. Backfill artwork for album/artists if newly acquired
+  if (metadata.artworkPath) {
+    if (albumId) {
+      await db.update(albums).set({ artworkPath: metadata.artworkPath }).where(and(eq(albums.id, albumId), isNull(albums.artworkPath)));
+    }
+    for (const aId of artistIds) {
+      await db.update(artists).set({ artworkPath: metadata.artworkPath }).where(and(eq(artists.id, aId), isNull(artists.artworkPath)));
+    }
+  }
+
+  return await db.select().from(songs).where(eq(songs.id, songId)).limit(1);
+}
+
+/**
+ * Incrementally processes a new or modified .lrc / .elrc.lrc file.
+ */
+export async function importSingleLrcFile(libraryId: number, lrcFullPath: string): Promise<boolean> {
+  if (!fsSync.existsSync(lrcFullPath)) return false;
+
+  let content: string;
+  try {
+    content = await fs.readFile(lrcFullPath, 'utf-8');
+  } catch {
+    return false;
+  }
+
+  if (!isLrcContentValid(content)) {
+    return false;
+  }
+
+  const dir = path.dirname(lrcFullPath);
+  const name = path.basename(lrcFullPath);
+  const isElrc = name.toLowerCase().endsWith('.elrc.lrc');
+  const extLen = isElrc ? 9 : 4;
+  const lrcBase = name.slice(0, -extLen);
+  const normLrcBase = normalizeBaseName(lrcBase);
+  const cleanLrcBase = cleanVariantFromBaseName(lrcBase);
+
+  // Find candidate songs in the library
+  const libSongs = await db.select().from(songs).where(eq(songs.libraryId, libraryId));
+  let bestMatchSongId: number | null = null;
+
+  for (const s of libSongs) {
+    const audioPath = s.mainAudioPath || s.instrumentalAudioPath;
+    if (!audioPath) continue;
+
+    const audioDir = path.dirname(audioPath);
+    if (path.resolve(audioDir) !== path.resolve(dir)) continue;
+
+    const audioExt = path.extname(audioPath);
+    const audioBase = path.basename(audioPath, audioExt);
+    const normAudioBase = normalizeBaseName(audioBase);
+    const cleanAudioBase = cleanVariantFromBaseName(audioBase);
+    const songTitleNorm = normalizeBaseName(s.title);
+
+    if (normAudioBase === normLrcBase || cleanAudioBase === cleanLrcBase || songTitleNorm === normLrcBase || songTitleNorm === cleanLrcBase) {
+      bestMatchSongId = s.id;
+      break;
+    }
+  }
+
+  // Fallback match by title if directory match wasn't direct
+  if (!bestMatchSongId) {
+    for (const s of libSongs) {
+      const songTitleNorm = normalizeBaseName(s.title);
+      if (songTitleNorm === normLrcBase || songTitleNorm === cleanLrcBase) {
+        bestMatchSongId = s.id;
+        break;
+      }
+    }
+  }
+
+  if (!bestMatchSongId) return false;
+
+  const existingLrc = await db.select().from(lyrics).where(eq(lyrics.songId, bestMatchSongId)).limit(1);
+  if (existingLrc.length === 0) {
+    await db.insert(lyrics).values({ songId: bestMatchSongId, lrcPath: lrcFullPath });
+    return true;
+  } else {
+    const curPath = existingLrc[0].lrcPath;
+    // If existing path is an eLRC and new file is standard LRC, do not downgrade if eLRC is valid
+    if (curPath && curPath.toLowerCase().endsWith('.elrc.lrc') && !isElrc && fsSync.existsSync(curPath)) {
+      return false;
+    }
+    await db.update(lyrics).set({ lrcPath: lrcFullPath }).where(eq(lyrics.id, existingLrc[0].id));
+    return true;
+  }
+}
+
+/**
+ * Handles deletion or removal of an audio or lyrics file from disk.
+ */
+export async function removeSingleFile(libraryId: number, filePath: string): Promise<void> {
+  const ext = path.extname(filePath).toLowerCase();
+  const lower = filePath.toLowerCase();
+  const isLrc = lower.endsWith('.elrc.lrc') || ext === '.lrc';
+
+  if (isLrc) {
+    // Check if any lyrics record pointed to this file
+    const matchedLyrics = await db.select().from(lyrics).where(eq(lyrics.lrcPath, filePath));
+    for (const l of matchedLyrics) {
+      const songRec = await db.select().from(songs).where(eq(songs.id, l.songId)).limit(1);
+      if (songRec.length > 0) {
+        const audioPath = songRec[0].mainAudioPath || songRec[0].instrumentalAudioPath;
+        const alternativeLrc = audioPath ? await findLyricsForAudio(audioPath, songRec[0].title) : null;
+        if (alternativeLrc) {
+          await db.update(lyrics).set({ lrcPath: alternativeLrc }).where(eq(lyrics.id, l.id));
+        } else {
+          await db.delete(lyrics).where(eq(lyrics.id, l.id));
+        }
+      } else {
+        await db.delete(lyrics).where(eq(lyrics.id, l.id));
+      }
+    }
+    return;
+  }
+
+  // Audio file removal
+  const matchingSongs = await db.select().from(songs).where(
+    and(
+      eq(songs.libraryId, libraryId),
+      or(eq(songs.mainAudioPath, filePath), eq(songs.instrumentalAudioPath, filePath))
+    )
+  );
+
+  for (const s of matchingSongs) {
+    const mainStillExists = s.mainAudioPath && s.mainAudioPath !== filePath && fsSync.existsSync(s.mainAudioPath);
+    const instStillExists = s.instrumentalAudioPath && s.instrumentalAudioPath !== filePath && fsSync.existsSync(s.instrumentalAudioPath);
+
+    if (!mainStillExists && !instStillExists) {
+      // Complete removal of song
+      await db.delete(lyrics).where(eq(lyrics.songId, s.id));
+      await db.delete(playlistSongs).where(eq(playlistSongs.songId, s.id));
+      await db.delete(favorites).where(eq(favorites.songId, s.id));
+      await db.delete(queueItems).where(eq(queueItems.songId, s.id));
+      await db.delete(songArtists).where(eq(songArtists.songId, s.id));
+      await db.delete(songs).where(eq(songs.id, s.id));
+    } else if (!mainStillExists && instStillExists) {
+      // Main removed, promote instrumental
+      await db.update(songs).set({
+        mainAudioPath: s.instrumentalAudioPath!,
+        instrumentalAudioPath: null,
+        variant: 'instrumental',
+      }).where(eq(songs.id, s.id));
+    } else if (mainStillExists && !instStillExists && s.instrumentalAudioPath === filePath) {
+      // Instrumental removed
+      await db.update(songs).set({
+        instrumentalAudioPath: null,
+      }).where(eq(songs.id, s.id));
+    }
+  }
+
+  await cleanupOrphanedRecords();
+}
+
+/**
+ * Full library rescan and reconciliation.
+ */
+export async function scanLibrary(libraryId: number, dirPath: string) {
+  const songsMap = new Map<string, {
+    artists: string[];
+    albumArtist?: string;
+    album: string;
+    title: string;
+    mainAudio?: string;
+    instrumentalAudio?: string;
+    lrc?: string;
+    duration?: number;
+    trackNumber?: number;
+    discNumber?: number;
+    genre?: string;
+    year?: number;
+    variant: string;
+    fileSize?: number;
+    format?: string;
+    artworkPath?: string;
+  }>();
+
   interface DiscoveredAudio {
     fullPath: string;
     filename: string;
@@ -152,7 +662,6 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
   }
 
   const audioList: DiscoveredAudio[] = [];
-  // Map directory path -> Array of discovered LRC files
   const dirLrcMap = new Map<string, DiscoveredLrc[]>();
 
   async function walk(currentPath: string) {
@@ -170,149 +679,48 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
 
   async function processFile(fullPath: string, filename: string, dir: string) {
     const ext = path.extname(filename).toLowerCase();
-    const baseName = path.basename(filename, path.extname(filename));
+    const baseName = path.basename(filename, ext);
 
     if (SUPPORTED_AUDIO_EXTS.has(ext)) {
-      foundFilePaths.add(fullPath);
-      let title = baseName;
-      let parsedArtists: string[] = [];
-      let albumArtist: string | undefined = undefined;
-      let album = 'Unknown Album';
-      let duration = 0;
-      let trackNumber: number | undefined = undefined;
-      let discNumber: number | undefined = undefined;
-      let genre: string | undefined = undefined;
-      let year: number | undefined = undefined;
-      let fileSize = 0;
-      let format = ext.replace('.', '');
-      let variant = 'original';
-      let artworkFilename: string | undefined = undefined;
-
-      try {
-        const stats = await fs.stat(fullPath);
-        fileSize = stats.size;
-
-        const metadata = await mm.parseFile(fullPath, { duration: true });
-        if (metadata.format.duration) {
-          duration = Math.round(metadata.format.duration);
-        }
-        if (metadata.format.container) {
-          format = metadata.format.container;
-        }
-
-        const common = metadata.common;
-        if (common.title) {
-          title = common.title.trim();
-        }
-
-        // Multi-artist metadata parsing: support semicolon separated artists, common.artists array, common.artist string
-        if (common.artists && common.artists.length > 0) {
-          parsedArtists = parseArtists(common.artist, common.artists);
-        } else if (common.artist) {
-          parsedArtists = parseArtists(common.artist);
-        } else if (common.albumartist) {
-          parsedArtists = parseArtists(common.albumartist);
-        }
-
-        if (common.albumartist) {
-          albumArtist = common.albumartist.trim();
-        }
-
-        if (common.album) {
-          album = common.album.trim();
-        }
-        if (common.track && common.track.no) {
-          trackNumber = common.track.no;
-        }
-        if (common.disk && common.disk.no) {
-          discNumber = common.disk.no;
-        }
-        if (common.genre && common.genre.length > 0) {
-          genre = common.genre.join(', ');
-        }
-        if (common.year) {
-          year = common.year;
-        }
-
-        // Extract embedded front cover picture if present
-        if (common.picture && common.picture.length > 0) {
-          const selectedPic = selectFrontCover(common.picture);
-          if (selectedPic) {
-            artworkFilename = await saveEmbeddedArtwork(selectedPic);
-          }
-        }
-      } catch (err) {
-        // Fallback to filename parsing if metadata reading fails
-        console.warn(`Failed to read metadata for ${filename}, using filename fallbacks:`, err);
-      }
-
-      // Detect variant & filename fallbacks if metadata is missing/generic
-      const lowerBase = baseName.toLowerCase();
-      if (lowerBase.includes('instrumental') || lowerBase.includes('inst') || lowerBase.includes('karaoke') || lowerBase.includes('backing')) {
-        variant = 'instrumental';
-      } else if (lowerBase.includes('vocal') || lowerBase.includes('vocals')) {
-        variant = 'vocal';
-      }
-
-      // Filename pattern fallback: "Artist - Title"
-      const match = baseName.match(/^(.*?)\s*-\s*(.*?)(?:\s*\((Instrumental|Karaoke|Vocals|Backing)\))?$/i);
-      if (match) {
-        if (parsedArtists.length === 0 || (parsedArtists.length === 1 && parsedArtists[0] === 'Unknown Artist')) {
-          if (match[1]) {
-            parsedArtists = parseArtists(match[1]);
-          }
-        }
-        if (title === baseName && match[2]) {
-          title = match[2].trim();
-        }
-      }
-
-      if (parsedArtists.length === 0) {
-        parsedArtists = ['Unknown Artist'];
-      }
-
-      // Clean base title for grouping main and instrumental versions of the same song
-      const cleanTitle = title
-        .replace(/\s*\((instrumental|karaoke|vocals|backing version)\)\s*/gi, '')
-        .trim();
-
-      const normalizedArtistsKey = parsedArtists.map(a => a.toLowerCase()).sort().join(';');
+      const metadata = await extractSongMetadata(fullPath, filename);
+      const cleanTitle = metadata.title;
+      const normalizedArtistsKey = metadata.artists.map(a => a.toLowerCase()).sort().join(';');
       const key = `${normalizedArtistsKey}|${cleanTitle.toLowerCase()}`;
 
       if (!songsMap.has(key)) {
         songsMap.set(key, {
-          artists: parsedArtists,
-          albumArtist,
-          album,
+          artists: metadata.artists,
+          albumArtist: metadata.albumArtist,
+          album: metadata.album,
           title: cleanTitle,
-          variant,
-          duration,
-          trackNumber,
-          discNumber,
-          genre,
-          year,
-          fileSize,
-          format,
-          artworkPath: artworkFilename,
+          variant: metadata.variant,
+          duration: metadata.duration,
+          trackNumber: metadata.trackNumber,
+          discNumber: metadata.discNumber,
+          genre: metadata.genre,
+          year: metadata.year,
+          fileSize: metadata.fileSize,
+          format: metadata.format,
+          artworkPath: metadata.artworkPath,
         });
       }
 
       const songInfo = songsMap.get(key)!;
-      if (artworkFilename && (!songInfo.artworkPath || variant !== 'instrumental')) {
-        songInfo.artworkPath = artworkFilename;
+      if (metadata.artworkPath && (!songInfo.artworkPath || metadata.variant !== 'instrumental')) {
+        songInfo.artworkPath = metadata.artworkPath;
       }
 
-      if (variant === 'instrumental') {
+      if (metadata.variant === 'instrumental') {
         songInfo.instrumentalAudio = fullPath;
       } else {
         songInfo.mainAudio = fullPath;
-        if (duration) songInfo.duration = duration;
-        if (trackNumber) songInfo.trackNumber = trackNumber;
-        if (discNumber) songInfo.discNumber = discNumber;
-        if (genre) songInfo.genre = genre;
-        if (year) songInfo.year = year;
-        if (fileSize) songInfo.fileSize = fileSize;
-        if (format) songInfo.format = format;
+        if (metadata.duration) songInfo.duration = metadata.duration;
+        if (metadata.trackNumber) songInfo.trackNumber = metadata.trackNumber;
+        if (metadata.discNumber) songInfo.discNumber = metadata.discNumber;
+        if (metadata.genre) songInfo.genre = metadata.genre;
+        if (metadata.year) songInfo.year = metadata.year;
+        if (metadata.fileSize) songInfo.fileSize = metadata.fileSize;
+        if (metadata.format) songInfo.format = metadata.format;
       }
 
       audioList.push({
@@ -325,7 +733,6 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
         songKey: key,
       });
     } else if (filename.toLowerCase().endsWith('.elrc.lrc')) {
-      foundFilePaths.add(fullPath);
       const elrcBase = filename.slice(0, -9);
       const lrcItem: DiscoveredLrc = {
         fullPath,
@@ -340,7 +747,6 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
       }
       dirLrcMap.get(dir)!.push(lrcItem);
     } else if (ext === '.lrc') {
-      foundFilePaths.add(fullPath);
       const lrcItem: DiscoveredLrc = {
         fullPath,
         filename,
@@ -377,7 +783,6 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     for (const pool of [elrcs, stdLrcs]) {
       if (pool.length === 0) continue;
 
-      // Filter pool to only candidates that exist and have valid parseable lyrics content
       const validCandidates = pool.filter(lrc => {
         try {
           if (!fsSync.existsSync(lrc.fullPath)) return false;
@@ -390,21 +795,18 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
 
       if (validCandidates.length === 0) continue;
 
-      // 1. Exact base filename match (case-insensitive & whitespace trimmed)
       const exactMatch = validCandidates.find(lrc => normalizeBaseName(lrc.baseName) === normAudioBase);
       if (exactMatch) {
         matchedPath = exactMatch.fullPath;
         break;
       }
 
-      // 2. Cleaned base filename match (without variant suffix like Instrumental)
       const cleanMatch = validCandidates.find(lrc => lrc.cleanBaseName === cleanAudioBase);
       if (cleanMatch) {
         matchedPath = cleanMatch.fullPath;
         break;
       }
 
-      // 3. Match against song's clean title if title appears as exact base filename in same dir
       const songTitleNorm = normalizeBaseName(songInfo.title);
       const titleMatch = validCandidates.find(lrc => normalizeBaseName(lrc.baseName) === songTitleNorm || lrc.cleanBaseName === songTitleNorm);
       if (titleMatch) {
@@ -418,7 +820,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     }
   }
 
-  // Fallback for any unmatched LRCs: elrcs first, then stdLrcs
+  // Fallback matching for remaining unmatched songs
   const allElrcs: DiscoveredLrc[] = [];
   const allStdLrcs: DiscoveredLrc[] = [];
   for (const dirLrcs of dirLrcMap.values()) {
@@ -445,7 +847,6 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
         if (songInfo.lrc) continue;
         const songTitleNorm = normalizeBaseName(songInfo.title);
 
-        // If LRC filename contains or matches title
         if (lrcBaseNorm === songTitleNorm || lrcClean === songTitleNorm || (songTitleNorm.length > 3 && lrcClean.includes(songTitleNorm))) {
           songInfo.lrc = lrc.fullPath;
           break;
@@ -458,7 +859,6 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
   for (const song of songsMap.values()) {
     if (!song.mainAudio && !song.instrumentalAudio) continue;
 
-    // 1. Upsert all Artists (independent entities)
     const artistIds: number[] = [];
     for (const artistName of song.artists) {
       const aId = await getOrCreateArtist(artistName, song.artworkPath);
@@ -466,7 +866,6 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     }
     const primaryArtistId = artistIds[0] || (await getOrCreateArtist('Unknown Artist', song.artworkPath));
 
-    // 2. Upsert Album
     let albumId: number | null = null;
     if (song.album) {
       let albumArtistId = primaryArtistId;
@@ -474,7 +873,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
         albumArtistId = await getOrCreateArtist(song.albumArtist, song.artworkPath);
       }
 
-      let albumRec = await db.select().from(albums).where(
+      const albumRec = await db.select().from(albums).where(
         and(eq(albums.artistId, albumArtistId), eq(albums.title, song.album))
       ).limit(1);
       if (albumRec.length === 0) {
@@ -496,7 +895,6 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
       }
     }
 
-    // 3. Upsert Song
     let existingSong = await db.select().from(songs).where(
       and(eq(songs.libraryId, libraryId), eq(songs.artistId, primaryArtistId), eq(songs.title, song.title))
     ).limit(1);
@@ -545,10 +943,8 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
       }).where(eq(songs.id, songId));
     }
 
-    // 4. Sync many-to-many relationship in song_artists
     await syncSongArtists(songId, artistIds);
 
-    // 5. Upsert Lyrics (.lrc)
     if (song.lrc) {
       const existingLrc = await db.select().from(lyrics).where(eq(lyrics.songId, songId)).limit(1);
       if (existingLrc.length === 0) {
@@ -562,14 +958,13 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     }
   }
 
-  // Handle removed files: check existing songs in db for this library, if mainAudioPath / instrumentalAudioPath no longer exist on disk, remove or adjust them
+  // Reconcile deleted files
   const dbSongs = await db.select().from(songs).where(eq(songs.libraryId, libraryId));
   for (const dbSong of dbSongs) {
     const mainExists = fsSync.existsSync(dbSong.mainAudioPath);
     const instExists = dbSong.instrumentalAudioPath ? fsSync.existsSync(dbSong.instrumentalAudioPath) : false;
 
     if (!mainExists && !instExists) {
-      // Remove all associated records and song
       await db.delete(lyrics).where(eq(lyrics.songId, dbSong.id));
       await db.delete(playlistSongs).where(eq(playlistSongs.songId, dbSong.id));
       await db.delete(favorites).where(eq(favorites.songId, dbSong.id));
@@ -577,27 +972,22 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
       await db.delete(songArtists).where(eq(songArtists.songId, dbSong.id));
       await db.delete(songs).where(eq(songs.id, dbSong.id));
     } else if (!mainExists && instExists) {
-      // Main audio was removed but instrumental still exists
       await db.update(songs).set({
         mainAudioPath: dbSong.instrumentalAudioPath!,
         instrumentalAudioPath: null,
         variant: 'instrumental',
       }).where(eq(songs.id, dbSong.id));
     } else if (mainExists && !instExists && dbSong.instrumentalAudioPath) {
-      // Instrumental audio was removed but main audio exists
       await db.update(songs).set({
         instrumentalAudioPath: null,
       }).where(eq(songs.id, dbSong.id));
     }
   }
 
-  // Clean up any obsolete semicolon-separated artist records from previous legacy scans
   await normalizeMultiArtistsInDatabase();
-
-  // Clean up any orphaned albums, artists, and song_artists relationships
   await cleanupOrphanedRecords();
 
-  // Backfill any albums without artwork from their child songs
+  // Backfill albums without artwork
   const albumsWithoutArtwork = await db.select().from(albums).where(isNull(albums.artworkPath));
   for (const alb of albumsWithoutArtwork) {
     const songWithArtwork = await db.select({ artworkPath: songs.artworkPath })
@@ -609,10 +999,9 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     }
   }
 
-  // Backfill any artists without artwork from their songs (via song_artists or songs table)
+  // Backfill artists without artwork
   const artistsWithoutArtwork = await db.select().from(artists).where(isNull(artists.artworkPath));
   for (const art of artistsWithoutArtwork) {
-    // Check songs linked to this artist via song_artists
     const songArtistMatch = await db.select({ artworkPath: songs.artworkPath })
       .from(songArtists)
       .innerJoin(songs, eq(songArtists.songId, songs.id))
