@@ -347,11 +347,18 @@ export default function Home() {
                     ) : (
                       <Disc className="w-10 h-10 text-zinc-600 group-hover:text-[#FF4FA3] transition-colors" />
                     )}
-                    {song.hasLrc && (
-                      <span className="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/20 text-[#FF4FA3] border border-[#FF4FA3]/30 backdrop-blur z-10">
-                        LRC
-                      </span>
-                    )}
+                    <div className="absolute top-2 right-2 flex gap-1 z-10">
+                      {song.hasLrc && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/20 text-[#FF4FA3] border border-[#FF4FA3]/30 backdrop-blur">
+                          LRC
+                        </span>
+                      )}
+                      {song.hasElrc && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#3B82F6]/20 text-[#3B82F6] border border-[#3B82F6]/30 backdrop-blur">
+                          ELRC
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <h3 className="font-semibold text-sm text-white truncate group-hover:text-[#FF4FA3] transition-colors">
                     {song.title}

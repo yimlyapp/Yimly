@@ -76,7 +76,8 @@ export const songs = sqliteTable('songs', {
 export const lyrics = sqliteTable('lyrics', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   songId: integer('song_id').references(() => songs.id, { onDelete: 'cascade' }).notNull(),
-  lrcPath: text('lrc_path').notNull(),
+  lrcPath: text('lrc_path'),
+  elrcPath: text('elrc_path'),
 });
 
 export const songArtists = sqliteTable('song_artists', {

@@ -67,18 +67,26 @@ router.get('/', async (req, res) => {
 
     // Fetch lyrics presence without joining on table to avoid duplicate rows
     const lyricsList = songIds.length > 0
-      ? await db.select({ songId: lyrics.songId }).from(lyrics).where(inArray(lyrics.songId, songIds))
+      ? await db.select({ songId: lyrics.songId, lrcPath: lyrics.lrcPath, elrcPath: lyrics.elrcPath }).from(lyrics).where(inArray(lyrics.songId, songIds))
       : [];
-    const lyricsSet = new Set(lyricsList.map(l => l.songId));
+    const lyricsMap = new Map();
+    for (const l of lyricsList) {
+      lyricsMap.set(l.songId, {
+        hasLrc: !!l.lrcPath,
+        hasElrc: !!l.elrcPath
+      });
+    }
 
     const formatted = allSongs.map(s => {
       const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
+      const l = lyricsMap.get(s.id) || { hasLrc: false, hasElrc: false };
       return {
         ...s,
         artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : s.artist),
         artists: trackArtists,
         hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
-        hasLrc: lyricsSet.has(s.id)
+        hasLrc: l.hasLrc,
+        hasElrc: l.hasElrc
       };
     });
 
@@ -168,6 +176,7 @@ router.get('/:id', async (req, res) => {
       hasInstrumental: songs.instrumentalAudioPath,
       hasLrc: lyrics.id,
       lrcPath: lyrics.lrcPath,
+      elrcPath: lyrics.elrcPath,
       artworkPath: songs.artworkPath,
       albumArtworkPath: albums.artworkPath,
       lrcOffset: songs.lrcOffset,
@@ -183,23 +192,22 @@ router.get('/:id', async (req, res) => {
 
     if (songRec.length === 0) return res.status(404).json({ error: 'Song not found' });
 
-    let hasElrc = false;
-    let hasLrc = !!songRec[0].hasLrc;
+    let hasElrc = !!songRec[0].elrcPath;
+    let hasLrc = !!songRec[0].lrcPath;
     const audioPath = songRec[0].mainAudioPath || songRec[0].instrumentalAudioPath;
-    if (songRec[0].lrcPath && songRec[0].lrcPath.toLowerCase().endsWith('.elrc.lrc')) {
-      hasElrc = true;
-      hasLrc = true;
-    }
-    if (audioPath && fs.existsSync(audioPath)) {
+    
+    // Fallback: check filesystem if not in db
+    if ((!hasLrc || !hasElrc) && audioPath && fs.existsSync(audioPath)) {
       const dir = path.dirname(audioPath);
       if (fs.existsSync(dir)) {
         try {
           const entries = await fs.promises.readdir(dir, { withFileTypes: true });
           const lrcEntries = entries.filter(e => e.isFile() && (e.name.toLowerCase().endsWith('.elrc.lrc') || e.name.toLowerCase().endsWith('.lrc')));
           for (const e of lrcEntries) {
-            hasLrc = true;
             if (e.name.toLowerCase().endsWith('.elrc.lrc')) {
               hasElrc = true;
+            } else if (e.name.toLowerCase().endsWith('.lrc')) {
+              hasLrc = true;
             }
           }
         } catch (e) {}
@@ -309,6 +317,7 @@ router.get('/:id/lyrics', async (req, res) => {
     if (song.length === 0) return res.status(404).json({ error: 'Song not found' });
 
     const audioPath = song[0].mainAudioPath || song[0].instrumentalAudioPath;
+    const formatQuery = req.query.format as string;
     const lrcRecord = await db.select().from(lyrics).where(eq(lyrics.songId, id)).limit(1);
 
     // Candidates collections separated by format hierarchy:
@@ -373,55 +382,64 @@ router.get('/:id/lyrics', async (req, res) => {
     }
 
     // Also consider previously indexed database record
-    if (lrcRecord.length > 0 && lrcRecord[0].lrcPath) {
-      const dbPath = lrcRecord[0].lrcPath;
-      const lowerDb = dbPath.toLowerCase();
-      if (lowerDb.endsWith('.elrc.lrc')) {
-        if (!candidateElrcs.includes(dbPath)) candidateElrcs.push(dbPath);
-      } else if (lowerDb.endsWith('.lrc')) {
-        if (!candidateStdLrcs.includes(dbPath)) candidateStdLrcs.push(dbPath);
-      } else {
-        if (!otherFallbacks.includes(dbPath)) otherFallbacks.push(dbPath);
+    if (lrcRecord.length > 0) {
+      if (lrcRecord[0].elrcPath) {
+        if (!candidateElrcs.includes(lrcRecord[0].elrcPath)) candidateElrcs.push(lrcRecord[0].elrcPath);
+      }
+      if (lrcRecord[0].lrcPath) {
+        if (!candidateStdLrcs.includes(lrcRecord[0].lrcPath)) candidateStdLrcs.push(lrcRecord[0].lrcPath);
       }
     }
 
     // Helper to persist/sync active path in database
-    const persistMatchedPath = async (p: string) => {
+    const persistMatchedPath = async (p: string, isElrc: boolean) => {
       try {
         if (lrcRecord.length === 0) {
-          await db.insert(lyrics).values({ songId: id, lrcPath: p });
-        } else if (lrcRecord[0].lrcPath !== p) {
-          await db.update(lyrics).set({ lrcPath: p }).where(eq(lyrics.id, lrcRecord[0].id));
+          const vals: any = { songId: id };
+          if (isElrc) { vals.elrcPath = p; vals.lrcPath = ''; }
+          else { vals.lrcPath = p; vals.elrcPath = null; }
+          await db.insert(lyrics).values(vals);
+        } else {
+          const updates: any = {};
+          if (isElrc && lrcRecord[0].elrcPath !== p) updates.elrcPath = p;
+          else if (!isElrc && lrcRecord[0].lrcPath !== p) updates.lrcPath = p;
+          if (Object.keys(updates).length > 0) {
+            await db.update(lyrics).set(updates).where(eq(lyrics.id, lrcRecord[0].id));
+          }
         }
       } catch (err) {
         console.warn('Failed to sync lyrics path to DB:', err);
       }
     };
 
-    // 1. Preferred / First Choice: Check .elrc.lrc candidates
-    for (const filePath of candidateElrcs) {
-      if (fs.existsSync(filePath)) {
-        try {
-          const content = await fs.promises.readFile(filePath, 'utf-8');
-          if (isLrcContentValid(content)) {
-            await persistMatchedPath(filePath);
-            return res.type('text/plain').send(content);
-          } else {
-            console.warn(`[Lyrics] .elrc.lrc at ${filePath} is invalid/unparseable; falling back to .lrc`);
+    if (formatQuery === 'elrc' || !formatQuery) {
+      // 1. Preferred / First Choice: Check .elrc.lrc candidates
+      for (const filePath of candidateElrcs) {
+        if (fs.existsSync(filePath)) {
+          try {
+            const content = await fs.promises.readFile(filePath, 'utf-8');
+            if (isLrcContentValid(content)) {
+              await persistMatchedPath(filePath, true);
+              return res.type('text/plain').send(content);
+            } else {
+              console.warn(`[Lyrics] .elrc.lrc at ${filePath} is invalid/unparseable; falling back to .lrc`);
+            }
+          } catch (e) {
+            console.warn(`[Lyrics] Could not read .elrc.lrc at ${filePath}:`, e);
           }
-        } catch (e) {
-          console.warn(`[Lyrics] Could not read .elrc.lrc at ${filePath}:`, e);
         }
       }
+      if (formatQuery === 'elrc') return res.status(404).json({ error: 'ELRC not found' });
     }
 
-    // 2. Fallback: Check .lrc candidates if .elrc.lrc is missing or invalid
-    for (const filePath of candidateStdLrcs) {
+    if (formatQuery === 'lrc' || !formatQuery) {
+      // 2. Fallback: Check .lrc candidates if .elrc.lrc is missing or invalid
+      for (const filePath of candidateStdLrcs) {
       if (fs.existsSync(filePath)) {
         try {
           const content = await fs.promises.readFile(filePath, 'utf-8');
           if (isLrcContentValid(content)) {
-            await persistMatchedPath(filePath);
+            await persistMatchedPath(filePath, false);
             return res.type('text/plain').send(content);
           } else {
             console.warn(`[Lyrics] .lrc at ${filePath} is invalid/unparseable; checking other fallbacks`);
@@ -438,13 +456,14 @@ router.get('/:id/lyrics', async (req, res) => {
         try {
           const content = await fs.promises.readFile(filePath, 'utf-8');
           if (content && content.trim().length > 0) {
-            await persistMatchedPath(filePath);
+            await persistMatchedPath(filePath, false);
             return res.type('text/plain').send(content);
           }
         } catch (e) {}
       }
     }
 
+    }
     return res.status(404).json({ error: 'Lyrics not found' });
   } catch (error) {
     console.error('Failed to fetch lyrics:', error);
@@ -574,10 +593,11 @@ const handleUploadOrUpdateLrc = async (req: AuthenticatedRequest, res: any) => {
       lrcContent = String(lrcContent || '');
     }
 
+    const isElrc = req.query.format === 'elrc';
     const existingLrc = await db.select().from(lyrics).where(eq(lyrics.songId, id)).limit(1);
-    let lrcPath = existingLrc.length > 0 ? existingLrc[0].lrcPath : null;
+    let targetPath = existingLrc.length > 0 ? (isElrc ? existingLrc[0].elrcPath : existingLrc[0].lrcPath) : null;
 
-    if (!lrcPath) {
+    if (!targetPath) {
       const audioPath = song[0].mainAudioPath || song[0].instrumentalAudioPath;
       if (!audioPath) {
         return res.status(400).json({ error: 'Song has no audio path associated' });
@@ -586,27 +606,33 @@ const handleUploadOrUpdateLrc = async (req: AuthenticatedRequest, res: any) => {
       const audioExt = path.extname(audioPath);
       const baseName = path.basename(audioPath, audioExt);
       const cleanBase = baseName.replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim();
-      lrcPath = path.join(dir, `${cleanBase}.lrc`);
+      targetPath = path.join(dir, isElrc ? `${cleanBase}.elrc.lrc` : `${cleanBase}.lrc`);
     }
 
-    const dir = path.dirname(lrcPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    const dirPath = path.dirname(targetPath);
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
     }
-
-    fs.writeFileSync(lrcPath, lrcContent, 'utf-8');
+    fs.writeFileSync(targetPath, lrcContent, 'utf-8');
 
     if (existingLrc.length === 0) {
-      await db.insert(lyrics).values({ songId: id, lrcPath });
+      const vals: any = { songId: id };
+      if (isElrc) { vals.elrcPath = targetPath; vals.lrcPath = ''; }
+      else { vals.lrcPath = targetPath; vals.elrcPath = null; }
+      await db.insert(lyrics).values(vals);
     } else {
-      await db.update(lyrics).set({ lrcPath }).where(eq(lyrics.songId, id));
+      const updates: any = {};
+      if (isElrc) updates.elrcPath = targetPath;
+      else updates.lrcPath = targetPath;
+      await db.update(lyrics).set(updates).where(eq(lyrics.songId, id));
     }
 
     res.json({
       success: true,
       songId: id,
-      lrcPath,
-      hasLrc: true,
+      path: targetPath,
+      hasLrc: isElrc ? undefined : true,
+      hasElrc: isElrc ? true : undefined,
       content: lrcContent,
     });
   } catch (error) {
@@ -624,15 +650,28 @@ router.delete('/:id/lrc', requireAdmin, async (req: AuthenticatedRequest, res) =
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid song ID' });
 
+    const isElrc = req.query.format === 'elrc';
     const existingLrc = await db.select().from(lyrics).where(eq(lyrics.songId, id)).limit(1);
     if (existingLrc.length > 0) {
-      if (existingLrc[0].lrcPath && fs.existsSync(existingLrc[0].lrcPath)) {
-        try { fs.unlinkSync(existingLrc[0].lrcPath); } catch (e) {}
+      const rec = existingLrc[0];
+      const targetPath = isElrc ? rec.elrcPath : rec.lrcPath;
+      if (targetPath && fs.existsSync(targetPath)) {
+        try { fs.unlinkSync(targetPath); } catch (e) {}
       }
-      await db.delete(lyrics).where(eq(lyrics.songId, id));
+      
+      const newElrc = isElrc ? null : rec.elrcPath;
+      const newLrc = isElrc ? rec.lrcPath : '';
+      
+      if ((newElrc === null || newElrc === '') && (newLrc === null || newLrc === '')) {
+        await db.delete(lyrics).where(eq(lyrics.songId, id));
+      } else {
+        const updates: any = {};
+        if (isElrc) updates.elrcPath = null;
+        else updates.lrcPath = '';
+        await db.update(lyrics).set(updates).where(eq(lyrics.songId, id));
+      }
     }
-
-    res.json({ success: true, songId: id, hasLrc: false });
+    res.json({ success: true, songId: id, hasLrc: isElrc ? undefined : false, hasElrc: isElrc ? false : undefined });
   } catch (error) {
     console.error('Failed to delete LRC:', error);
     res.status(500).json({ error: 'Failed to delete LRC lyrics' });

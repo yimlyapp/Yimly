@@ -540,15 +540,20 @@ export async function importSingleLrcFile(libraryId: number, lrcFullPath: string
 
   const existingLrc = await db.select().from(lyrics).where(eq(lyrics.songId, bestMatchSongId)).limit(1);
   if (existingLrc.length === 0) {
-    await db.insert(lyrics).values({ songId: bestMatchSongId, lrcPath: lrcFullPath });
+    await db.insert(lyrics).values({ 
+      songId: bestMatchSongId, 
+      lrcPath: isElrc ? '' : lrcFullPath,
+      elrcPath: isElrc ? lrcFullPath : null
+    });
     return true;
   } else {
-    const curPath = existingLrc[0].lrcPath;
-    // If existing path is an eLRC and new file is standard LRC, do not downgrade if eLRC is valid
-    if (curPath && curPath.toLowerCase().endsWith('.elrc.lrc') && !isElrc && fsSync.existsSync(curPath)) {
-      return false;
+    const updates: any = {};
+    if (isElrc) {
+      updates.elrcPath = lrcFullPath;
+    } else {
+      updates.lrcPath = lrcFullPath;
     }
-    await db.update(lyrics).set({ lrcPath: lrcFullPath }).where(eq(lyrics.id, existingLrc[0].id));
+    await db.update(lyrics).set(updates).where(eq(lyrics.id, existingLrc[0].id));
     return true;
   }
 }
@@ -563,19 +568,22 @@ export async function removeSingleFile(libraryId: number, filePath: string): Pro
 
   if (isLrc) {
     // Check if any lyrics record pointed to this file
-    const matchedLyrics = await db.select().from(lyrics).where(eq(lyrics.lrcPath, filePath));
+    const matchedLyrics = await db.select().from(lyrics).where(or(eq(lyrics.lrcPath, filePath), eq(lyrics.elrcPath, filePath)));
     for (const l of matchedLyrics) {
-      const songRec = await db.select().from(songs).where(eq(songs.id, l.songId)).limit(1);
-      if (songRec.length > 0) {
-        const audioPath = songRec[0].mainAudioPath || songRec[0].instrumentalAudioPath;
-        const alternativeLrc = audioPath ? await findLyricsForAudio(audioPath, songRec[0].title) : null;
-        if (alternativeLrc) {
-          await db.update(lyrics).set({ lrcPath: alternativeLrc }).where(eq(lyrics.id, l.id));
-        } else {
-          await db.delete(lyrics).where(eq(lyrics.id, l.id));
-        }
-      } else {
+      const isElrcRemove = l.elrcPath === filePath;
+      const isLrcRemove = l.lrcPath === filePath;
+      
+      const updates: any = {};
+      if (isElrcRemove) updates.elrcPath = null;
+      if (isLrcRemove) updates.lrcPath = '';
+      
+      const newElrc = updates.elrcPath === null ? null : l.elrcPath;
+      const newLrc = updates.lrcPath === '' ? '' : l.lrcPath;
+      
+      if ((newElrc === null || newElrc === '') && (newLrc === null || newLrc === '')) {
         await db.delete(lyrics).where(eq(lyrics.id, l.id));
+      } else {
+        await db.update(lyrics).set(updates).where(eq(lyrics.id, l.id));
       }
     }
     return;
@@ -631,6 +639,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     mainAudio?: string;
     instrumentalAudio?: string;
     lrc?: string;
+    elrc?: string;
     duration?: number;
     trackNumber?: number;
     discNumber?: number;
@@ -767,7 +776,7 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
   // Match LRC files to songs using filesystem path and base filename (.elrc.lrc prioritized over .lrc)
   for (const audio of audioList) {
     const songInfo = songsMap.get(audio.songKey);
-    if (!songInfo || songInfo.lrc) continue;
+    if (!songInfo) continue;
 
     const dirLrcs = dirLrcMap.get(audio.dir);
     if (!dirLrcs || dirLrcs.length === 0) continue;
@@ -778,45 +787,37 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
     const elrcs = dirLrcs.filter(l => l.isElrc);
     const stdLrcs = dirLrcs.filter(l => !l.isElrc);
 
-    let matchedPath: string | null = null;
-
-    for (const pool of [elrcs, stdLrcs]) {
-      if (pool.length === 0) continue;
-
+    const checkPool = (pool: typeof elrcs) => {
+      if (pool.length === 0) return null;
       const validCandidates = pool.filter(lrc => {
         try {
           if (!fsSync.existsSync(lrc.fullPath)) return false;
           const content = fsSync.readFileSync(lrc.fullPath, 'utf-8');
           return isLrcContentValid(content);
-        } catch {
-          return false;
-        }
+        } catch { return false; }
       });
-
-      if (validCandidates.length === 0) continue;
-
+      if (validCandidates.length === 0) return null;
+      
       const exactMatch = validCandidates.find(lrc => normalizeBaseName(lrc.baseName) === normAudioBase);
-      if (exactMatch) {
-        matchedPath = exactMatch.fullPath;
-        break;
-      }
-
+      if (exactMatch) return exactMatch.fullPath;
+      
       const cleanMatch = validCandidates.find(lrc => lrc.cleanBaseName === cleanAudioBase);
-      if (cleanMatch) {
-        matchedPath = cleanMatch.fullPath;
-        break;
-      }
-
+      if (cleanMatch) return cleanMatch.fullPath;
+      
       const songTitleNorm = normalizeBaseName(songInfo.title);
       const titleMatch = validCandidates.find(lrc => normalizeBaseName(lrc.baseName) === songTitleNorm || lrc.cleanBaseName === songTitleNorm);
-      if (titleMatch) {
-        matchedPath = titleMatch.fullPath;
-        break;
-      }
-    }
+      if (titleMatch) return titleMatch.fullPath;
+      
+      return null;
+    };
 
-    if (matchedPath) {
-      songInfo.lrc = matchedPath;
+    if (!songInfo.elrc) {
+      const match = checkPool(elrcs);
+      if (match) songInfo.elrc = match;
+    }
+    if (!songInfo.lrc) {
+      const match = checkPool(stdLrcs);
+      if (match) songInfo.lrc = match;
     }
   }
 
@@ -945,15 +946,19 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
 
     await syncSongArtists(songId, artistIds);
 
-    if (song.lrc) {
+    if (song.lrc || song.elrc) {
       const existingLrc = await db.select().from(lyrics).where(eq(lyrics.songId, songId)).limit(1);
       if (existingLrc.length === 0) {
         await db.insert(lyrics).values({
           songId,
-          lrcPath: song.lrc,
+          lrcPath: song.lrc || '',
+          elrcPath: song.elrc || null,
         });
       } else {
-        await db.update(lyrics).set({ lrcPath: song.lrc }).where(eq(lyrics.id, existingLrc[0].id));
+        await db.update(lyrics).set({ 
+          lrcPath: song.lrc || '',
+          elrcPath: song.elrc || null
+        }).where(eq(lyrics.id, existingLrc[0].id));
       }
     }
   }

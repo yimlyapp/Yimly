@@ -4,6 +4,7 @@ import { Search, Play, Plus, Music, Disc, Mic, RefreshCw, Calendar, FileText, Ch
 import { Playlist, PlaylistSongItem } from '../types';
 import CreatePlaylistModal from '../components/playlist/CreatePlaylistModal';
 import EditPlaylistModal from '../components/playlist/EditPlaylistModal';
+import LyricsEditorModal from '../components/LyricsEditorModal';
 import SharePlaylistModal from '../components/playlist/SharePlaylistModal';
 import AddSongsModal from '../components/playlist/AddSongsModal';
 import PlaylistsGrid from '../components/playlist/PlaylistsGrid';
@@ -29,6 +30,7 @@ export default function Library() {
   // Modals state
   const [isCreatePlaylistOpen, setIsCreatePlaylistOpen] = useState(false);
   const [isEditPlaylistOpen, setIsEditPlaylistOpen] = useState(false);
+  const [editorState, setEditorState] = useState<{isOpen: boolean, songId: number | null, title: string, format: 'lrc'|'elrc'}>({isOpen: false, songId: null, title: '', format: 'lrc'});
   const [isSharePlaylistOpen, setIsSharePlaylistOpen] = useState(false);
   const [isAddSongsOpen, setIsAddSongsOpen] = useState(false);
   const [activeModalPlaylist, setActiveModalPlaylist] = useState<Playlist | null>(null);
@@ -529,6 +531,14 @@ export default function Library() {
             setPlaylists(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated } : p));
           }}
         />
+      <LyricsEditorModal
+        isOpen={editorState.isOpen}
+        songId={editorState.songId}
+        songTitle={editorState.title}
+        format={editorState.format}
+        onClose={() => setEditorState(prev => ({ ...prev, isOpen: false }))}
+        onSave={loadAllData}
+      />
 
         <SharePlaylistModal
           isOpen={isSharePlaylistOpen}
@@ -653,10 +663,21 @@ export default function Library() {
                         </div>
                         <span className="truncate">{song.title}</span>
                         {song.hasLrc && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/25 shrink-0">
-                            LRC
-                          </span>
-                        )}
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); setEditorState({ isOpen: true, songId: song.id, title: song.title, format: 'lrc' }); }}
+                              className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/25 shrink-0 hover:bg-[#FF4FA3]/30 transition-colors cursor-pointer"
+                            >
+                              LRC
+                            </button>
+                          )}
+                          {song.hasElrc && (
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); setEditorState({ isOpen: true, songId: song.id, title: song.title, format: 'elrc' }); }}
+                              className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#3B82F6]/15 text-[#3B82F6] border border-[#3B82F6]/25 shrink-0 hover:bg-[#3B82F6]/30 transition-colors cursor-pointer"
+                            >
+                              ELRC
+                            </button>
+                          )}
                       </td>
                       <td className="px-5 py-3.5 text-zinc-400 text-xs font-mono">{formatDuration(song.duration)}</td>
                       <td className="px-5 py-3.5 text-zinc-400 text-xs capitalize">{song.variant}</td>
@@ -741,9 +762,20 @@ export default function Library() {
                     <td className="px-5 py-3.5 font-medium text-white flex items-center gap-3">
                       <span>{song.title}</span>
                       {song.hasLrc && (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/25">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setEditorState({ isOpen: true, songId: song.id, title: song.title, format: 'lrc' }); }}
+                          className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/25 hover:bg-[#FF4FA3]/30 transition-colors cursor-pointer"
+                        >
                           LRC
-                        </span>
+                        </button>
+                      )}
+                      {song.hasElrc && (
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setEditorState({ isOpen: true, songId: song.id, title: song.title, format: 'elrc' }); }}
+                          className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#3B82F6]/15 text-[#3B82F6] border border-[#3B82F6]/25 hover:bg-[#3B82F6]/30 transition-colors cursor-pointer"
+                        >
+                          ELRC
+                        </button>
                       )}
                     </td>
                     <td className="px-5 py-3.5 text-zinc-400 font-mono text-xs">{formatDuration(song.duration)}</td>
@@ -1048,9 +1080,20 @@ export default function Library() {
                           </div>
                           <span className="truncate" title={song.title}>{song.title}</span>
                           {song.hasLrc && (
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/25 shrink-0">
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); setEditorState({ isOpen: true, songId: song.id, title: song.title, format: 'lrc' }); }}
+                              className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/25 shrink-0 hover:bg-[#FF4FA3]/30 transition-colors cursor-pointer"
+                            >
                               LRC
-                            </span>
+                            </button>
+                          )}
+                          {song.hasElrc && (
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); setEditorState({ isOpen: true, songId: song.id, title: song.title, format: 'elrc' }); }}
+                              className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#3B82F6]/15 text-[#3B82F6] border border-[#3B82F6]/25 shrink-0 hover:bg-[#3B82F6]/30 transition-colors cursor-pointer"
+                            >
+                              ELRC
+                            </button>
                           )}
                         </td>
                         <td className="px-5 py-3.5 text-zinc-300 text-xs truncate max-w-xs" title={song.artist}>

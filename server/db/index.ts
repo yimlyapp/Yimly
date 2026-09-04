@@ -121,6 +121,14 @@ export async function setupDatabase() {
     console.warn('Migrations folder not found, skipping migrations.');
   }
 
+  // Ensure elrc_path column exists in lyrics table
+  try {
+    await sqlite.execute('ALTER TABLE lyrics ADD COLUMN elrc_path text;');
+    await sqlite.execute("UPDATE lyrics SET elrc_path = lrc_path, lrc_path = '' WHERE lrc_path LIKE '%.elrc.lrc'");
+  } catch (e) {
+    // Column already exists, safe to ignore
+  }
+
   // Ensure artwork_path, lyric_offset, lrc_offset, and elrc_offset columns exist in songs table (backward compatibility safety)
   try {
     await sqlite.execute('ALTER TABLE songs ADD COLUMN artwork_path text;');
