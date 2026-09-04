@@ -16,7 +16,7 @@ export interface LyricsAppearanceSettings {
   visibleLines: number;
   highlightCurrentLine: boolean;
   animationDuration: number;
-  elrcHighlightMode?: 'karaoke' | 'current_only';
+  elrcHighlightMode?: 'karaoke' | 'current_only' | 'progressive_sweeping';
   wordHighlightAnimation?: 'smooth' | 'instant' | 'fade' | 'off';
 }
 
@@ -82,7 +82,7 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
     visibleLines: [1, 3, 5].includes(parsed.visibleLines) ? parsed.visibleLines : DEFAULT_LYRICS_SETTINGS.visibleLines,
     highlightCurrentLine: typeof parsed.highlightCurrentLine === 'boolean' ? parsed.highlightCurrentLine : DEFAULT_LYRICS_SETTINGS.highlightCurrentLine,
     animationDuration: typeof parsed.animationDuration === 'number' && !isNaN(parsed.animationDuration) ? parsed.animationDuration : DEFAULT_LYRICS_SETTINGS.animationDuration,
-    elrcHighlightMode: ['karaoke', 'current_only'].includes(parsed.elrcHighlightMode) ? parsed.elrcHighlightMode : DEFAULT_LYRICS_SETTINGS.elrcHighlightMode,
+    elrcHighlightMode: ['karaoke', 'current_only', 'progressive_sweeping'].includes(parsed.elrcHighlightMode) ? parsed.elrcHighlightMode : DEFAULT_LYRICS_SETTINGS.elrcHighlightMode,
     wordHighlightAnimation: ['smooth', 'instant', 'fade', 'off'].includes(parsed.wordHighlightAnimation) ? parsed.wordHighlightAnimation : DEFAULT_LYRICS_SETTINGS.wordHighlightAnimation
   };
 }

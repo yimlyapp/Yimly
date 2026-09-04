@@ -18,7 +18,7 @@ export interface LyricsAppearanceSettings {
   visibleLines: number; // 1 | 3 | 5
   highlightCurrentLine: boolean; // on / off
   animationDuration: number; // in seconds, e.g. 0.25
-  elrcHighlightMode?: 'karaoke' | 'current_only'; // 'karaoke' (past + current) or 'current_only'
+  elrcHighlightMode?: 'karaoke' | 'current_only' | 'progressive_sweeping'; // 'karaoke' (past + current) | 'current_only' | 'progressive_sweeping'
   wordHighlightAnimation?: 'smooth' | 'instant' | 'fade' | 'off'; // 'smooth' | 'instant' | 'fade' | 'off'
   customFontName?: string | null;
   customFontFileName?: string | null;
@@ -92,7 +92,7 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
     visibleLines: [1, 3, 5].includes(parsed.visibleLines) ? parsed.visibleLines : DEFAULT_LYRICS_SETTINGS.visibleLines,
     highlightCurrentLine: typeof parsed.highlightCurrentLine === 'boolean' ? parsed.highlightCurrentLine : DEFAULT_LYRICS_SETTINGS.highlightCurrentLine,
     animationDuration: typeof parsed.animationDuration === 'number' && !isNaN(parsed.animationDuration) ? parsed.animationDuration : DEFAULT_LYRICS_SETTINGS.animationDuration,
-    elrcHighlightMode: ['karaoke', 'current_only'].includes(parsed.elrcHighlightMode) ? parsed.elrcHighlightMode : DEFAULT_LYRICS_SETTINGS.elrcHighlightMode,
+    elrcHighlightMode: ['karaoke', 'current_only', 'progressive_sweeping'].includes(parsed.elrcHighlightMode) ? parsed.elrcHighlightMode : DEFAULT_LYRICS_SETTINGS.elrcHighlightMode,
     wordHighlightAnimation: ['smooth', 'instant', 'fade', 'off'].includes(parsed.wordHighlightAnimation) ? parsed.wordHighlightAnimation : DEFAULT_LYRICS_SETTINGS.wordHighlightAnimation,
     customFontName: typeof parsed.customFontName === 'string' && parsed.customFontName.trim() ? parsed.customFontName.trim() : null,
     customFontFileName: typeof parsed.customFontFileName === 'string' && parsed.customFontFileName.trim() ? parsed.customFontFileName.trim() : null

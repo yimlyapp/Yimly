@@ -66,7 +66,8 @@ export default function RoomSession() {
 
   // Advanced features state
   const [variant, setVariant] = useState<'original' | 'instrumental'>('original');
-  const [lyricOffset, setLyricOffset] = useState<number>(0); // in ms
+  const [lrcOffset, setLrcOffset] = useState<number>(0); // in ms
+  const [elrcOffset, setElrcOffset] = useState<number>(0); // in ms
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
   const [lyricsSettings, setLyricsSettings] = useState<LyricsAppearanceSettings>(() => {
     return getLyricsSettings();
@@ -576,8 +577,15 @@ export default function RoomSession() {
           if (data.playback.variant) {
             setVariant(data.playback.variant);
           }
-          if (typeof data.playback.lyricOffset === 'number') {
-            setLyricOffset(data.playback.lyricOffset);
+          if (typeof data.playback.lrcOffset === 'number') {
+            setLrcOffset(data.playback.lrcOffset);
+          } else if (typeof data.playback.lyricOffset === 'number') {
+            setLrcOffset(data.playback.lyricOffset);
+          }
+          if (typeof data.playback.elrcOffset === 'number') {
+            setElrcOffset(data.playback.elrcOffset);
+          } else if (typeof data.playback.lyricOffset === 'number') {
+            setElrcOffset(data.playback.lyricOffset);
           }
         }
       }
@@ -621,7 +629,8 @@ export default function RoomSession() {
             case 'STATE_UPDATE':
               if (typeof msg.payload?.playing === 'boolean') setPlaying(msg.payload.playing);
               if (msg.payload?.variant) setVariant(msg.payload.variant);
-              if (msg.payload?.lyricOffset !== undefined) setLyricOffset(msg.payload.lyricOffset);
+              if (typeof msg.payload?.lrcOffset === 'number') setLrcOffset(msg.payload.lrcOffset);
+              if (typeof msg.payload?.elrcOffset === 'number') setElrcOffset(msg.payload.elrcOffset);
               if (msg.payload?.lyricSettings) {
                 const resolved = resolveLyricsSettings(msg.payload.lyricSettings);
                 setLyricsSettings(resolved);
@@ -646,8 +655,11 @@ export default function RoomSession() {
               }
               break;
             case 'SONG_CHANGED':
-              if (msg.payload?.lyricOffset !== undefined && typeof msg.payload.lyricOffset === 'number') {
-                setLyricOffset(msg.payload.lyricOffset);
+              if (typeof msg.payload?.lrcOffset === 'number') {
+                setLrcOffset(msg.payload.lrcOffset);
+              }
+              if (typeof msg.payload?.elrcOffset === 'number') {
+                setElrcOffset(msg.payload.elrcOffset);
               }
               fetchState();
               setPlaying(true);
@@ -662,8 +674,13 @@ export default function RoomSession() {
               }
               break;
             case 'OFFSET_CHANGED':
-              if (typeof msg.payload?.offset === 'number') {
-                setLyricOffset(msg.payload.offset);
+              if (msg.payload?.format === 'elrc') {
+                if (typeof msg.payload.offset === 'number') setElrcOffset(msg.payload.offset);
+              } else if (msg.payload?.format === 'lrc') {
+                if (typeof msg.payload.offset === 'number') setLrcOffset(msg.payload.offset);
+              } else {
+                if (typeof msg.payload?.lrcOffset === 'number') setLrcOffset(msg.payload.lrcOffset);
+                if (typeof msg.payload?.elrcOffset === 'number') setElrcOffset(msg.payload.elrcOffset);
               }
               break;
             case 'LYRIC_SETTINGS_UPDATED':
@@ -769,24 +786,6 @@ export default function RoomSession() {
 
     if (currentSong?.songId) {
       const songId = currentSong.songId;
-
-      fetch(`/api/songs/${songId}`)
-        .then(async res => {
-          if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
-            return await res.json();
-          }
-          return null;
-        })
-        .then(data => {
-          if (!isCancelled && data) {
-            setCurrentSongDetails(data);
-            if (data.lyricOffset !== undefined && typeof data.lyricOffset === 'number') {
-              setLyricOffset(data.lyricOffset);
-            }
-          }
-        })
-        .catch(err => console.error('Failed to fetch song details:', err));
-
       let fetchedHasElrc = false;
 
       fetch(`/api/songs/${songId}`)
@@ -805,9 +804,10 @@ export default function RoomSession() {
             } else {
               setLyricsFormat('lrc');
             }
-            if (data.lyricOffset !== undefined && typeof data.lyricOffset === 'number') {
-              setLyricOffset(data.lyricOffset);
-            }
+            const lrc = typeof data.lrcOffset === 'number' ? data.lrcOffset : (data.lyricOffset ?? 0);
+            const elrc = typeof data.elrcOffset === 'number' ? data.elrcOffset : (data.lyricOffset ?? 0);
+            setLrcOffset(lrc);
+            setElrcOffset(elrc);
           }
         })
         .catch(err => console.error('Failed to fetch song details:', err));
@@ -1065,14 +1065,25 @@ export default function RoomSession() {
 
   const handleOffsetChange = (delta: number) => {
     if (!isHost) return;
-    const newOffset = lyricOffset + delta;
-    setLyricOffset(newOffset);
     const currentSongId = currentSong?.songId;
+    const currentFormat = lyricsFormat;
+    const currentVal = currentFormat === 'elrc' ? elrcOffset : lrcOffset;
+    const newOffset = currentVal + delta;
+
+    if (currentFormat === 'elrc') {
+      setElrcOffset(newOffset);
+    } else {
+      setLrcOffset(newOffset);
+    }
+
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ 
         type: 'OFFSET_CHANGED', 
         payload: { 
           offset: newOffset,
+          format: currentFormat,
+          lrcOffset: currentFormat === 'lrc' ? newOffset : lrcOffset,
+          elrcOffset: currentFormat === 'elrc' ? newOffset : elrcOffset,
           songId: currentSongId 
         } 
       }));
@@ -1081,8 +1092,51 @@ export default function RoomSession() {
       fetch(`/api/songs/${currentSongId}/lyrics/offset`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ offset: newOffset }),
+        body: JSON.stringify({
+          offset: newOffset,
+          format: currentFormat,
+          lrcOffset: currentFormat === 'lrc' ? newOffset : lrcOffset,
+          elrcOffset: currentFormat === 'elrc' ? newOffset : elrcOffset
+        }),
       }).catch(err => console.warn('[OFFSET] Failed to save song lyric offset:', err));
+    }
+  };
+
+  const handleSyncReset = () => {
+    if (!isHost) return;
+    const currentSongId = currentSong?.songId;
+    const currentFormat = lyricsFormat;
+    const newOffset = 0;
+
+    if (currentFormat === 'elrc') {
+      setElrcOffset(newOffset);
+    } else {
+      setLrcOffset(newOffset);
+    }
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ 
+        type: 'OFFSET_CHANGED', 
+        payload: { 
+          offset: newOffset,
+          format: currentFormat,
+          lrcOffset: currentFormat === 'lrc' ? newOffset : lrcOffset,
+          elrcOffset: currentFormat === 'elrc' ? newOffset : elrcOffset,
+          songId: currentSongId 
+        } 
+      }));
+    }
+    if (currentSongId) {
+      fetch(`/api/songs/${currentSongId}/lyrics/offset`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          offset: newOffset,
+          format: currentFormat,
+          lrcOffset: currentFormat === 'lrc' ? newOffset : lrcOffset,
+          elrcOffset: currentFormat === 'elrc' ? newOffset : elrcOffset
+        }),
+      }).catch(err => console.warn('[OFFSET] Failed to save song lyric offset reset:', err));
     }
   };
 
@@ -1112,6 +1166,22 @@ export default function RoomSession() {
       audioRef.current.pause();
     }
   }, [playing, currentSong?.songId, variant, isHost]);
+
+  // High-frequency smooth animation loop for lyric sweep and position
+  useEffect(() => {
+    if (!isHost || !playing) return;
+    let rafId: number;
+    const updateLoop = () => {
+      if (audioRef.current && !audioRef.current.paused) {
+        setCurrentTime(audioRef.current.currentTime);
+      }
+      rafId = requestAnimationFrame(updateLoop);
+    };
+    rafId = requestAnimationFrame(updateLoop);
+    return () => {
+      cancelAnimationFrame(rafId);
+    };
+  }, [isHost, playing]);
 
   const handleSeek = (e: ChangeEvent<HTMLInputElement>) => {
     if (!isHost || !audioRef.current) return;
@@ -1151,7 +1221,8 @@ export default function RoomSession() {
 
   // Playback is considered active only when playing is true or currentTime has progressed significantly (>0.05s)
   const isPlaybackActive = playing || currentTime > 0.05;
-  const adjustedTime = currentTime + (lyricOffset / 1000);
+  const activeOffset = lyricsFormat === 'elrc' ? elrcOffset : lrcOffset;
+  const adjustedTime = currentTime + (activeOffset / 1000);
 
   // Active lyric index: only valid if playback has started AND adjustedTime has reached the first lyric's timestamp
   const firstLyricTime = lyrics[0]?.time ?? 0;
@@ -1490,7 +1561,9 @@ export default function RoomSession() {
 
               {/* Offset Tuner in Top Navigation */}
               <div className="hidden sm:flex items-center gap-1 bg-[#08090E] px-2 py-1 rounded-xl border border-white/10 text-xs">
-                <span className="text-zinc-500 text-[11px] font-medium hidden md:inline pl-1">Offset</span>
+                <span className="text-zinc-500 text-[11px] font-medium hidden md:inline pl-1">
+                  {lyricsFormat.toUpperCase()} Offset
+                </span>
                 <button 
                   data-tv-id="offset-minus-button"
                   onClick={() => handleOffsetChange(-250)}
@@ -1500,7 +1573,7 @@ export default function RoomSession() {
                   -250ms
                 </button>
                 <span className="px-1.5 font-mono text-[#FF4FA3] font-bold text-[11px]">
-                  {lyricOffset > 0 ? `+${lyricOffset}` : lyricOffset}ms
+                  {activeOffset > 0 ? `+${activeOffset}` : activeOffset}ms
                 </span>
                 <button 
                   data-tv-id="offset-plus-button"
@@ -1509,6 +1582,14 @@ export default function RoomSession() {
                   title="+250ms"
                 >
                   +250ms
+                </button>
+                <button
+                  data-tv-id="offset-sync-button"
+                  onClick={handleSyncReset}
+                  className="ml-1 px-2 py-0.5 bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 rounded text-[10px] font-semibold transition-colors border border-cyan-500/30 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+                  title={`Reset ${lyricsFormat.toUpperCase()} offset to 0ms (does not seek audio)`}
+                >
+                  Sync
                 </button>
               </div>
             </>
@@ -1593,7 +1674,7 @@ export default function RoomSession() {
                   getFontFamilyStyle={getFontFamilyStyle}
                   getAlignmentClass={getAlignmentClass}
                   currentTime={currentTime}
-                  lyricOffset={lyricOffset}
+                  lyricOffset={activeOffset}
                 />
               ) : (
                 /* Fallback when no synced LRC is available */

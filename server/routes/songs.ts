@@ -170,6 +170,8 @@ router.get('/:id', async (req, res) => {
       lrcPath: lyrics.lrcPath,
       artworkPath: songs.artworkPath,
       albumArtworkPath: albums.artworkPath,
+      lrcOffset: songs.lrcOffset,
+      elrcOffset: songs.elrcOffset,
       lyricOffset: songs.lyricOffset,
     })
     .from(songs)
@@ -207,6 +209,9 @@ router.get('/:id', async (req, res) => {
     const artistsMap = await getSongArtistsMap([id]);
     const trackArtists = artistsMap.get(id) || (songRec[0].artist ? [{ id: songRec[0].artistId, name: songRec[0].artist }] : []);
 
+    const lrcOffsetVal = typeof songRec[0].lrcOffset === 'number' ? songRec[0].lrcOffset : (songRec[0].lyricOffset ?? 0);
+    const elrcOffsetVal = typeof songRec[0].elrcOffset === 'number' ? songRec[0].elrcOffset : (songRec[0].lyricOffset ?? 0);
+
     res.json({
       ...songRec[0],
       artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : songRec[0].artist),
@@ -215,6 +220,8 @@ router.get('/:id', async (req, res) => {
       hasLrc: hasLrc,
       hasElrc: hasElrc,
       hasInstrumental: !!songRec[0].hasInstrumental,
+      lrcOffset: lrcOffsetVal,
+      elrcOffset: elrcOffsetVal,
       lyricOffset: songRec[0].lyricOffset ?? 0,
     });
   } catch (error) {
@@ -450,11 +457,26 @@ router.get('/:id/lyrics/offset', async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid song ID' });
 
-    const song = await db.select({ lyricOffset: songs.lyricOffset }).from(songs).where(eq(songs.id, id)).limit(1);
+    const song = await db.select({
+      lrcOffset: songs.lrcOffset,
+      elrcOffset: songs.elrcOffset,
+      lyricOffset: songs.lyricOffset,
+    }).from(songs).where(eq(songs.id, id)).limit(1);
+
     if (song.length === 0) return res.status(404).json({ error: 'Song not found' });
 
-    const offset = song[0].lyricOffset ?? 0;
-    res.json({ songId: id, offset, lyricOffset: offset });
+    const format = req.query.format === 'elrc' ? 'elrc' : (req.query.format === 'lrc' ? 'lrc' : undefined);
+    const lrcOffset = typeof song[0].lrcOffset === 'number' ? song[0].lrcOffset : (song[0].lyricOffset ?? 0);
+    const elrcOffset = typeof song[0].elrcOffset === 'number' ? song[0].elrcOffset : (song[0].lyricOffset ?? 0);
+    const defaultOffset = format === 'elrc' ? elrcOffset : (format === 'lrc' ? lrcOffset : (song[0].lyricOffset ?? 0));
+
+    res.json({
+      songId: id,
+      offset: defaultOffset,
+      lrcOffset,
+      elrcOffset,
+      lyricOffset: song[0].lyricOffset ?? 0
+    });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch lyric offset' });
   }
@@ -465,21 +487,60 @@ const updateSongLyricOffset = async (req: any, res: any) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid song ID' });
 
-    const rawOffset = req.body?.offset !== undefined ? req.body.offset : req.body?.lyricOffset;
+    const format = req.body?.format === 'elrc' ? 'elrc' : (req.body?.format === 'lrc' ? 'lrc' : undefined);
+    const rawOffset = req.body?.offset !== undefined 
+      ? req.body.offset 
+      : (format === 'elrc' ? req.body?.elrcOffset : (format === 'lrc' ? req.body?.lrcOffset : req.body?.lyricOffset));
+
     if (rawOffset === undefined || isNaN(Number(rawOffset))) {
       return res.status(400).json({ error: 'Offset must be a valid number in milliseconds' });
     }
 
     const offset = Math.round(Number(rawOffset));
-    const existing = await db.select({ id: songs.id }).from(songs).where(eq(songs.id, id)).limit(1);
+    const existing = await db.select({
+      id: songs.id,
+      lrcOffset: songs.lrcOffset,
+      elrcOffset: songs.elrcOffset,
+      lyricOffset: songs.lyricOffset,
+    }).from(songs).where(eq(songs.id, id)).limit(1);
+
     if (existing.length === 0) return res.status(404).json({ error: 'Song not found' });
 
-    await db.update(songs).set({ lyricOffset: offset }).where(eq(songs.id, id));
+    const updateObj: any = { lyricOffset: offset };
+    let newLrcOffset = typeof existing[0].lrcOffset === 'number' ? existing[0].lrcOffset : (existing[0].lyricOffset ?? 0);
+    let newElrcOffset = typeof existing[0].elrcOffset === 'number' ? existing[0].elrcOffset : (existing[0].lyricOffset ?? 0);
+
+    if (format === 'elrc') {
+      newElrcOffset = offset;
+      updateObj.elrcOffset = offset;
+    } else if (format === 'lrc') {
+      newLrcOffset = offset;
+      updateObj.lrcOffset = offset;
+    } else {
+      if (req.body?.lrcOffset !== undefined) {
+        newLrcOffset = Math.round(Number(req.body.lrcOffset));
+        updateObj.lrcOffset = newLrcOffset;
+      }
+      if (req.body?.elrcOffset !== undefined) {
+        newElrcOffset = Math.round(Number(req.body.elrcOffset));
+        updateObj.elrcOffset = newElrcOffset;
+      }
+    }
+
+    await db.update(songs).set(updateObj).where(eq(songs.id, id));
 
     // Broadcast updated offset to active websocket rooms playing this song
-    broadcastSongOffsetToRooms(id, offset);
+    broadcastSongOffsetToRooms(id, offset, format, newLrcOffset, newElrcOffset);
 
-    res.json({ success: true, songId: id, offset, lyricOffset: offset });
+    res.json({
+      success: true,
+      songId: id,
+      offset,
+      format,
+      lrcOffset: newLrcOffset,
+      elrcOffset: newElrcOffset,
+      lyricOffset: offset
+    });
   } catch (error) {
     console.error('Failed to update song lyric offset:', error);
     res.status(500).json({ error: 'Failed to update song lyric offset' });

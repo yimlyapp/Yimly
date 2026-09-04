@@ -311,13 +311,8 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
     };
   }, [recalculateLayout]);
 
-  const alignment = lyricsSettings.alignment || 'center';
-  const flexJustifyClass =
-    alignment === 'left'
-      ? 'justify-start text-left'
-      : alignment === 'right'
-      ? 'justify-end text-right'
-      : 'justify-center text-center';
+  const alignment = 'center';
+  const flexJustifyClass = 'justify-center text-center';
 
   return (
     <div
@@ -387,9 +382,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
 
       <div
         ref={groupRef}
-        className={`w-full max-w-5xl mx-auto flex flex-col justify-center items-center overflow-visible ${getAlignmentClass(
-          alignment
-        )}`}
+        className="w-full max-w-5xl mx-auto flex flex-col justify-center items-center text-center overflow-visible"
         style={{
           gap: `${effectiveGap}px`,
           transform: scale < 1 ? `scale(${scale})` : 'none',
@@ -399,7 +392,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
       >
         {/* Line -2 (if 5 lines mode) */}
         {visibleLinesCount === 5 && (
-          <div className={`lyric-line-row flex items-center shrink-0 w-full overflow-visible py-0.5 ${flexJustifyClass}`}>
+          <div className="lyric-line-row flex items-center justify-center shrink-0 w-full overflow-visible py-0.5 text-center">
             <AnimatePresence mode="wait">
               {prev2Line ? (
                 <motion.p
@@ -418,9 +411,9 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                     color: lyricsSettings.unhighlighted.color || '#d4d4d8',
                     letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
                     lineHeight: lyricsSettings.unhighlighted.lineSpacing,
-                    textAlign: alignment,
+                    textAlign: 'center',
                   }}
-                  className="w-full whitespace-normal break-words leading-tight"
+                  className="w-full whitespace-normal break-words leading-tight text-center"
                 >
                   {applyTextCase(prev2Line.text, lyricsSettings.unhighlighted.textCase)}
                 </motion.p>
@@ -433,7 +426,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
 
         {/* Line -1: Previous Lyric */}
         {visibleLinesCount >= 3 && (
-          <div className={`lyric-line-row flex items-center shrink-0 w-full overflow-visible py-1 ${flexJustifyClass}`}>
+          <div className="lyric-line-row flex items-center justify-center shrink-0 w-full overflow-visible py-1 text-center">
             <AnimatePresence mode="wait">
               {prev1Line ? (
                 <motion.p
@@ -452,9 +445,9 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                     color: lyricsSettings.unhighlighted.color || '#d4d4d8',
                     letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
                     lineHeight: lyricsSettings.unhighlighted.lineSpacing,
-                    textAlign: alignment,
+                    textAlign: 'center',
                   }}
-                  className="w-full whitespace-normal break-words leading-tight"
+                  className="w-full whitespace-normal break-words leading-tight text-center"
                 >
                   {applyTextCase(prev1Line.text, lyricsSettings.unhighlighted.textCase)}
                 </motion.p>
@@ -465,21 +458,20 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
           </div>
         )}
 
-        {/* Line 0: Current Lyric (Visually dominant and centered) */}
-        <div className={`lyric-line-row flex items-center shrink-0 w-full overflow-visible py-1.5 px-2 ${flexJustifyClass}`}>
+        {/* Line 0: Current Lyric (Visually dominant and center-aligned) */}
+        <div className="lyric-line-row flex items-center justify-center shrink-0 w-full overflow-visible py-1.5 px-2 text-center">
           <AnimatePresence mode="wait">
             {currLine ? (
               <motion.p
                 key={`curr-${currLine.time}-${currLine.text}-${isHighlighted}`}
-                initial={{ opacity: 0, scale: isHighlighted ? 0.98 : 1, y: 0 }}
+                initial={{ opacity: 0, y: 0 }}
                 animate={{
                   opacity: isHighlighted
                     ? lyricsSettings.highlighted.opacity ?? 1.0
                     : lyricsSettings.unhighlighted.opacity ?? 0.45,
-                  scale: 1,
                   y: 0,
                 }}
-                exit={{ opacity: 0, scale: isHighlighted ? 1.02 : 1, y: 0 }}
+                exit={{ opacity: 0, y: 0 }}
                 transition={{ duration: animDuration, ease: 'easeOut' }}
                 style={{
                   fontFamily: isHighlighted
@@ -504,80 +496,126 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                   lineHeight: isHighlighted
                     ? lyricsSettings.highlighted.lineSpacing
                     : lyricsSettings.unhighlighted.lineSpacing,
-                  textAlign: alignment,
+                  textAlign: 'center',
                   textShadow: isHighlighted
                     ? `0 0 35px ${
                         lyricsSettings.highlighted.color || '#FF4FA3'
                       }75`
                     : 'none',
                 }}
-                className="w-full whitespace-normal break-words leading-tight"
+                className="w-full whitespace-normal break-words leading-tight text-center"
               >
                 {currLine.words && currLine.words.length > 0 ? (
-                  <span className="inline-flex flex-wrap items-center gap-x-[0.3em] gap-y-1">
+                  <span className="flex flex-wrap items-center justify-center gap-x-[0.3em] gap-y-1 w-full text-center">
                     {currLine.words.map((word, wIdx) => {
                       const adjustedTime = currentTime + (lyricOffset / 1000);
                       const wordStartTime = word.start;
                       const nextWordStartTime = (wIdx + 1 < currLine.words!.length)
                         ? currLine.words![wIdx + 1].start
                         : (next1Line?.time ?? (word.start + 3));
+                      const wordDuration = Math.max(0.08, nextWordStartTime - wordStartTime);
 
                       const elrcMode = lyricsSettings.elrcHighlightMode || 'karaoke';
-                      const isWordPast = isHighlighted && (isPreview ? wIdx === 0 : (adjustedTime >= wordStartTime));
+                      const isWordPast = isHighlighted && (isPreview ? wIdx === 0 : (adjustedTime >= nextWordStartTime));
                       const isWordCurrent = isHighlighted && (isPreview ? wIdx === 0 : (adjustedTime >= wordStartTime && adjustedTime < nextWordStartTime));
 
+                      const highColor = lyricsSettings.highlighted.color || '#FF4FA3';
+                      const unhighColor = lyricsSettings.unhighlighted.color || '#d4d4d8';
+                      const highOpacity = lyricsSettings.highlighted.opacity ?? 1.0;
+                      const unhighOpacity = lyricsSettings.unhighlighted.opacity ?? 0.45;
+
+                      if (elrcMode === 'progressive_sweeping') {
+                        let wordStyle: React.CSSProperties = {
+                          scale: 1,
+                        };
+
+                        if (isWordPast) {
+                          wordStyle = {
+                            scale: 1,
+                            color: highColor,
+                            opacity: highOpacity,
+                            textShadow: isHighlighted ? `0 0 25px ${highColor}80` : 'none',
+                          };
+                        } else if (isWordCurrent) {
+                          const progress = isPreview
+                            ? 60
+                            : Math.min(100, Math.max(0, ((adjustedTime - wordStartTime) / wordDuration) * 100));
+
+                          wordStyle = {
+                            scale: 1,
+                            backgroundImage: `linear-gradient(to right, ${highColor} 0%, ${highColor} ${progress}%, ${unhighColor} ${progress}%, ${unhighColor} 100%)`,
+                            WebkitBackgroundClip: 'text',
+                            WebkitTextFillColor: 'transparent',
+                            opacity: highOpacity,
+                            filter: isHighlighted ? `drop-shadow(0 0 8px ${highColor}70)` : 'none',
+                          };
+                        } else {
+                          wordStyle = {
+                            scale: 1,
+                            color: unhighColor,
+                            opacity: unhighOpacity,
+                            textShadow: 'none',
+                          };
+                        }
+
+                        return (
+                          <span
+                            key={`word-${wIdx}-${word.text}`}
+                            className="inline-block relative text-center select-none"
+                            style={wordStyle}
+                          >
+                            {applyTextCase(
+                              word.text,
+                              isWordPast || isWordCurrent
+                                ? lyricsSettings.highlighted.textCase
+                                : lyricsSettings.unhighlighted.textCase
+                            )}
+                          </span>
+                        );
+                      }
+
+                      // Standard Karaoke or Current-Only modes
                       const isWordHighlighted = isHighlighted && (
-                        elrcMode === 'current_only' ? isWordCurrent : isWordPast
+                        elrcMode === 'current_only' ? isWordCurrent : (adjustedTime >= wordStartTime)
                       );
 
-                      const wordColor = isWordHighlighted
-                        ? (lyricsSettings.highlighted.color || '#FF4FA3')
-                        : (lyricsSettings.unhighlighted.color || '#d4d4d8');
-
-                      const wordOpacity = isWordHighlighted
-                        ? (lyricsSettings.highlighted.opacity ?? 1.0)
-                        : (lyricsSettings.unhighlighted.opacity ?? 0.45);
-
+                      const wordColor = isWordHighlighted ? highColor : unhighColor;
+                      const wordOpacity = isWordHighlighted ? highOpacity : unhighOpacity;
                       const wordAnimMode = lyricsSettings.wordHighlightAnimation || 'smooth';
 
-                      let activeScale = 1;
                       let activeGlow = 'none';
                       let wordTransition: any = { duration: 0.15, ease: 'easeOut' };
-                      let wordClassName = 'inline-block transition-colors';
+                      let wordClassName = 'inline-block transition-colors text-center select-none';
 
                       if (wordAnimMode === 'smooth') {
-                        activeScale = isWordCurrent ? 1.08 : 1;
                         activeGlow = isWordCurrent
-                          ? `0 0 25px ${lyricsSettings.highlighted.color || '#FF4FA3'}80`
+                          ? `0 0 25px ${highColor}80`
                           : 'none';
                         wordTransition = { duration: 0.15, ease: 'easeOut' };
-                        wordClassName = 'inline-block transition-colors';
+                        wordClassName = 'inline-block transition-colors text-center select-none';
                       } else if (wordAnimMode === 'instant') {
-                        activeScale = isWordCurrent ? 1.08 : 1;
                         activeGlow = isWordCurrent
-                          ? `0 0 25px ${lyricsSettings.highlighted.color || '#FF4FA3'}80`
+                          ? `0 0 25px ${highColor}80`
                           : 'none';
                         wordTransition = { duration: 0 };
-                        wordClassName = 'inline-block';
+                        wordClassName = 'inline-block text-center select-none';
                       } else if (wordAnimMode === 'fade') {
-                        activeScale = 1;
                         activeGlow = isWordCurrent
-                          ? `0 0 20px ${lyricsSettings.highlighted.color || '#FF4FA3'}70`
+                          ? `0 0 20px ${highColor}70`
                           : 'none';
                         wordTransition = { duration: 0.25, ease: 'easeInOut' };
-                        wordClassName = 'inline-block transition-colors';
+                        wordClassName = 'inline-block transition-colors text-center select-none';
                       } else if (wordAnimMode === 'off') {
-                        activeScale = 1;
                         activeGlow = 'none';
                         wordTransition = { duration: 0 };
-                        wordClassName = 'inline-block';
+                        wordClassName = 'inline-block text-center select-none';
                       }
 
                       return (
                         <motion.span
                           key={`word-${wIdx}-${word.text}`}
                           animate={{
-                            scale: activeScale,
+                            scale: 1, // Strictly 1.0 - scale effect removed
                             color: wordColor,
                             opacity: wordOpacity,
                           }}
@@ -585,6 +623,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                           className={wordClassName}
                           style={{
                             textShadow: activeGlow,
+                            scale: 1,
                           }}
                         >
                           {applyTextCase(
@@ -616,7 +655,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
 
         {/* Line +1: Next Lyric */}
         {visibleLinesCount >= 3 && (
-          <div className={`lyric-line-row flex items-center shrink-0 w-full overflow-visible py-1 ${flexJustifyClass}`}>
+          <div className="lyric-line-row flex items-center justify-center shrink-0 w-full overflow-visible py-1 text-center">
             <AnimatePresence mode="wait">
               {next1Line ? (
                 <motion.p
@@ -635,9 +674,9 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                     color: lyricsSettings.unhighlighted.color || '#d4d4d8',
                     letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
                     lineHeight: lyricsSettings.unhighlighted.lineSpacing,
-                    textAlign: alignment,
+                    textAlign: 'center',
                   }}
-                  className="w-full whitespace-normal break-words leading-tight"
+                  className="w-full whitespace-normal break-words leading-tight text-center"
                 >
                   {applyTextCase(next1Line.text, lyricsSettings.unhighlighted.textCase)}
                 </motion.p>
@@ -650,7 +689,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
 
         {/* Line +2 (if 5 lines mode) */}
         {visibleLinesCount === 5 && (
-          <div className={`lyric-line-row flex items-center shrink-0 w-full overflow-visible py-0.5 ${flexJustifyClass}`}>
+          <div className="lyric-line-row flex items-center justify-center shrink-0 w-full overflow-visible py-0.5 text-center">
             <AnimatePresence mode="wait">
               {next2Line ? (
                 <motion.p
@@ -669,9 +708,9 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                     color: lyricsSettings.unhighlighted.color || '#d4d4d8',
                     letterSpacing: `${lyricsSettings.unhighlighted.letterSpacing}px`,
                     lineHeight: lyricsSettings.unhighlighted.lineSpacing,
-                    textAlign: alignment,
+                    textAlign: 'center',
                   }}
-                  className="w-full whitespace-normal break-words leading-tight"
+                  className="w-full whitespace-normal break-words leading-tight text-center"
                 >
                   {applyTextCase(next2Line.text, lyricsSettings.unhighlighted.textCase)}
                 </motion.p>

@@ -68,6 +68,8 @@ export const songs = sqliteTable('songs', {
   fileSize: integer('file_size'),
   format: text('format'),
   artworkPath: text('artwork_path'),
+  lrcOffset: integer('lrc_offset').notNull().default(0),
+  elrcOffset: integer('elrc_offset').notNull().default(0),
   lyricOffset: integer('lyric_offset').notNull().default(0),
 });
 

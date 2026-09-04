@@ -983,9 +983,10 @@ export default function Settings() {
                 <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
                   eLRC Word Highlighting
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-2xl">
                   {[
                     { id: 'karaoke', label: 'Karaoke — Past + Current', desc: 'Accumulates left to right' },
+                    { id: 'progressive_sweeping', label: 'Progressive Sweeping', desc: 'Smooth continuous karaoke sweep' },
                     { id: 'current_only', label: 'Current Word Only', desc: 'Only active word highlighted' }
                   ].map((mode) => (
                     <button

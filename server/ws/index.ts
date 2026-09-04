@@ -10,6 +10,8 @@ export interface RoomState {
   currentSongId: number | null;
   currentQueueItemId: number | null;
   variant: 'original' | 'instrumental';
+  lrcOffset: number; // in ms
+  elrcOffset: number; // in ms
   lyricOffset: number; // in ms
   lyricSettings: LyricsAppearanceSettings;
   clients: Set<WebSocket>;
@@ -25,6 +27,8 @@ export async function getOrCreateRoom(sessionId: string): Promise<RoomState> {
   if (!room) {
     let initialSongId: number | null = null;
     let initialQueueItemId: number | null = null;
+    let initialLrcOffset = 0;
+    let initialElrcOffset = 0;
     let initialLyricOffset = 0;
     let initialLyricSettings = DEFAULT_LYRICS_SETTINGS;
 
@@ -77,11 +81,17 @@ export async function getOrCreateRoom(sessionId: string): Promise<RoomState> {
         }
       }
 
-      // 3. If there is a song, load its saved lyricOffset
+      // 3. If there is a song, load its saved lyric offsets
       if (initialSongId) {
-        const songRec = await db.select({ lyricOffset: songs.lyricOffset }).from(songs).where(eq(songs.id, initialSongId)).limit(1);
-        if (songRec.length > 0 && typeof songRec[0].lyricOffset === 'number') {
-          initialLyricOffset = songRec[0].lyricOffset;
+        const songRec = await db.select({
+          lrcOffset: songs.lrcOffset,
+          elrcOffset: songs.elrcOffset,
+          lyricOffset: songs.lyricOffset,
+        }).from(songs).where(eq(songs.id, initialSongId)).limit(1);
+        if (songRec.length > 0) {
+          initialLrcOffset = typeof songRec[0].lrcOffset === 'number' ? songRec[0].lrcOffset : (songRec[0].lyricOffset ?? 0);
+          initialElrcOffset = typeof songRec[0].elrcOffset === 'number' ? songRec[0].elrcOffset : (songRec[0].lyricOffset ?? 0);
+          initialLyricOffset = songRec[0].lyricOffset ?? 0;
         }
       }
     } catch (e) {
@@ -94,6 +104,8 @@ export async function getOrCreateRoom(sessionId: string): Promise<RoomState> {
       currentSongId: initialSongId,
       currentQueueItemId: initialQueueItemId,
       variant: 'original',
+      lrcOffset: initialLrcOffset,
+      elrcOffset: initialElrcOffset,
       lyricOffset: initialLyricOffset,
       lyricSettings: initialLyricSettings,
       clients: new Set(),
@@ -222,17 +234,42 @@ export function setupWebSockets(wss: WebSocketServer) {
           case 'OFFSET_CHANGED': {
             const offsetVal = Math.round(Number(data.payload?.offset) || 0);
             const targetSongId = data.payload?.songId ? Number(data.payload.songId) : room.currentSongId;
+            const format = data.payload?.format === 'elrc' ? 'elrc' : (data.payload?.format === 'lrc' ? 'lrc' : undefined);
+
+            if (format === 'elrc') {
+              room.elrcOffset = offsetVal;
+            } else if (format === 'lrc') {
+              room.lrcOffset = offsetVal;
+            }
+            if (data.payload?.lrcOffset !== undefined) room.lrcOffset = Math.round(Number(data.payload.lrcOffset));
+            if (data.payload?.elrcOffset !== undefined) room.elrcOffset = Math.round(Number(data.payload.elrcOffset));
             room.lyricOffset = offsetVal;
+
             if (targetSongId) {
               try {
-                await db.update(songs).set({ lyricOffset: offsetVal }).where(eq(songs.id, targetSongId));
+                const updateObj: any = { lyricOffset: offsetVal };
+                if (format === 'elrc') {
+                  updateObj.elrcOffset = offsetVal;
+                } else if (format === 'lrc') {
+                  updateObj.lrcOffset = offsetVal;
+                }
+                if (data.payload?.lrcOffset !== undefined) updateObj.lrcOffset = Math.round(Number(data.payload.lrcOffset));
+                if (data.payload?.elrcOffset !== undefined) updateObj.elrcOffset = Math.round(Number(data.payload.elrcOffset));
+
+                await db.update(songs).set(updateObj).where(eq(songs.id, targetSongId));
               } catch (e) {
                 console.error('[WS] Failed to save song lyricOffset:', e);
               }
             }
             broadcastToRoom(sessionId, {
               type: 'OFFSET_CHANGED',
-              payload: { offset: room.lyricOffset, songId: targetSongId }
+              payload: {
+                offset: room.lyricOffset,
+                format,
+                lrcOffset: room.lrcOffset,
+                elrcOffset: room.elrcOffset,
+                songId: targetSongId
+              }
             });
             break;
           }
@@ -270,6 +307,8 @@ export function setupWebSockets(wss: WebSocketServer) {
                   currentSongId: room.currentSongId,
                   currentQueueItemId: room.currentQueueItemId,
                   variant: room.variant,
+                  lrcOffset: room.lrcOffset,
+                  elrcOffset: room.elrcOffset,
                   lyricOffset: room.lyricOffset,
                   lyricSettings: room.lyricSettings
                 }
@@ -283,15 +322,32 @@ export function setupWebSockets(wss: WebSocketServer) {
             room.position = 0;
             room.playing = true;
 
-            // Load song's saved offset
+            // Load song's saved offsets
             if (room.currentSongId) {
               try {
-                const songRec = await db.select({ lyricOffset: songs.lyricOffset }).from(songs).where(eq(songs.id, room.currentSongId)).limit(1);
-                room.lyricOffset = songRec[0]?.lyricOffset ?? 0;
+                const songRec = await db.select({
+                  lrcOffset: songs.lrcOffset,
+                  elrcOffset: songs.elrcOffset,
+                  lyricOffset: songs.lyricOffset,
+                }).from(songs).where(eq(songs.id, room.currentSongId)).limit(1);
+
+                if (songRec.length > 0) {
+                  room.lrcOffset = typeof songRec[0].lrcOffset === 'number' ? songRec[0].lrcOffset : (songRec[0].lyricOffset ?? 0);
+                  room.elrcOffset = typeof songRec[0].elrcOffset === 'number' ? songRec[0].elrcOffset : (songRec[0].lyricOffset ?? 0);
+                  room.lyricOffset = songRec[0].lyricOffset ?? 0;
+                } else {
+                  room.lrcOffset = 0;
+                  room.elrcOffset = 0;
+                  room.lyricOffset = 0;
+                }
               } catch (e) {
+                room.lrcOffset = 0;
+                room.elrcOffset = 0;
                 room.lyricOffset = 0;
               }
             } else {
+              room.lrcOffset = 0;
+              room.elrcOffset = 0;
               room.lyricOffset = 0;
             }
 
@@ -302,13 +358,20 @@ export function setupWebSockets(wss: WebSocketServer) {
                 queueItemId: room.currentQueueItemId,
                 playing: true,
                 position: 0,
+                lrcOffset: room.lrcOffset,
+                elrcOffset: room.elrcOffset,
                 lyricOffset: room.lyricOffset
               } 
             });
 
             broadcastToRoom(sessionId, {
               type: 'OFFSET_CHANGED',
-              payload: { offset: room.lyricOffset, songId: room.currentSongId }
+              payload: {
+                offset: room.lyricOffset,
+                lrcOffset: room.lrcOffset,
+                elrcOffset: room.elrcOffset,
+                songId: room.currentSongId
+              }
             });
             break;
           }
@@ -627,13 +690,33 @@ export function broadcastLyricSettingsToAllActiveRooms(newSettings: LyricsAppear
   }
 }
 
-export function broadcastSongOffsetToRooms(songId: number, offset: number) {
+export function broadcastSongOffsetToRooms(
+  songId: number,
+  offset: number,
+  format?: 'lrc' | 'elrc',
+  lrcOffset?: number,
+  elrcOffset?: number
+) {
   for (const [sessionId, room] of activeRooms.entries()) {
     if (room.currentSongId === songId) {
+      if (format === 'elrc') {
+        room.elrcOffset = offset;
+      } else if (format === 'lrc') {
+        room.lrcOffset = offset;
+      }
+      if (lrcOffset !== undefined) room.lrcOffset = lrcOffset;
+      if (elrcOffset !== undefined) room.elrcOffset = elrcOffset;
       room.lyricOffset = offset;
+
       broadcastToRoom(sessionId, {
         type: 'OFFSET_CHANGED',
-        payload: { offset, songId }
+        payload: {
+          offset,
+          songId,
+          format,
+          lrcOffset: room.lrcOffset,
+          elrcOffset: room.elrcOffset
+        }
       });
     }
   }

@@ -117,7 +117,7 @@ export async function setupDatabase() {
     console.warn('Migrations folder not found, skipping migrations.');
   }
 
-  // Ensure artwork_path and lyric_offset columns exist in songs table (backward compatibility safety)
+  // Ensure artwork_path, lyric_offset, lrc_offset, and elrc_offset columns exist in songs table (backward compatibility safety)
   try {
     await sqlite.execute('ALTER TABLE songs ADD COLUMN artwork_path text;');
   } catch (e) {
@@ -125,6 +125,16 @@ export async function setupDatabase() {
   }
   try {
     await sqlite.execute('ALTER TABLE songs ADD COLUMN lyric_offset integer DEFAULT 0;');
+  } catch (e) {
+    // Column already exists, safe to ignore
+  }
+  try {
+    await sqlite.execute('ALTER TABLE songs ADD COLUMN lrc_offset integer DEFAULT 0;');
+  } catch (e) {
+    // Column already exists, safe to ignore
+  }
+  try {
+    await sqlite.execute('ALTER TABLE songs ADD COLUMN elrc_offset integer DEFAULT 0;');
   } catch (e) {
     // Column already exists, safe to ignore
   }
