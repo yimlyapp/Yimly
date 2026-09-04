@@ -9,6 +9,7 @@ export default function Home() {
   const [activeSessions, setActiveSessions] = useState<any[]>([]);
   const [featuredSongs, setFeaturedSongs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editorState, setEditorState] = useState<{isOpen: boolean, songId: number | null, title: string, format: 'lrc'|'elrc'}>({isOpen: false, songId: null, title: '', format: 'lrc'});
   const hostButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -349,14 +350,14 @@ export default function Home() {
                     )}
                     <div className="absolute top-2 right-2 flex gap-1 z-10">
                       {song.hasLrc && (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/20 text-[#FF4FA3] border border-[#FF4FA3]/30 backdrop-blur">
+                        <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditorState({isOpen: true, songId: song.id, title: song.title, format: 'lrc'}); }} className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/20 text-[#FF4FA3] border border-[#FF4FA3]/30 backdrop-blur hover:bg-[#FF4FA3]/30 transition-colors cursor-pointer">
                           LRC
-                        </span>
+                        </button>
                       )}
                       {song.hasElrc && (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#3B82F6]/20 text-[#3B82F6] border border-[#3B82F6]/30 backdrop-blur">
+                        <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditorState({isOpen: true, songId: song.id, title: song.title, format: 'elrc'}); }} className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#3B82F6]/20 text-[#3B82F6] border border-[#3B82F6]/30 backdrop-blur hover:bg-[#3B82F6]/30 transition-colors cursor-pointer">
                           ELRC
-                        </span>
+                        </button>
                       )}
                     </div>
                   </div>
@@ -381,6 +382,14 @@ export default function Home() {
           </div>
         </div>
       )}
+      <LyricsEditorModal
+        isOpen={editorState.isOpen}
+        songId={editorState.songId}
+        songTitle={editorState.title}
+        format={editorState.format}
+        onClose={() => setEditorState(prev => ({ ...prev, isOpen: false }))}
+        onSave={() => window.location.reload()}
+      />
     </div>
   );
 }

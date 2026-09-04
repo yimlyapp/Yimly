@@ -63,6 +63,7 @@ export default function PlaylistDetailView({
   onCoverUpload,
   onCoverRemove,
   onRemoveSong,
+  onOpenLyrics,
   onReorderSong,
   queuedSongId,
   playingAll = false,
@@ -409,9 +410,14 @@ export default function PlaylistDetailView({
                       <div className="min-w-0">
                         <span className="truncate block">{song.title}</span>
                         {song.hasLrc && (
-                          <span className="inline-block px-1.5 py-0.2 rounded text-[8px] font-bold uppercase tracking-wider bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/25 mt-0.5">
+                          <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); onOpenLyrics && onOpenLyrics(song.id, song.title, 'lrc'); }} className="inline-block px-1.5 py-0.2 rounded text-[8px] font-bold uppercase tracking-wider bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/25 mt-0.5 hover:bg-[#FF4FA3]/30 transition-colors cursor-pointer">
                             LRC
-                          </span>
+                          </button>
+                        )}
+                        {song.hasElrc && (
+                          <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); onOpenLyrics && onOpenLyrics(song.id, song.title, 'elrc'); }} className="inline-block px-1.5 py-0.2 rounded text-[8px] font-bold uppercase tracking-wider bg-[#3B82F6]/15 text-[#3B82F6] border border-[#3B82F6]/25 mt-0.5 hover:bg-[#3B82F6]/30 transition-colors cursor-pointer">
+                            ELRC
+                          </button>
                         )}
                       </div>
                     </td>

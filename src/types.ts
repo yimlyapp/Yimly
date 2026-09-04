@@ -30,6 +30,7 @@ export interface PlaylistSongItem {
   variant?: string;
   hasArtwork?: boolean;
   hasLrc?: boolean;
+  hasElrc?: boolean;
 }
 
 export interface PlaylistCollaborator {

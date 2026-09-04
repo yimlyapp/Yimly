@@ -494,6 +494,9 @@ export default function Library() {
           onReorderSong={handleReorderSong}
           queuedSongId={queuedSongId}
           playingAll={playingAll}
+          onOpenLyrics={(songId, title, format) => {
+            setEditorState({ isOpen: true, songId, title, format });
+          }}
         />
 
         <AddSongsModal
@@ -531,14 +534,7 @@ export default function Library() {
             setPlaylists(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated } : p));
           }}
         />
-      <LyricsEditorModal
-        isOpen={editorState.isOpen}
-        songId={editorState.songId}
-        songTitle={editorState.title}
-        format={editorState.format}
-        onClose={() => setEditorState(prev => ({ ...prev, isOpen: false }))}
-        onSave={loadAllData}
-      />
+      
 
         <SharePlaylistModal
           isOpen={isSharePlaylistOpen}
@@ -1191,6 +1187,16 @@ export default function Library() {
         }}
         onUpdated={(updated) => {
           setPlaylists(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated } : p));
+        }}
+      />
+      <LyricsEditorModal
+        isOpen={editorState.isOpen}
+        songId={editorState.songId}
+        songTitle={editorState.title}
+        format={editorState.format}
+        onClose={() => setEditorState(prev => ({ ...prev, isOpen: false }))}
+        onSave={() => {
+          if (typeof loadAllData === 'function') loadAllData();
         }}
       />
     </div>
