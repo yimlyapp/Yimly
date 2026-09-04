@@ -515,16 +515,20 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                         : (next1Line?.time ?? (word.start + 3));
                       const wordDuration = Math.max(0.08, nextWordStartTime - wordStartTime);
 
-                      const elrcMode = lyricsSettings.elrcHighlightMode || 'karaoke';
+                      const rawElrc = lyricsSettings.elrcTransition || lyricsSettings.elrcHighlightMode || 'smooth_sweep';
+                      const elrcMode: 'smooth_sweep' | 'karaoke' | 'current_only' | 'instant' =
+                        rawElrc === 'progressive_sweeping' ? 'smooth_sweep' : (rawElrc as any);
+
                       const isWordPast = isHighlighted && (isPreview ? wIdx === 0 : (adjustedTime >= nextWordStartTime));
-                      const isWordCurrent = isHighlighted && (isPreview ? wIdx === 0 : (adjustedTime >= wordStartTime && adjustedTime < nextWordStartTime));
+                      const isWordCurrent = isHighlighted && (isPreview ? wIdx === 1 : (adjustedTime >= wordStartTime && adjustedTime < nextWordStartTime));
 
                       const highColor = lyricsSettings.highlighted.color || '#FF4FA3';
                       const unhighColor = lyricsSettings.unhighlighted.color || '#d4d4d8';
                       const highOpacity = lyricsSettings.highlighted.opacity ?? 1.0;
                       const unhighOpacity = lyricsSettings.unhighlighted.opacity ?? 0.45;
 
-                      if (elrcMode === 'progressive_sweeping') {
+                      // 1. Smooth Sweep Mode (Continuous left-to-right gradient sweep driven by ELRC timestamps)
+                      if (elrcMode === 'smooth_sweep') {
                         let wordStyle: React.CSSProperties = {
                           scale: 1,
                         };
@@ -574,9 +578,38 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
                         );
                       }
 
-                      // Standard Karaoke or Current-Only modes
+                      // 2. Instant Mode (Immediate full word highlight when timestamp is reached, zero transition)
+                      if (elrcMode === 'instant') {
+                        const isWordHighlighted = isHighlighted && (
+                          isPreview ? wIdx <= 1 : (adjustedTime >= wordStartTime)
+                        );
+
+                        return (
+                          <span
+                            key={`word-${wIdx}-${word.text}`}
+                            className="inline-block text-center select-none"
+                            style={{
+                              scale: 1,
+                              color: isWordHighlighted ? highColor : unhighColor,
+                              opacity: isWordHighlighted ? highOpacity : unhighOpacity,
+                              textShadow: isWordCurrent ? `0 0 25px ${highColor}80` : 'none',
+                            }}
+                          >
+                            {applyTextCase(
+                              word.text,
+                              isWordHighlighted
+                                ? lyricsSettings.highlighted.textCase
+                                : lyricsSettings.unhighlighted.textCase
+                            )}
+                          </span>
+                        );
+                      }
+
+                      // 3. Current Word Only or Standard Karaoke modes
                       const isWordHighlighted = isHighlighted && (
-                        elrcMode === 'current_only' ? isWordCurrent : (adjustedTime >= wordStartTime)
+                        isPreview
+                          ? (elrcMode === 'current_only' ? wIdx === 1 : wIdx <= 1)
+                          : (elrcMode === 'current_only' ? isWordCurrent : (adjustedTime >= wordStartTime))
                       );
 
                       const wordColor = isWordHighlighted ? highColor : unhighColor;

@@ -9,6 +9,8 @@ export interface LyricStyleSettings {
   color?: string;
 }
 
+export type ElrcTransition = 'smooth_sweep' | 'karaoke' | 'current_only' | 'instant';
+
 export interface LyricsAppearanceSettings {
   highlighted: LyricStyleSettings;
   unhighlighted: LyricStyleSettings;
@@ -16,7 +18,8 @@ export interface LyricsAppearanceSettings {
   visibleLines: number;
   highlightCurrentLine: boolean;
   animationDuration: number;
-  elrcHighlightMode?: 'karaoke' | 'current_only' | 'progressive_sweeping';
+  elrcTransition?: ElrcTransition;
+  elrcHighlightMode?: ElrcTransition | 'progressive_sweeping';
   wordHighlightAnimation?: 'smooth' | 'instant' | 'fade' | 'off';
 }
 
@@ -45,7 +48,8 @@ export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
   visibleLines: 3,
   highlightCurrentLine: true,
   animationDuration: 0.25,
-  elrcHighlightMode: 'karaoke',
+  elrcTransition: 'smooth_sweep',
+  elrcHighlightMode: 'smooth_sweep',
   wordHighlightAnimation: 'smooth'
 };
 
@@ -82,7 +86,18 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
     visibleLines: [1, 3, 5].includes(parsed.visibleLines) ? parsed.visibleLines : DEFAULT_LYRICS_SETTINGS.visibleLines,
     highlightCurrentLine: typeof parsed.highlightCurrentLine === 'boolean' ? parsed.highlightCurrentLine : DEFAULT_LYRICS_SETTINGS.highlightCurrentLine,
     animationDuration: typeof parsed.animationDuration === 'number' && !isNaN(parsed.animationDuration) ? parsed.animationDuration : DEFAULT_LYRICS_SETTINGS.animationDuration,
-    elrcHighlightMode: ['karaoke', 'current_only', 'progressive_sweeping'].includes(parsed.elrcHighlightMode) ? parsed.elrcHighlightMode : DEFAULT_LYRICS_SETTINGS.elrcHighlightMode,
+    elrcTransition: (() => {
+      const rawMode = parsed.elrcTransition || parsed.elrcHighlightMode;
+      if (rawMode === 'progressive_sweeping' || rawMode === 'smooth_sweep') return 'smooth_sweep';
+      if (rawMode === 'karaoke' || rawMode === 'current_only' || rawMode === 'instant') return rawMode;
+      return DEFAULT_LYRICS_SETTINGS.elrcTransition ?? 'smooth_sweep';
+    })(),
+    elrcHighlightMode: (() => {
+      const rawMode = parsed.elrcTransition || parsed.elrcHighlightMode;
+      if (rawMode === 'progressive_sweeping' || rawMode === 'smooth_sweep') return 'smooth_sweep';
+      if (rawMode === 'karaoke' || rawMode === 'current_only' || rawMode === 'instant') return rawMode;
+      return DEFAULT_LYRICS_SETTINGS.elrcHighlightMode ?? 'smooth_sweep';
+    })(),
     wordHighlightAnimation: ['smooth', 'instant', 'fade', 'off'].includes(parsed.wordHighlightAnimation) ? parsed.wordHighlightAnimation : DEFAULT_LYRICS_SETTINGS.wordHighlightAnimation
   };
 }

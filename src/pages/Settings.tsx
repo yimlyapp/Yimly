@@ -978,36 +978,69 @@ export default function Settings() {
                 </div>
               </div>
 
-              {/* eLRC Word Highlighting Mode */}
+              {/* ELRC Transition Mode */}
               <div className="pt-4 border-t border-white/10">
                 <label className="block text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
-                  eLRC Word Highlighting
+                  ELRC Transition
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-2xl">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl">
                   {[
-                    { id: 'karaoke', label: 'Karaoke — Past + Current', desc: 'Accumulates left to right' },
-                    { id: 'progressive_sweeping', label: 'Progressive Sweeping', desc: 'Smooth continuous karaoke sweep' },
-                    { id: 'current_only', label: 'Current Word Only', desc: 'Only active word highlighted' }
-                  ].map((mode) => (
-                    <button
-                      key={mode.id}
-                      type="button"
-                      onClick={() =>
-                        updateSetting((prev) => ({ ...prev, elrcHighlightMode: mode.id as any }))
-                      }
-                      className={`py-3 px-4 rounded-2xl border font-bold text-xs flex flex-col items-start gap-1 transition-all ${
-                        (lyricsSettings.elrcHighlightMode || 'karaoke') === mode.id
-                          ? 'bg-[#FF4FA3] text-white border-[#FF4FA3] shadow-lg shadow-[#FF4FA3]/25'
-                          : 'bg-[#08090E] text-zinc-400 border-white/10 hover:text-white hover:border-white/20'
-                      }`}
-                    >
-                      <span className="text-sm font-black">{mode.label}</span>
-                      <span className="text-[10px] font-normal opacity-80">{mode.desc}</span>
-                    </button>
-                  ))}
+                    {
+                      id: 'smooth_sweep',
+                      label: 'Smooth Sweep',
+                      desc: 'The highlight smoothly travels across each word from left to right using the ELRC timestamps.'
+                    },
+                    {
+                      id: 'karaoke',
+                      label: 'Karaoke',
+                      desc: 'Preserve the existing karaoke-style ELRC behavior (past + current accumulate).'
+                    },
+                    {
+                      id: 'current_only',
+                      label: 'Current Word',
+                      desc: 'Preserve the existing current-word highlighting behavior.'
+                    },
+                    {
+                      id: 'instant',
+                      label: 'Instant',
+                      desc: "When a word's timestamp is reached, the entire word becomes highlighted immediately."
+                    }
+                  ].map((mode) => {
+                    const activeMode = lyricsSettings.elrcTransition || lyricsSettings.elrcHighlightMode || 'smooth_sweep';
+                    const isSelected = activeMode === mode.id || (activeMode === 'progressive_sweeping' && mode.id === 'smooth_sweep');
+
+                    return (
+                      <button
+                        key={mode.id}
+                        type="button"
+                        onClick={() =>
+                          updateSetting((prev) => ({
+                            ...prev,
+                            elrcTransition: mode.id as any,
+                            elrcHighlightMode: mode.id as any
+                          }))
+                        }
+                        className={`py-3.5 px-4 rounded-2xl border font-bold text-xs flex flex-col items-start gap-1.5 transition-all text-left ${
+                          isSelected
+                            ? 'bg-[#FF4FA3] text-white border-[#FF4FA3] shadow-lg shadow-[#FF4FA3]/25 ring-2 ring-[#FF4FA3]/30'
+                            : 'bg-[#08090E] text-zinc-400 border-white/10 hover:text-white hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between w-full">
+                          <span className="text-sm font-black">{mode.label}</span>
+                          {isSelected && (
+                            <span className="px-2 py-0.5 bg-white/20 text-white rounded-full text-[10px] font-extrabold uppercase">
+                              Active
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[11px] font-normal leading-relaxed opacity-85">{mode.desc}</span>
+                      </button>
+                    );
+                  })}
                 </div>
-                <p className="text-xs text-zinc-500 mt-2">
-                  Controls word-level highlighting behavior for Enhanced LRC (.elrc.lrc) files.
+                <p className="text-xs text-zinc-500 mt-2.5">
+                  Controls word-level visual transitions and highlighting behavior for Enhanced LRC (.elrc.lrc) files.
                 </p>
               </div>
 
