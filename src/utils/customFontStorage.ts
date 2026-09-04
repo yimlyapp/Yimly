@@ -1,69 +1,59 @@
 /**
- * IndexedDB storage utility for custom lyric fonts binary data.
+ * Server-backed custom lyric font loader and cache utility.
+ * Fonts are fetched from the Yimly server and registered in document.fonts using FontFace.
  */
 
-const DB_NAME = 'YimlyCustomFontsDB';
-const STORE_NAME = 'fonts';
-const DB_VERSION = 1;
+const loadedFontFaces = new Map<string, Promise<void>>();
 
-export function openCustomFontsDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME);
-      }
-    };
+export function isCustomFontLoaded(customFontName: string): boolean {
+  if (!customFontName || typeof document === 'undefined' || !document.fonts) return false;
+  let loaded = false;
+  document.fonts.forEach((face) => {
+    if (face.family === customFontName && face.status === 'loaded') {
+      loaded = true;
+    }
   });
+  return loaded;
 }
 
-export async function saveCustomFontStorage(fontKey: string, buffer: ArrayBuffer): Promise<void> {
-  const db = await openCustomFontsDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    const req = store.put(buffer, fontKey);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-  });
-}
+export async function loadAndRegisterCustomFont(
+  fontKey: string,
+  customFontName?: string | null,
+  customFontUrl?: string | null
+): Promise<void> {
+  if (!fontKey || fontKey !== 'custom' || !customFontName || typeof document === 'undefined' || !('fonts' in document)) {
+    return;
+  }
 
-export async function getCustomFontStorage(fontKey: string): Promise<ArrayBuffer | null> {
-  const db = await openCustomFontsDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const req = store.get(fontKey);
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
-  });
-}
+  const fontUrl = customFontUrl || '/api/karaoke/settings/lyrics/custom-font';
+  const cacheKey = `${customFontName}::${fontUrl}`;
 
-export async function removeCustomFontStorage(fontKey: string): Promise<void> {
-  const db = await openCustomFontsDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    const req = store.delete(fontKey);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-  });
-}
+  if (loadedFontFaces.has(cacheKey)) {
+    return loadedFontFaces.get(cacheKey);
+  }
 
-export async function loadAndRegisterCustomFont(fontKey: string, customFontName?: string | null): Promise<void> {
-  if (!fontKey || fontKey !== 'custom' || !customFontName) return;
-  try {
-    const buffer = await getCustomFontStorage(customFontName);
-    if (buffer) {
-      const fontFace = new FontFace(customFontName, buffer);
+  if (isCustomFontLoaded(customFontName)) {
+    loadedFontFaces.set(cacheKey, Promise.resolve());
+    return;
+  }
+
+  const loadPromise = (async () => {
+    try {
+      const fontFace = new FontFace(customFontName, `url(${fontUrl})`);
       await fontFace.load();
       document.fonts.add(fontFace);
-      console.log(`[FontLoader] Successfully loaded and registered custom font: ${customFontName}`);
+      console.log(`[FontLoader] Successfully loaded server-persisted custom font "${customFontName}" from ${fontUrl}`);
+    } catch (err) {
+      console.error(`[FontLoader] Failed to load custom font "${customFontName}" from server:`, err);
+      // Remove failed promise so retry is possible
+      loadedFontFaces.delete(cacheKey);
     }
-  } catch (err) {
-    console.error(`[FontLoader] Failed to load custom font ${customFontName}:`, err);
-  }
+  })();
+
+  loadedFontFaces.set(cacheKey, loadPromise);
+  return loadPromise;
+}
+
+export async function preloadCustomFont(customFontName: string, customFontUrl?: string | null): Promise<void> {
+  return loadAndRegisterCustomFont('custom', customFontName, customFontUrl);
 }

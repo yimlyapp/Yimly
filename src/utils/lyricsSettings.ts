@@ -25,6 +25,10 @@ export interface LyricsAppearanceSettings {
   wordHighlightAnimation?: 'smooth' | 'instant' | 'fade' | 'off'; // 'smooth' | 'instant' | 'fade' | 'off'
   customFontName?: string | null;
   customFontFileName?: string | null;
+  customFontId?: string | null;
+  customFontUrl?: string | null;
+  customFontMime?: string | null;
+  customFontUpdatedAt?: number | null;
 }
 
 export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
@@ -54,7 +58,13 @@ export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
   animationDuration: 0.25,
   elrcTransition: 'smooth_sweep',
   elrcHighlightMode: 'smooth_sweep',
-  wordHighlightAnimation: 'smooth'
+  wordHighlightAnimation: 'smooth',
+  customFontName: null,
+  customFontFileName: null,
+  customFontId: null,
+  customFontUrl: null,
+  customFontMime: null,
+  customFontUpdatedAt: null
 };
 
 const STORAGE_KEY = 'yimly_lyrics_appearance_settings_v1';
@@ -71,7 +81,7 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
   const validTextCases = ['original', 'lowercase', 'uppercase', 'titlecase'] as const;
   const validAlignments = ['left', 'center', 'right'] as const;
 
-  return {
+  const resolved: LyricsAppearanceSettings = {
     highlighted: {
       font: typeof high.font === 'string' && high.font.trim() ? high.font.trim() : DEFAULT_LYRICS_SETTINGS.highlighted.font,
       size: typeof high.size === 'number' && !isNaN(high.size) ? high.size : DEFAULT_LYRICS_SETTINGS.highlighted.size,
@@ -87,7 +97,7 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
       size: typeof unhigh.size === 'number' && !isNaN(unhigh.size) ? unhigh.size : DEFAULT_LYRICS_SETTINGS.unhighlighted.size,
       weight: unhigh.weight ? String(unhigh.weight) : DEFAULT_LYRICS_SETTINGS.unhighlighted.weight,
       letterSpacing: typeof unhigh.letterSpacing === 'number' && !isNaN(unhigh.letterSpacing) ? unhigh.letterSpacing : DEFAULT_LYRICS_SETTINGS.unhighlighted.letterSpacing,
-      lineSpacing: typeof unhigh.lineSpacing === 'number' && !isNaN(unhigh.lineSpacing) ? unhigh.lineSpacing : DEFAULT_LYRICS_SETTINGS.unhighlighted.lineSpacing,
+      lineSpacing: typeof unhigh.lineSpacing === 'number' && !isNaN(unhigh.lineSpacing) ? high.lineSpacing ?? DEFAULT_LYRICS_SETTINGS.unhighlighted.lineSpacing : DEFAULT_LYRICS_SETTINGS.unhighlighted.lineSpacing,
       textCase: validTextCases.includes(unhigh.textCase) ? unhigh.textCase : DEFAULT_LYRICS_SETTINGS.unhighlighted.textCase,
       opacity: typeof unhigh.opacity === 'number' && !isNaN(unhigh.opacity) ? unhigh.opacity : DEFAULT_LYRICS_SETTINGS.unhighlighted.opacity,
       color: typeof unhigh.color === 'string' && unhigh.color.trim() ? unhigh.color.trim() : DEFAULT_LYRICS_SETTINGS.unhighlighted.color
@@ -110,8 +120,18 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
     })(),
     wordHighlightAnimation: ['smooth', 'instant', 'fade', 'off'].includes(parsed.wordHighlightAnimation) ? parsed.wordHighlightAnimation : DEFAULT_LYRICS_SETTINGS.wordHighlightAnimation,
     customFontName: typeof parsed.customFontName === 'string' && parsed.customFontName.trim() ? parsed.customFontName.trim() : null,
-    customFontFileName: typeof parsed.customFontFileName === 'string' && parsed.customFontFileName.trim() ? parsed.customFontFileName.trim() : null
+    customFontFileName: typeof parsed.customFontFileName === 'string' && parsed.customFontFileName.trim() ? parsed.customFontFileName.trim() : null,
+    customFontId: typeof parsed.customFontId === 'string' && parsed.customFontId.trim() ? parsed.customFontId.trim() : null,
+    customFontUrl: typeof parsed.customFontUrl === 'string' && parsed.customFontUrl.trim() ? parsed.customFontUrl.trim() : null,
+    customFontMime: typeof parsed.customFontMime === 'string' && parsed.customFontMime.trim() ? parsed.customFontMime.trim() : null,
+    customFontUpdatedAt: typeof parsed.customFontUpdatedAt === 'number' && !isNaN(parsed.customFontUpdatedAt) ? parsed.customFontUpdatedAt : null
   };
+
+  if (resolved.highlighted.font === 'custom' || resolved.unhighlighted.font === 'custom') {
+    loadAndRegisterCustomFont('custom', resolved.customFontName, resolved.customFontUrl);
+  }
+
+  return resolved;
 }
 
 /**
@@ -124,8 +144,8 @@ export function getLyricsSettings(): LyricsAppearanceSettings {
     if (saved) {
       const parsed = JSON.parse(saved);
       const canonical = resolveLyricsSettings(parsed);
-      loadAndRegisterCustomFont(canonical.highlighted.font, canonical.customFontName);
-      loadAndRegisterCustomFont(canonical.unhighlighted.font, canonical.customFontName);
+      loadAndRegisterCustomFont(canonical.highlighted.font, canonical.customFontName, canonical.customFontUrl);
+      loadAndRegisterCustomFont(canonical.unhighlighted.font, canonical.customFontName, canonical.customFontUrl);
       console.log('[LyricsSettings] Successfully loaded persisted settings from localStorage:', canonical);
       return canonical;
     }
@@ -146,6 +166,10 @@ export function saveLyricsSettings(settings: LyricsAppearanceSettings, sessionId
     localStorage.setItem(STORAGE_KEY, JSON.stringify(canonical));
     window.dispatchEvent(new CustomEvent('yimly_lyrics_settings_changed', { detail: canonical }));
     console.log('[LyricsSettings] Persisted updated lyric appearance settings locally:', canonical);
+
+    if (canonical.highlighted.font === 'custom' || canonical.unhighlighted.font === 'custom') {
+      loadAndRegisterCustomFont('custom', canonical.customFontName, canonical.customFontUrl);
+    }
 
     // Persist to server default settings
     fetch('/api/karaoke/settings/lyrics', {
@@ -182,6 +206,9 @@ export async function fetchServerLyricsSettings(sessionId?: string): Promise<Lyr
       const data = await res.json();
       if (data && data.settings) {
         const canonical = resolveLyricsSettings(data.settings);
+        if (canonical.highlighted.font === 'custom' || canonical.unhighlighted.font === 'custom') {
+          loadAndRegisterCustomFont('custom', canonical.customFontName, canonical.customFontUrl);
+        }
         try {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(canonical));
         } catch (e) {

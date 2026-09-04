@@ -19,7 +19,6 @@ import {
   getAlignmentClass,
   LYRICS_FONT_OPTIONS
 } from '../utils/lyricsSettings';
-import { saveCustomFontStorage, removeCustomFontStorage } from '../utils/customFontStorage';
 
 export default function Settings() {
   const context = useOutletContext<{ user: any }>();
@@ -415,15 +414,24 @@ export default function Settings() {
                           <button
                             type="button"
                             onClick={async () => {
-                              if (lyricsSettings.customFontName) {
-                                try {
-                                  await removeCustomFontStorage(lyricsSettings.customFontName);
-                                } catch (e) {}
+                              try {
+                                const res = await fetch('/api/karaoke/settings/lyrics/custom-font', {
+                                  method: 'DELETE'
+                                });
+                                if (!res.ok) {
+                                  console.warn('Server returned error on font deletion, proceeding locally anyway.');
+                                }
+                              } catch (e) {
+                                console.error('Failed to delete custom font:', e);
                               }
                               updateSetting((prev) => ({
                                 ...prev,
                                 customFontName: null,
                                 customFontFileName: null,
+                                customFontId: null,
+                                customFontUrl: null,
+                                customFontMime: null,
+                                customFontUpdatedAt: null,
                                 highlighted: { ...prev.highlighted, font: 'system' },
                                 unhighlighted: { ...prev.unhighlighted, font: 'system' }
                               }));
@@ -441,25 +449,29 @@ export default function Settings() {
                           const file = e.target.files?.[0];
                           if (!file) return;
                           try {
-                            const buffer = await file.arrayBuffer();
-                            const fontNameClean = file.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
-                            const uniqueFontName = `YimlyCustom_${fontNameClean}_${Date.now()}`;
-                            await saveCustomFontStorage(uniqueFontName, buffer);
-
-                            const fontFace = new FontFace(uniqueFontName, buffer);
-                            await fontFace.load();
-                            document.fonts.add(fontFace);
-
-                            updateSetting((prev) => ({
-                              ...prev,
-                              customFontName: uniqueFontName,
-                              customFontFileName: file.name,
-                              highlighted: { ...prev.highlighted, font: 'custom' },
-                              unhighlighted: { ...prev.unhighlighted, font: 'custom' }
-                            }));
-                          } catch (err) {
-                            console.error('Failed to load custom font:', err);
-                            alert('Failed to load custom font file. Please ensure it is a valid TTF, OTF, WOFF, or WOFF2 file.');
+                            const res = await fetch('/api/karaoke/settings/lyrics/custom-font?filename=' + encodeURIComponent(file.name), {
+                              method: 'POST',
+                              headers: {
+                                'x-font-filename': encodeURIComponent(file.name),
+                                'Content-Type': file.type || 'application/octet-stream'
+                              },
+                              body: file
+                            });
+                            
+                            if (!res.ok) {
+                              const errorData = await res.json().catch(() => ({}));
+                              throw new Error(errorData.error || 'Failed to upload custom font to server');
+                            }
+                            
+                            const data = await res.json();
+                            if (data && data.settings) {
+                              const canonical = resolveLyricsSettings(data.settings);
+                              setLyricsSettings(canonical);
+                              saveLyricsSettings(canonical);
+                            }
+                          } catch (err: any) {
+                            console.error('Failed to upload custom font:', err);
+                            alert(err.message || 'Failed to upload custom font file. Please ensure it is a valid TTF, OTF, WOFF, or WOFF2 file.');
                           }
                         }}
                         className="block w-full text-xs text-zinc-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-[#FF4FA3] file:text-white hover:file:bg-[#e03d90] cursor-pointer"

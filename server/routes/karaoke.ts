@@ -1,8 +1,11 @@
 import { Router } from 'express';
+import express from 'express';
+import fs from 'fs';
+import path from 'path';
 import { db } from '../db/index.js';
 import { sessions, controllers, queueItems, songs, artists, albums, songArtists, users, settings } from '../db/schema.js';
 import { eq, and, asc, or, inArray, like } from 'drizzle-orm';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import crypto from 'crypto';
 import { 
   notifyQueueUpdate, 
@@ -19,6 +22,52 @@ import { DEFAULT_LYRICS_SETTINGS, resolveLyricsSettings, LyricsAppearanceSetting
 
 const router = Router();
 router.use(requireAuth);
+
+const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
+const fontsDir = path.join(dataDir, 'fonts');
+if (!fs.existsSync(fontsDir)) {
+  fs.mkdirSync(fontsDir, { recursive: true });
+}
+
+function getFontMimeType(filenameOrExt: string): string {
+  const ext = path.extname(filenameOrExt).toLowerCase();
+  switch (ext) {
+    case '.ttf':
+      return 'font/ttf';
+    case '.otf':
+      return 'font/otf';
+    case '.woff':
+      return 'font/woff';
+    case '.woff2':
+      return 'font/woff2';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+function detectFontTypeFromBuffer(buf: Buffer): { ext: string; mime: string } | null {
+  if (!buf || buf.length < 4) return null;
+  if (buf[0] === 0x00 && buf[1] === 0x01 && buf[2] === 0x00 && buf[3] === 0x00) {
+    return { ext: '.ttf', mime: 'font/ttf' };
+  }
+  const magic4 = buf.subarray(0, 4).toString('ascii');
+  if (magic4 === 'true' || magic4 === 'typ1') {
+    return { ext: '.ttf', mime: 'font/ttf' };
+  }
+  if (magic4 === 'OTTO') {
+    return { ext: '.otf', mime: 'font/otf' };
+  }
+  if (magic4 === 'wOFF') {
+    return { ext: '.woff', mime: 'font/woff' };
+  }
+  if (magic4 === 'wOF2') {
+    return { ext: '.woff2', mime: 'font/woff2' };
+  }
+  if (magic4 === 'ttcf') {
+    return { ext: '.ttf', mime: 'font/ttf' };
+  }
+  return null;
+}
 
 function generateRoomCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -40,6 +89,283 @@ router.get('/settings/lyrics', async (req, res) => {
   } catch (error) {
     console.error('Failed to fetch lyric settings:', error);
     res.status(500).json({ error: 'Failed to fetch lyric settings' });
+  }
+});
+
+// Serve custom font file
+router.get(['/settings/lyrics/custom-font', '/settings/lyrics/custom-font/:fontId'], async (req, res) => {
+  try {
+    let targetFileName = req.params.fontId;
+    if (!targetFileName) {
+      const saved = await db.select().from(settings).where(eq(settings.key, 'lyrics_appearance_settings')).limit(1);
+      if (saved.length > 0 && saved[0].value) {
+        try {
+          const parsed = JSON.parse(saved[0].value);
+          targetFileName = parsed.customFontId;
+        } catch (e) {}
+      }
+    }
+
+    if (!targetFileName || typeof targetFileName !== 'string') {
+      return res.status(404).json({ error: 'No custom font configured' });
+    }
+
+    const safeBaseName = path.basename(targetFileName);
+    const filePath = path.join(fontsDir, safeBaseName);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Custom font file not found' });
+    }
+
+    const mime = getFontMimeType(safeBaseName);
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(safeBaseName)}"`);
+    return res.sendFile(filePath);
+  } catch (err) {
+    console.error('Failed to serve custom font:', err);
+    res.status(500).json({ error: 'Failed to serve custom font' });
+  }
+});
+
+// Upload and replace custom font file
+router.post(
+  '/settings/lyrics/custom-font',
+  requireAdmin,
+  express.raw({ type: ['font/*', 'application/x-font-*', 'application/font-*', 'application/octet-stream', 'application/json', 'multipart/form-data'], limit: '25mb' }),
+  async (req: any, res: any) => {
+    try {
+      let fontBuffer: Buffer | null = null;
+      let originalFilename = '';
+
+      const headerFilename = req.headers['x-font-filename'] ? decodeURIComponent(String(req.headers['x-font-filename'])) : '';
+      const queryFilename = typeof req.query.filename === 'string' ? req.query.filename : '';
+      originalFilename = headerFilename || queryFilename || '';
+
+      const contentType = req.headers['content-type'] || '';
+
+      if (Buffer.isBuffer(req.body)) {
+        if (contentType.includes('json') || (req.body.length > 0 && req.body[0] === 0x7B)) {
+          try {
+            const jsonBody = JSON.parse(req.body.toString('utf-8'));
+            const b64 = jsonBody.base64 || jsonBody.data || jsonBody.font || jsonBody.file;
+            if (jsonBody.filename || jsonBody.name) {
+              originalFilename = jsonBody.filename || jsonBody.name;
+            }
+            if (typeof b64 === 'string') {
+              const matches = b64.match(/^data:([^;]+);base64,(.+)$/);
+              if (matches) {
+                fontBuffer = Buffer.from(matches[2], 'base64');
+              } else {
+                fontBuffer = Buffer.from(b64, 'base64');
+              }
+            }
+          } catch (e) {
+            fontBuffer = req.body;
+          }
+        } else if (contentType.includes('multipart/form-data')) {
+          const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+          if (boundaryMatch) {
+            const boundary = boundaryMatch[1] || boundaryMatch[2];
+            const rawStr = req.body.toString('binary');
+            const parts = rawStr.split(`--${boundary}`);
+            for (const part of parts) {
+              const fnMatch = part.match(/filename="([^"]+)"/i);
+              if (fnMatch) {
+                originalFilename = fnMatch[1];
+                const headerEnd = part.indexOf('\r\n\r\n');
+                if (headerEnd !== -1) {
+                  let partData = part.substring(headerEnd + 4);
+                  if (partData.endsWith('\r\n')) {
+                    partData = partData.substring(0, partData.length - 2);
+                  }
+                  fontBuffer = Buffer.from(partData, 'binary');
+                  break;
+                }
+              }
+            }
+          }
+          if (!fontBuffer) {
+            fontBuffer = req.body;
+          }
+        } else {
+          fontBuffer = req.body;
+        }
+      } else if (req.body && typeof req.body === 'object') {
+        const b64 = req.body.base64 || req.body.data || req.body.font || req.body.file;
+        if (req.body.filename || req.body.name) {
+          originalFilename = req.body.filename || req.body.name;
+        }
+        if (typeof b64 === 'string') {
+          const matches = b64.match(/^data:([^;]+);base64,(.+)$/);
+          if (matches) {
+            fontBuffer = Buffer.from(matches[2], 'base64');
+          } else {
+            fontBuffer = Buffer.from(b64, 'base64');
+          }
+        }
+      }
+
+      if (!fontBuffer || fontBuffer.length === 0) {
+        return res.status(400).json({ error: 'No valid font file data provided.' });
+      }
+
+      if (fontBuffer.length > 25 * 1024 * 1024) {
+        return res.status(400).json({ error: 'Font file exceeds 25MB limit.' });
+      }
+
+      const detected = detectFontTypeFromBuffer(fontBuffer);
+      let ext = detected?.ext || '';
+      let mimeType = detected?.mime || '';
+
+      if (!ext && originalFilename) {
+        const fileExt = path.extname(originalFilename).toLowerCase();
+        if (['.ttf', '.otf', '.woff', '.woff2'].includes(fileExt)) {
+          ext = fileExt;
+          mimeType = getFontMimeType(fileExt);
+        }
+      }
+
+      if (!ext) {
+        return res.status(400).json({
+          error: 'Unsupported font format. Please upload a valid .ttf, .otf, .woff, or .woff2 font file.'
+        });
+      }
+
+      if (!originalFilename) {
+        originalFilename = `custom_font${ext}`;
+      }
+
+      const safeFontId = `font_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${ext}`;
+      const targetPath = path.join(fontsDir, safeFontId);
+
+      fs.writeFileSync(targetPath, fontBuffer);
+
+      const saved = await db.select().from(settings).where(eq(settings.key, 'lyrics_appearance_settings')).limit(1);
+      const current = saved.length > 0 && saved[0].value ? JSON.parse(saved[0].value) : { ...DEFAULT_LYRICS_SETTINGS };
+      const oldFontId = current.customFontId;
+
+      const rawBaseName = path.basename(originalFilename, path.extname(originalFilename));
+      const cleanBaseName = rawBaseName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'CustomFont';
+      const uniqueFontFamily = `YimlyCustom_${cleanBaseName}_${Date.now()}`;
+      const customFontUrl = `/api/karaoke/settings/lyrics/custom-font/${safeFontId}`;
+
+      const updatedSettings = resolveLyricsSettings({
+        ...current,
+        highlighted: {
+          ...current.highlighted,
+          font: 'custom'
+        },
+        unhighlighted: {
+          ...current.unhighlighted,
+          font: 'custom'
+        },
+        customFontName: uniqueFontFamily,
+        customFontFileName: originalFilename,
+        customFontId: safeFontId,
+        customFontUrl,
+        customFontMime: mimeType,
+        customFontUpdatedAt: Date.now()
+      });
+
+      const jsonStr = JSON.stringify(updatedSettings);
+
+      if (saved.length === 0) {
+        await db.insert(settings).values({ key: 'lyrics_appearance_settings', value: jsonStr });
+      } else {
+        await db.update(settings).set({ value: jsonStr }).where(eq(settings.key, 'lyrics_appearance_settings'));
+      }
+
+      try {
+        await db.update(sessions)
+          .set({ lyricSettings: jsonStr, updatedAt: new Date() })
+          .where(eq(sessions.status, 'active'));
+      } catch (e) {}
+
+      broadcastLyricSettingsToAllActiveRooms(updatedSettings);
+
+      if (oldFontId && oldFontId !== safeFontId) {
+        try {
+          const oldPath = path.join(fontsDir, path.basename(oldFontId));
+          if (fs.existsSync(oldPath)) {
+            fs.unlinkSync(oldPath);
+          }
+        } catch (delErr) {
+          console.warn('[KaraokeSettings] Failed to delete old custom font file:', delErr);
+        }
+      }
+
+      return res.json({
+        success: true,
+        settings: updatedSettings,
+        fontId: safeFontId,
+        fontUrl: customFontUrl,
+        fontName: uniqueFontFamily,
+        filename: originalFilename
+      });
+    } catch (error) {
+      console.error('Failed to upload custom font:', error);
+      res.status(500).json({ error: 'Failed to upload custom font' });
+    }
+  }
+);
+
+// Delete/remove custom font
+router.delete('/settings/lyrics/custom-font', requireAdmin, async (req: any, res: any) => {
+  try {
+    const saved = await db.select().from(settings).where(eq(settings.key, 'lyrics_appearance_settings')).limit(1);
+    const current = saved.length > 0 && saved[0].value ? JSON.parse(saved[0].value) : { ...DEFAULT_LYRICS_SETTINGS };
+    const oldFontId = current.customFontId;
+
+    const updatedSettings = resolveLyricsSettings({
+      ...current,
+      highlighted: {
+        ...current.highlighted,
+        font: current.highlighted?.font === 'custom' ? 'system' : current.highlighted?.font
+      },
+      unhighlighted: {
+        ...current.unhighlighted,
+        font: current.unhighlighted?.font === 'custom' ? 'system' : current.unhighlighted?.font
+      },
+      customFontName: null,
+      customFontFileName: null,
+      customFontId: null,
+      customFontUrl: null,
+      customFontMime: null,
+      customFontUpdatedAt: null
+    });
+
+    const jsonStr = JSON.stringify(updatedSettings);
+
+    if (saved.length === 0) {
+      await db.insert(settings).values({ key: 'lyrics_appearance_settings', value: jsonStr });
+    } else {
+      await db.update(settings).set({ value: jsonStr }).where(eq(settings.key, 'lyrics_appearance_settings'));
+    }
+
+    try {
+      await db.update(sessions)
+        .set({ lyricSettings: jsonStr, updatedAt: new Date() })
+        .where(eq(sessions.status, 'active'));
+    } catch (e) {}
+
+    broadcastLyricSettingsToAllActiveRooms(updatedSettings);
+
+    if (oldFontId) {
+      try {
+        const oldPath = path.join(fontsDir, path.basename(oldFontId));
+        if (fs.existsSync(oldPath)) {
+          fs.unlinkSync(oldPath);
+        }
+      } catch (delErr) {
+        console.warn('[KaraokeSettings] Failed to delete removed custom font file:', delErr);
+      }
+    }
+
+    return res.json({ success: true, settings: updatedSettings });
+  } catch (error) {
+    console.error('Failed to remove custom font:', error);
+    res.status(500).json({ error: 'Failed to remove custom font' });
   }
 });
 

@@ -19,6 +19,10 @@ const playlistCoversDir = path.join(dataDir, 'playlist_covers');
 if (!fs.existsSync(playlistCoversDir)) {
   fs.mkdirSync(playlistCoversDir, { recursive: true });
 }
+const fontsDir = path.join(dataDir, 'fonts');
+if (!fs.existsSync(fontsDir)) {
+  fs.mkdirSync(fontsDir, { recursive: true });
+}
 
 const dbPath = path.join(dataDir, 'yimly.db');
 

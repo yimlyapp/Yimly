@@ -21,6 +21,12 @@ export interface LyricsAppearanceSettings {
   elrcTransition?: ElrcTransition;
   elrcHighlightMode?: ElrcTransition | 'progressive_sweeping';
   wordHighlightAnimation?: 'smooth' | 'instant' | 'fade' | 'off';
+  customFontName?: string | null;
+  customFontFileName?: string | null;
+  customFontId?: string | null;
+  customFontUrl?: string | null;
+  customFontMime?: string | null;
+  customFontUpdatedAt?: number | null;
 }
 
 export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
@@ -50,7 +56,13 @@ export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
   animationDuration: 0.25,
   elrcTransition: 'smooth_sweep',
   elrcHighlightMode: 'smooth_sweep',
-  wordHighlightAnimation: 'smooth'
+  wordHighlightAnimation: 'smooth',
+  customFontName: null,
+  customFontFileName: null,
+  customFontId: null,
+  customFontUrl: null,
+  customFontMime: null,
+  customFontUpdatedAt: null
 };
 
 export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
@@ -98,6 +110,12 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
       if (rawMode === 'karaoke' || rawMode === 'current_only' || rawMode === 'instant') return rawMode;
       return DEFAULT_LYRICS_SETTINGS.elrcHighlightMode ?? 'smooth_sweep';
     })(),
-    wordHighlightAnimation: ['smooth', 'instant', 'fade', 'off'].includes(parsed.wordHighlightAnimation) ? parsed.wordHighlightAnimation : DEFAULT_LYRICS_SETTINGS.wordHighlightAnimation
+    wordHighlightAnimation: ['smooth', 'instant', 'fade', 'off'].includes(parsed.wordHighlightAnimation) ? parsed.wordHighlightAnimation : DEFAULT_LYRICS_SETTINGS.wordHighlightAnimation,
+    customFontName: typeof parsed.customFontName === 'string' && parsed.customFontName.trim() ? parsed.customFontName.trim() : null,
+    customFontFileName: typeof parsed.customFontFileName === 'string' && parsed.customFontFileName.trim() ? parsed.customFontFileName.trim() : null,
+    customFontId: typeof parsed.customFontId === 'string' && parsed.customFontId.trim() ? parsed.customFontId.trim() : null,
+    customFontUrl: typeof parsed.customFontUrl === 'string' && parsed.customFontUrl.trim() ? parsed.customFontUrl.trim() : null,
+    customFontMime: typeof parsed.customFontMime === 'string' && parsed.customFontMime.trim() ? parsed.customFontMime.trim() : null,
+    customFontUpdatedAt: typeof parsed.customFontUpdatedAt === 'number' && !isNaN(parsed.customFontUpdatedAt) ? parsed.customFontUpdatedAt : null
   };
 }
