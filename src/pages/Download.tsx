@@ -52,7 +52,7 @@ interface ActiveJob {
 }
 
 export default function DownloadMusic() {
-  const { user } = useOutletContext<{ user: any }>();
+  const { user } = useOutletContext<{ user: any }>() || {};
   const [inputVal, setInputVal] = useState('');
   const [resolving, setResolving] = useState(false);
   const [resolveError, setResolveError] = useState('');

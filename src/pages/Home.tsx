@@ -1,9 +1,10 @@
 import { useEffect, useState, useRef, ReactNode } from 'react';
 import { useOutletContext, Link, useNavigate } from 'react-router-dom';
 import { Play, Mic, Radio, Users, Music, Disc, ChevronRight, Plus, Sparkles, Folder, Download } from 'lucide-react';
+import LyricsEditorModal from '../components/LyricsEditorModal';
 
 export default function Home() {
-  const { user } = useOutletContext<{ user: any }>();
+  const { user } = useOutletContext<{ user: any }>() || {};
   const navigate = useNavigate();
   const [stats, setStats] = useState({ songs: 0, artists: 0, albums: 0 });
   const [activeSessions, setActiveSessions] = useState<any[]>([]);

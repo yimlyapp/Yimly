@@ -228,8 +228,30 @@ async function startServer() {
     const clientDist = fs.existsSync(path.resolve(__dirname, 'client'))
       ? path.resolve(__dirname, 'client')
       : path.resolve(process.cwd(), 'dist/client');
-    app.use(express.static(clientDist));
+
+    // Serve static files from clientDist (dist/client)
+    app.use(express.static(clientDist, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          res.setHeader('Pragma', 'no-cache');
+          res.setHeader('Expires', '0');
+        } else if (filePath.includes('/assets/')) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      }
+    }));
+
+    // Handle missing asset requests with 404 JSON error instead of falling back to SPA index.html
+    app.all('/assets/*', (req, res) => {
+      res.status(404).json({ error: 'Asset not found' });
+    });
+
+    // Fallback to index.html for SPA routes with no-cache headers
     app.get('*', (req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.sendFile(path.resolve(clientDist, 'index.html'));
     });
   }

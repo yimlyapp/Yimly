@@ -22,7 +22,7 @@ interface UserItem {
 }
 
 export default function Users() {
-  const { user } = useOutletContext<{ user: any }>();
+  const { user } = useOutletContext<{ user: any }>() || {};
   const [usersList, setUsersList] = useState<UserItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);

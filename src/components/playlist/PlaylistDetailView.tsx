@@ -44,6 +44,7 @@ interface PlaylistDetailViewProps {
   onReorderSong: (playlistSongId: number, direction: 'up' | 'down') => void;
   queuedSongId: number | null;
   playingAll?: boolean;
+  onOpenLyrics?: (songId: number, title: string, format: 'lrc' | 'elrc') => void;
 }
 
 export default function PlaylistDetailView({

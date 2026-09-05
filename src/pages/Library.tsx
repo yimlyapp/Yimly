@@ -11,7 +11,7 @@ import PlaylistsGrid from '../components/playlist/PlaylistsGrid';
 import PlaylistDetailView from '../components/playlist/PlaylistDetailView';
 
 export default function Library() {
-  const { user } = useOutletContext<{ user: any }>();
+  const { user } = useOutletContext<{ user: any }>() || {};
   const [tab, setTab] = useState<'artists' | 'albums' | 'songs' | 'playlists'>('artists');
   const [search, setSearch] = useState('');
   const [stats, setStats] = useState({ artists: 0, albums: 0, songs: 0, playlists: 0 });
@@ -549,6 +549,17 @@ export default function Library() {
             setPlaylists(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated } : p));
           }}
         />
+
+        <LyricsEditorModal
+          isOpen={editorState.isOpen}
+          songId={editorState.songId}
+          songTitle={editorState.title}
+          format={editorState.format}
+          onClose={() => setEditorState(prev => ({ ...prev, isOpen: false }))}
+          onSave={() => {
+            if (typeof loadAllData === 'function') loadAllData();
+          }}
+        />
       </>
     );
   }
@@ -697,6 +708,16 @@ export default function Library() {
             </table>
           </div>
         </div>
+        <LyricsEditorModal
+          isOpen={editorState.isOpen}
+          songId={editorState.songId}
+          songTitle={editorState.title}
+          format={editorState.format}
+          onClose={() => setEditorState(prev => ({ ...prev, isOpen: false }))}
+          onSave={() => {
+            if (typeof loadAllData === 'function') loadAllData();
+          }}
+        />
       </div>
     );
   }
@@ -794,6 +815,16 @@ export default function Library() {
             </tbody>
           </table>
         </div>
+        <LyricsEditorModal
+          isOpen={editorState.isOpen}
+          songId={editorState.songId}
+          songTitle={editorState.title}
+          format={editorState.format}
+          onClose={() => setEditorState(prev => ({ ...prev, isOpen: false }))}
+          onSave={() => {
+            if (typeof loadAllData === 'function') loadAllData();
+          }}
+        />
       </div>
     );
   }

@@ -845,11 +845,19 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
       const lrcClean = lrc.cleanBaseName;
 
       for (const songInfo of songsMap.values()) {
-        if (songInfo.lrc) continue;
+        if (lrc.isElrc) {
+          if (songInfo.elrc) continue;
+        } else {
+          if (songInfo.lrc) continue;
+        }
         const songTitleNorm = normalizeBaseName(songInfo.title);
 
         if (lrcBaseNorm === songTitleNorm || lrcClean === songTitleNorm || (songTitleNorm.length > 3 && lrcClean.includes(songTitleNorm))) {
-          songInfo.lrc = lrc.fullPath;
+          if (lrc.isElrc) {
+            songInfo.elrc = lrc.fullPath;
+          } else {
+            songInfo.lrc = lrc.fullPath;
+          }
           break;
         }
       }
@@ -955,10 +963,12 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
           elrcPath: song.elrc || null,
         });
       } else {
-        await db.update(lyrics).set({ 
-          lrcPath: song.lrc || '',
-          elrcPath: song.elrc || null
-        }).where(eq(lyrics.id, existingLrc[0].id));
+        const updates: any = {};
+        if (song.lrc) updates.lrcPath = song.lrc;
+        if (song.elrc) updates.elrcPath = song.elrc;
+        if (Object.keys(updates).length > 0) {
+          await db.update(lyrics).set(updates).where(eq(lyrics.id, existingLrc[0].id));
+        }
       }
     }
   }
