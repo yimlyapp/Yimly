@@ -5,6 +5,7 @@ import { eq, sql, isNotNull, and } from 'drizzle-orm';
 import { requireAuth } from '../middleware/auth.js';
 import { formatArtistDisplay } from '../lib/artist-utils.js';
 import { getSongArtistsMap } from './songs.js';
+import { checkLyricsPresenceForSong } from '../lib/lyrics-detection.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -65,7 +66,10 @@ router.get('/:id', async (req, res) => {
       duration: songs.duration,
       variant: songs.variant,
       artworkPath: songs.artworkPath,
-      hasLrc: lyrics.id,
+      mainAudioPath: songs.mainAudioPath,
+      instrumentalAudioPath: songs.instrumentalAudioPath,
+      lrcPath: lyrics.lrcPath,
+      elrcPath: lyrics.elrcPath,
     })
     .from(songs)
     .leftJoin(lyrics, eq(songs.id, lyrics.songId))
@@ -79,12 +83,14 @@ router.get('/:id', async (req, res) => {
       hasArtwork: !!albumRec[0].artworkPath,
       songs: albumSongs.map(s => {
         const trackArtists = artistsMap.get(s.id) || (albumRec[0].artist ? [{ id: albumRec[0].artistId, name: albumRec[0].artist }] : []);
+        const presence = checkLyricsPresenceForSong(s, { lrcPath: s.lrcPath, elrcPath: s.elrcPath });
         return {
           ...s,
           artist: formatArtistDisplay(trackArtists),
           artists: trackArtists,
           hasArtwork: !!s.artworkPath || !!albumRec[0].artworkPath,
-          hasLrc: !!s.hasLrc
+          hasLrc: presence.hasLrc,
+          hasElrc: presence.hasElrc,
         };
       }),
     });

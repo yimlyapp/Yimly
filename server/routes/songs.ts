@@ -8,6 +8,7 @@ import { broadcastSongOffsetToRooms } from '../ws/index.js';
 import { isLrcContentValid } from '../lib/lyrics.js';
 import fs from 'fs';
 import path from 'path';
+import { checkLyricsPresenceForSong } from '../lib/lyrics-detection.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -57,6 +58,8 @@ router.get('/', async (req, res) => {
       artworkPath: songs.artworkPath,
       albumArtworkPath: albums.artworkPath,
       lyricOffset: songs.lyricOffset,
+      mainAudioPath: songs.mainAudioPath,
+      instrumentalAudioPath: songs.instrumentalAudioPath,
     })
     .from(songs)
     .leftJoin(artists, eq(songs.artistId, artists.id))
@@ -69,24 +72,24 @@ router.get('/', async (req, res) => {
     const lyricsList = songIds.length > 0
       ? await db.select({ songId: lyrics.songId, lrcPath: lyrics.lrcPath, elrcPath: lyrics.elrcPath }).from(lyrics).where(inArray(lyrics.songId, songIds))
       : [];
-    const lyricsMap = new Map();
+    const lyricsMap = new Map<number, { lrcPath?: string | null; elrcPath?: string | null }>();
     for (const l of lyricsList) {
       lyricsMap.set(l.songId, {
-        hasLrc: !!l.lrcPath,
-        hasElrc: !!l.elrcPath
+        lrcPath: l.lrcPath,
+        elrcPath: l.elrcPath,
       });
     }
 
     const formatted = allSongs.map(s => {
       const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
-      const l = lyricsMap.get(s.id) || { hasLrc: false, hasElrc: false };
+      const presence = checkLyricsPresenceForSong(s, lyricsMap.get(s.id));
       return {
         ...s,
         artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : s.artist),
         artists: trackArtists,
         hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
-        hasLrc: l.hasLrc,
-        hasElrc: l.hasElrc
+        hasLrc: presence.hasLrc,
+        hasElrc: presence.hasElrc,
       };
     });
 
@@ -120,6 +123,8 @@ router.get('/search', async (req, res) => {
       albumId: songs.albumId,
       artworkPath: songs.artworkPath,
       albumArtworkPath: albums.artworkPath,
+      mainAudioPath: songs.mainAudioPath,
+      instrumentalAudioPath: songs.instrumentalAudioPath,
     })
     .from(songs)
     .leftJoin(artists, eq(songs.artistId, artists.id))
@@ -141,25 +146,25 @@ router.get('/search', async (req, res) => {
     const lyricsList = songIds.length > 0
       ? await db.select({ songId: lyrics.songId, lrcPath: lyrics.lrcPath, elrcPath: lyrics.elrcPath }).from(lyrics).where(inArray(lyrics.songId, songIds))
       : [];
-    const lyricsMap = new Map();
+    const lyricsMap = new Map<number, { lrcPath?: string | null; elrcPath?: string | null }>();
     for (const l of lyricsList) {
       lyricsMap.set(l.songId, {
-        hasLrc: !!l.lrcPath && l.lrcPath.trim().length > 0,
-        hasElrc: !!l.elrcPath && l.elrcPath.trim().length > 0
+        lrcPath: l.lrcPath,
+        elrcPath: l.elrcPath,
       });
     }
 
     const formatted = searchSongs.map(s => {
       const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
-      const l = lyricsMap.get(s.id) || { hasLrc: false, hasElrc: false };
+      const presence = checkLyricsPresenceForSong(s, lyricsMap.get(s.id));
       return {
         type: 'song',
         ...s,
         artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : s.artist),
         artists: trackArtists,
         hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
-        hasLrc: l.hasLrc,
-        hasElrc: l.hasElrc,
+        hasLrc: presence.hasLrc,
+        hasElrc: presence.hasElrc,
       };
     });
 
@@ -206,27 +211,18 @@ router.get('/:id', async (req, res) => {
 
     if (songRec.length === 0) return res.status(404).json({ error: 'Song not found' });
 
-    let hasElrc = !!songRec[0].elrcPath;
-    let hasLrc = !!songRec[0].lrcPath;
-    const audioPath = songRec[0].mainAudioPath || songRec[0].instrumentalAudioPath;
-    
-    // Fallback: check filesystem if not in db
-    if ((!hasLrc || !hasElrc) && audioPath && fs.existsSync(audioPath)) {
-      const dir = path.dirname(audioPath);
-      if (fs.existsSync(dir)) {
-        try {
-          const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-          const lrcEntries = entries.filter(e => e.isFile() && (e.name.toLowerCase().endsWith('.elrc.lrc') || e.name.toLowerCase().endsWith('.lrc')));
-          for (const e of lrcEntries) {
-            if (e.name.toLowerCase().endsWith('.elrc.lrc')) {
-              hasElrc = true;
-            } else if (e.name.toLowerCase().endsWith('.lrc')) {
-              hasLrc = true;
-            }
-          }
-        } catch (e) {}
+    const presence = checkLyricsPresenceForSong(
+      {
+        id: songRec[0].id,
+        title: songRec[0].title,
+        mainAudioPath: songRec[0].mainAudioPath,
+        instrumentalAudioPath: songRec[0].instrumentalAudioPath,
+      },
+      {
+        lrcPath: songRec[0].lrcPath,
+        elrcPath: songRec[0].elrcPath,
       }
-    }
+    );
 
     const artistsMap = await getSongArtistsMap([id]);
     const trackArtists = artistsMap.get(id) || (songRec[0].artist ? [{ id: songRec[0].artistId, name: songRec[0].artist }] : []);
@@ -239,8 +235,8 @@ router.get('/:id', async (req, res) => {
       artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : songRec[0].artist),
       artists: trackArtists,
       hasArtwork: !!songRec[0].artworkPath || !!songRec[0].albumArtworkPath,
-      hasLrc: hasLrc,
-      hasElrc: hasElrc,
+      hasLrc: presence.hasLrc,
+      hasElrc: presence.hasElrc,
       hasInstrumental: !!songRec[0].hasInstrumental,
       lrcOffset: lrcOffsetVal,
       elrcOffset: elrcOffsetVal,
@@ -660,15 +656,23 @@ const handleUploadOrUpdateLrc = async (req: AuthenticatedRequest, res: any) => {
     }
 
     const updatedLrc = await db.select().from(lyrics).where(eq(lyrics.songId, id)).limit(1);
-    const hasLrcNow = updatedLrc.length > 0 && !!updatedLrc[0].lrcPath && updatedLrc[0].lrcPath.trim().length > 0;
-    const hasElrcNow = updatedLrc.length > 0 && !!updatedLrc[0].elrcPath && updatedLrc[0].elrcPath.trim().length > 0;
+    const songRec = await db.select().from(songs).where(eq(songs.id, id)).limit(1);
+    const presence = songRec.length > 0
+      ? checkLyricsPresenceForSong(
+          { id, title: songRec[0].title, mainAudioPath: songRec[0].mainAudioPath, instrumentalAudioPath: songRec[0].instrumentalAudioPath },
+          updatedLrc[0] || null
+        )
+      : {
+          hasLrc: updatedLrc.length > 0 && !!updatedLrc[0].lrcPath && updatedLrc[0].lrcPath.trim().length > 0,
+          hasElrc: updatedLrc.length > 0 && !!updatedLrc[0].elrcPath && updatedLrc[0].elrcPath.trim().length > 0,
+        };
 
     res.json({
       success: true,
       songId: id,
       path: targetPath,
-      hasLrc: hasLrcNow,
-      hasElrc: hasElrcNow,
+      hasLrc: presence.hasLrc,
+      hasElrc: presence.hasElrc,
       content: lrcContent,
     });
   } catch (error) {
@@ -709,10 +713,18 @@ router.delete('/:id/lrc', requireAdmin, async (req: AuthenticatedRequest, res) =
     }
 
     const updatedLrc = await db.select().from(lyrics).where(eq(lyrics.songId, id)).limit(1);
-    const hasLrcNow = updatedLrc.length > 0 && !!updatedLrc[0].lrcPath && updatedLrc[0].lrcPath.trim().length > 0;
-    const hasElrcNow = updatedLrc.length > 0 && !!updatedLrc[0].elrcPath && updatedLrc[0].elrcPath.trim().length > 0;
+    const songRec = await db.select().from(songs).where(eq(songs.id, id)).limit(1);
+    const presence = songRec.length > 0
+      ? checkLyricsPresenceForSong(
+          { id, title: songRec[0].title, mainAudioPath: songRec[0].mainAudioPath, instrumentalAudioPath: songRec[0].instrumentalAudioPath },
+          updatedLrc[0] || null
+        )
+      : {
+          hasLrc: updatedLrc.length > 0 && !!updatedLrc[0].lrcPath && updatedLrc[0].lrcPath.trim().length > 0,
+          hasElrc: updatedLrc.length > 0 && !!updatedLrc[0].elrcPath && updatedLrc[0].elrcPath.trim().length > 0,
+        };
 
-    res.json({ success: true, songId: id, hasLrc: hasLrcNow, hasElrc: hasElrcNow });
+    res.json({ success: true, songId: id, hasLrc: presence.hasLrc, hasElrc: presence.hasElrc });
   } catch (error) {
     console.error('Failed to delete LRC:', error);
     res.status(500).json({ error: 'Failed to delete LRC lyrics' });
