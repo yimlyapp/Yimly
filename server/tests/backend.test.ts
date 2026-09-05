@@ -996,7 +996,8 @@ test('Enhanced LRC (eLRC) support test scenarios (Test A, B, C, D, E)', async ()
   assert.strictEqual(songCase1.length, 1);
   const lrcRecordCase1 = await db.select().from(lyrics).where(eq(lyrics.songId, songCase1[0].id)).limit(1);
   assert.strictEqual(lrcRecordCase1.length, 1);
-  assert.strictEqual(lrcRecordCase1[0].lrcPath.endsWith('.elrc.lrc'), true);
+  assert.strictEqual(lrcRecordCase1[0].lrcPath?.endsWith('.lrc'), true);
+  assert.strictEqual(lrcRecordCase1[0].elrcPath?.endsWith('.elrc.lrc'), true);
 
   const resCase1 = await fetch(`${baseUrl}/api/songs/${songCase1[0].id}/lyrics`);
   assert.strictEqual(resCase1.status, 200);
@@ -1262,7 +1263,7 @@ test('Issue 7: Automatically Monitor Media Folder for Changes', async () => {
   const songApiWithLyrics = await (await fetch(`${baseUrl}/api/songs/${dbSong1.id}`, {
     headers: { Authorization: `Bearer ${tokenA}` }
   })).json() as any;
-  assert.strictEqual(songApiWithLyrics.hasLrc, true);
+  assert.strictEqual(songApiWithLyrics.hasLrc, false);
   assert.strictEqual(songApiWithLyrics.hasElrc, true);
 
   // 4. Add nested album directory with 2 songs
@@ -1322,13 +1323,14 @@ test('Issue 7: Automatically Monitor Media Folder for Changes', async () => {
   assert.strictEqual(allDeleted, true, 'All deleted songs should be automatically removed from database');
 
   // Confirm orphaned artists and albums are cleaned up
-  const orphanedArtist1 = await db.select().from(artists).where(eq(artists.name, 'AutoArtist'));
-  const orphanedArtist2 = await db.select().from(artists).where(eq(artists.name, 'FolderArtist'));
-  const orphanedArtist3 = await db.select().from(artists).where(eq(artists.name, 'SlowArtist'));
+  const orphansCleaned = await helperWaitFor(async () => {
+    const a1 = await db.select().from(artists).where(eq(artists.name, 'AutoArtist'));
+    const a2 = await db.select().from(artists).where(eq(artists.name, 'FolderArtist'));
+    const a3 = await db.select().from(artists).where(eq(artists.name, 'SlowArtist'));
+    return a1.length === 0 && a2.length === 0 && a3.length === 0;
+  }, 8000, 300);
 
-  assert.strictEqual(orphanedArtist1.length, 0, 'AutoArtist should be cleaned up automatically');
-  assert.strictEqual(orphanedArtist2.length, 0, 'FolderArtist should be cleaned up automatically');
-  assert.strictEqual(orphanedArtist3.length, 0, 'SlowArtist should be cleaned up automatically');
+  assert.strictEqual(orphansCleaned, true, 'Orphaned artists should be cleaned up automatically');
 
   // 8. Delete Library via API and confirm watcher is unwatched
   const delLibRes = await fetch(`${baseUrl}/api/libraries/${watchLibId}`, {
@@ -1458,6 +1460,105 @@ test('Issue 7: Polling Fallback & Reconciliation when Native Inotify is Unavaila
 
   // Reset poll interval back to standard
   libraryWatcher.setPollInterval(3000);
+});
+
+test('Lyrics Font System: 9 built-in fonts, removed font fallback to manrope, and custom font preservation', async () => {
+  const { resolveLyricsSettings, DEFAULT_LYRICS_SETTINGS } = await import('../lib/lyrics-settings.js');
+  const token = (global as any).tokenTest;
+
+  // 1. Verify default font is manrope
+  assert.strictEqual(DEFAULT_LYRICS_SETTINGS.highlighted.font, 'manrope');
+  assert.strictEqual(DEFAULT_LYRICS_SETTINGS.unhighlighted.font, 'manrope');
+
+  // 2. Verify all 9 built-in fonts resolve directly
+  const builtInFonts = [
+    'manrope',
+    'sora',
+    'plus-jakarta-sans',
+    'instrument-serif',
+    'urbanist',
+    'cormorant-garamond',
+    'lobster',
+    'super-sale',
+    'huggable'
+  ];
+
+  for (const font of builtInFonts) {
+    const resolved = resolveLyricsSettings({
+      highlighted: { font },
+      unhighlighted: { font }
+    });
+    assert.strictEqual(resolved.highlighted.font, font);
+    assert.strictEqual(resolved.unhighlighted.font, font);
+
+    // Test API persistence
+    const putRes = await fetch(`${baseUrl}/api/karaoke/settings/lyrics`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(resolved)
+    });
+    assert.strictEqual(putRes.status, 200);
+
+    const getRes = await fetch(`${baseUrl}/api/karaoke/settings/lyrics`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    assert.strictEqual(getRes.status, 200);
+    const retrieved = await getRes.json();
+    assert.strictEqual(retrieved.settings.highlighted.font, font);
+    assert.strictEqual(retrieved.settings.unhighlighted.font, font);
+  }
+
+  // 3. Verify removed built-in fonts automatically fallback to manrope
+  const removedFonts = ['system', 'sans', 'serif', 'mono', 'display', 'rounded', 'helvetica', 'arial'];
+  for (const removedFont of removedFonts) {
+    const resolved = resolveLyricsSettings({
+      highlighted: { font: removedFont },
+      unhighlighted: { font: removedFont }
+    });
+    assert.strictEqual(resolved.highlighted.font, 'manrope', `Removed font "${removedFont}" must fall back to "manrope"`);
+    assert.strictEqual(resolved.unhighlighted.font, 'manrope', `Removed font "${removedFont}" must fall back to "manrope"`);
+
+    // PUT to API and ensure it's saved as manrope
+    const putRes = await fetch(`${baseUrl}/api/karaoke/settings/lyrics`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ highlighted: { font: removedFont }, unhighlighted: { font: removedFont } })
+    });
+    assert.strictEqual(putRes.status, 200);
+
+    const getRes = await fetch(`${baseUrl}/api/karaoke/settings/lyrics`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const retrieved = await getRes.json();
+    assert.strictEqual(retrieved.settings.highlighted.font, 'manrope');
+    assert.strictEqual(retrieved.settings.unhighlighted.font, 'manrope');
+  }
+
+  // 4. Verify Custom Font remains untouched and continues working
+  const customResolved = resolveLyricsSettings({
+    highlighted: { font: 'custom' },
+    unhighlighted: { font: 'custom' },
+    customFontName: 'MyStudioFont',
+    customFontFileName: 'MyStudioFont.woff2'
+  });
+  assert.strictEqual(customResolved.highlighted.font, 'custom');
+  assert.strictEqual(customResolved.unhighlighted.font, 'custom');
+  assert.strictEqual(customResolved.customFontName, 'MyStudioFont');
+
+  const putCustomRes = await fetch(`${baseUrl}/api/karaoke/settings/lyrics`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(customResolved)
+  });
+  assert.strictEqual(putCustomRes.status, 200);
+
+  const getCustomRes = await fetch(`${baseUrl}/api/karaoke/settings/lyrics`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const customRetrieved = await getCustomRes.json();
+  assert.strictEqual(customRetrieved.settings.highlighted.font, 'custom');
+  assert.strictEqual(customRetrieved.settings.unhighlighted.font, 'custom');
+  assert.strictEqual(customRetrieved.settings.customFontName, 'MyStudioFont');
 });
 
 test('Close server', async () => {

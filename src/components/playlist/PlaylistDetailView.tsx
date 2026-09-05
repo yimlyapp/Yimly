@@ -23,6 +23,7 @@ import {
   Shield
 } from 'lucide-react';
 import { Playlist, PlaylistSongItem } from '../../types';
+import LyricBadges from '../LyricBadges';
 
 interface PlaylistDetailViewProps {
   playlist: Playlist;
@@ -408,18 +409,13 @@ export default function PlaylistDetailView({
                         )}
                       </div>
 
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex items-center gap-2">
                         <span className="truncate block">{song.title}</span>
-                        {song.hasLrc && (
-                          <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); onOpenLyrics && onOpenLyrics(song.id, song.title, 'lrc'); }} className="inline-block px-1.5 py-0.2 rounded text-[8px] font-bold uppercase tracking-wider bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/25 mt-0.5 hover:bg-[#FF4FA3]/30 transition-colors cursor-pointer">
-                            LRC
-                          </button>
-                        )}
-                        {song.hasElrc && (
-                          <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); onOpenLyrics && onOpenLyrics(song.id, song.title, 'elrc'); }} className="inline-block px-1.5 py-0.2 rounded text-[8px] font-bold uppercase tracking-wider bg-[#3B82F6]/15 text-[#3B82F6] border border-[#3B82F6]/25 mt-0.5 hover:bg-[#3B82F6]/30 transition-colors cursor-pointer">
-                            ELRC
-                          </button>
-                        )}
+                        <LyricBadges
+                          hasLrc={song.hasLrc}
+                          hasElrc={song.hasElrc}
+                          onOpenLyrics={(format) => onOpenLyrics?.(song.id, song.title, format)}
+                        />
                       </div>
                     </td>
 

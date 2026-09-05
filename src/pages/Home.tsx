@@ -1,7 +1,6 @@
 import { useEffect, useState, useRef, ReactNode } from 'react';
 import { useOutletContext, Link, useNavigate } from 'react-router-dom';
 import { Play, Mic, Radio, Users, Music, Disc, ChevronRight, Plus, Sparkles, Folder, Download } from 'lucide-react';
-import LyricsEditorModal from '../components/LyricsEditorModal';
 
 export default function Home() {
   const { user } = useOutletContext<{ user: any }>() || {};
@@ -10,7 +9,6 @@ export default function Home() {
   const [activeSessions, setActiveSessions] = useState<any[]>([]);
   const [featuredSongs, setFeaturedSongs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editorState, setEditorState] = useState<{isOpen: boolean, songId: number | null, title: string, format: 'lrc'|'elrc'}>({isOpen: false, songId: null, title: '', format: 'lrc'});
   const hostButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -349,18 +347,6 @@ export default function Home() {
                     ) : (
                       <Disc className="w-10 h-10 text-zinc-600 group-hover:text-[#FF4FA3] transition-colors" />
                     )}
-                    <div className="absolute top-2 right-2 flex gap-1 z-10">
-                      {song.hasLrc && (
-                        <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditorState({isOpen: true, songId: song.id, title: song.title, format: 'lrc'}); }} className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/20 text-[#FF4FA3] border border-[#FF4FA3]/30 backdrop-blur hover:bg-[#FF4FA3]/30 transition-colors cursor-pointer">
-                          LRC
-                        </button>
-                      )}
-                      {song.hasElrc && (
-                        <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditorState({isOpen: true, songId: song.id, title: song.title, format: 'elrc'}); }} className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#3B82F6]/20 text-[#3B82F6] border border-[#3B82F6]/30 backdrop-blur hover:bg-[#3B82F6]/30 transition-colors cursor-pointer">
-                          ELRC
-                        </button>
-                      )}
-                    </div>
                   </div>
                   <h3 className="font-semibold text-sm text-white truncate group-hover:text-[#FF4FA3] transition-colors">
                     {song.title}
@@ -383,14 +369,6 @@ export default function Home() {
           </div>
         </div>
       )}
-      <LyricsEditorModal
-        isOpen={editorState.isOpen}
-        songId={editorState.songId}
-        songTitle={editorState.title}
-        format={editorState.format}
-        onClose={() => setEditorState(prev => ({ ...prev, isOpen: false }))}
-        onSave={() => window.location.reload()}
-      />
     </div>
   );
 }

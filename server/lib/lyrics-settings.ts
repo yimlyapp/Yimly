@@ -31,7 +31,7 @@ export interface LyricsAppearanceSettings {
 
 export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
   highlighted: {
-    font: 'system',
+    font: 'manrope',
     size: 48,
     weight: '800',
     letterSpacing: -1,
@@ -41,7 +41,7 @@ export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
     color: '#FF4FA3'
   },
   unhighlighted: {
-    font: 'system',
+    font: 'manrope',
     size: 20,
     weight: '500',
     opacity: 0.45,
@@ -65,6 +65,25 @@ export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
   customFontUpdatedAt: null
 };
 
+export function sanitizeLyricsFont(fontVal: any): string {
+  if (typeof fontVal !== 'string' || !fontVal.trim()) {
+    return 'manrope';
+  }
+  const norm = fontVal.toLowerCase().trim().replace(/_/g, '-').replace(/\s+/g, '-');
+  if (norm === 'custom') return 'custom';
+  if (norm === 'manrope') return 'manrope';
+  if (norm === 'sora') return 'sora';
+  if (norm === 'plus-jakarta-sans' || norm === 'plusjakartasans') return 'plus-jakarta-sans';
+  if (norm === 'instrument-serif' || norm === 'instrumentserif') return 'instrument-serif';
+  if (norm === 'urbanist') return 'urbanist';
+  if (norm === 'cormorant-garamond' || norm === 'cormorantgaramond') return 'cormorant-garamond';
+  if (norm === 'lobster') return 'lobster';
+  if (norm === 'super-sale' || norm === 'supersale') return 'super-sale';
+  if (norm === 'huggable') return 'huggable';
+  // Obsolete built-in font (e.g. system, sans, serif, mono, display, rounded) or unknown -> fallback to manrope
+  return 'manrope';
+}
+
 export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
   const parsed = (raw && typeof raw === 'object') ? raw : {};
   const high = (parsed.highlighted && typeof parsed.highlighted === 'object') ? parsed.highlighted : {};
@@ -75,7 +94,7 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
 
   return {
     highlighted: {
-      font: typeof high.font === 'string' && high.font.trim() ? high.font.trim() : DEFAULT_LYRICS_SETTINGS.highlighted.font,
+      font: sanitizeLyricsFont(high.font),
       size: typeof high.size === 'number' && !isNaN(high.size) ? high.size : DEFAULT_LYRICS_SETTINGS.highlighted.size,
       weight: high.weight ? String(high.weight) : DEFAULT_LYRICS_SETTINGS.highlighted.weight,
       letterSpacing: typeof high.letterSpacing === 'number' && !isNaN(high.letterSpacing) ? high.letterSpacing : DEFAULT_LYRICS_SETTINGS.highlighted.letterSpacing,
@@ -85,7 +104,7 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
       color: typeof high.color === 'string' && high.color.trim() ? high.color.trim() : DEFAULT_LYRICS_SETTINGS.highlighted.color
     },
     unhighlighted: {
-      font: typeof unhigh.font === 'string' && unhigh.font.trim() ? unhigh.font.trim() : DEFAULT_LYRICS_SETTINGS.unhighlighted.font,
+      font: sanitizeLyricsFont(unhigh.font),
       size: typeof unhigh.size === 'number' && !isNaN(unhigh.size) ? unhigh.size : DEFAULT_LYRICS_SETTINGS.unhighlighted.size,
       weight: unhigh.weight ? String(unhigh.weight) : DEFAULT_LYRICS_SETTINGS.unhighlighted.weight,
       letterSpacing: typeof unhigh.letterSpacing === 'number' && !isNaN(unhigh.letterSpacing) ? unhigh.letterSpacing : DEFAULT_LYRICS_SETTINGS.unhighlighted.letterSpacing,

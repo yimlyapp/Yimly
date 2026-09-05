@@ -9,6 +9,7 @@ import SharePlaylistModal from '../components/playlist/SharePlaylistModal';
 import AddSongsModal from '../components/playlist/AddSongsModal';
 import PlaylistsGrid from '../components/playlist/PlaylistsGrid';
 import PlaylistDetailView from '../components/playlist/PlaylistDetailView';
+import LyricBadges from '../components/LyricBadges';
 
 export default function Library() {
   const { user } = useOutletContext<{ user: any }>() || {};
@@ -81,6 +82,96 @@ export default function Library() {
       setError(err.message || 'Failed to load library data');
       setLoading(false);
     }
+  };
+
+  const handleLyricsUpdated = (updatedSongId?: number, format?: 'lrc' | 'elrc', exists?: boolean) => {
+    if (updatedSongId && format !== undefined && exists !== undefined) {
+      // 1. Immediately update Main Songs list
+      setSongs(prev => prev.map(s => {
+        if (s.id === updatedSongId) {
+          return {
+            ...s,
+            hasLrc: format === 'lrc' ? exists : s.hasLrc,
+            hasElrc: format === 'elrc' ? exists : s.hasElrc,
+          };
+        }
+        return s;
+      }));
+
+      // 2. Immediately update Selected Artist tracks
+      setSelectedArtist((prev: any) => {
+        if (!prev || !prev.songs) return prev;
+        return {
+          ...prev,
+          songs: prev.songs.map((s: any) => {
+            if (s.id === updatedSongId) {
+              return {
+                ...s,
+                hasLrc: format === 'lrc' ? exists : s.hasLrc,
+                hasElrc: format === 'elrc' ? exists : s.hasElrc,
+              };
+            }
+            return s;
+          })
+        };
+      });
+
+      // 3. Immediately update Selected Album tracks
+      setSelectedAlbum((prev: any) => {
+        if (!prev || !prev.songs) return prev;
+        return {
+          ...prev,
+          songs: prev.songs.map((s: any) => {
+            if (s.id === updatedSongId) {
+              return {
+                ...s,
+                hasLrc: format === 'lrc' ? exists : s.hasLrc,
+                hasElrc: format === 'elrc' ? exists : s.hasElrc,
+              };
+            }
+            return s;
+          })
+        };
+      });
+
+      // 4. Immediately update Selected Playlist tracks
+      setSelectedPlaylist((prev: any) => {
+        if (!prev || !prev.songs) return prev;
+        return {
+          ...prev,
+          songs: prev.songs.map((s: any) => {
+            if (s.id === updatedSongId) {
+              return {
+                ...s,
+                hasLrc: format === 'lrc' ? exists : s.hasLrc,
+                hasElrc: format === 'elrc' ? exists : s.hasElrc,
+              };
+            }
+            return s;
+          })
+        };
+      });
+
+      // 5. Immediately update Search Results tracks
+      setSearchResults(prev => prev.map((item: any) => {
+        if (item.type === 'song' && item.id === updatedSongId) {
+          return {
+            ...item,
+            hasLrc: format === 'lrc' ? exists : item.hasLrc,
+            hasElrc: format === 'elrc' ? exists : item.hasElrc,
+          };
+        }
+        return item;
+      }));
+    }
+
+    // Background sync without disrupting current UI view
+    fetch('/api/songs')
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) setSongs(data);
+      })
+      .catch(() => {});
   };
 
   useEffect(() => {
@@ -556,9 +647,7 @@ export default function Library() {
           songTitle={editorState.title}
           format={editorState.format}
           onClose={() => setEditorState(prev => ({ ...prev, isOpen: false }))}
-          onSave={() => {
-            if (typeof loadAllData === 'function') loadAllData();
-          }}
+          onSave={handleLyricsUpdated}
         />
       </>
     );
@@ -669,22 +758,11 @@ export default function Library() {
                           )}
                         </div>
                         <span className="truncate">{song.title}</span>
-                        {song.hasLrc && (
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); setEditorState({ isOpen: true, songId: song.id, title: song.title, format: 'lrc' }); }}
-                              className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/25 shrink-0 hover:bg-[#FF4FA3]/30 transition-colors cursor-pointer"
-                            >
-                              LRC
-                            </button>
-                          )}
-                          {song.hasElrc && (
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); setEditorState({ isOpen: true, songId: song.id, title: song.title, format: 'elrc' }); }}
-                              className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#3B82F6]/15 text-[#3B82F6] border border-[#3B82F6]/25 shrink-0 hover:bg-[#3B82F6]/30 transition-colors cursor-pointer"
-                            >
-                              ELRC
-                            </button>
-                          )}
+                        <LyricBadges
+                          hasLrc={song.hasLrc}
+                          hasElrc={song.hasElrc}
+                          onOpenLyrics={(format) => setEditorState({ isOpen: true, songId: song.id, title: song.title, format })}
+                        />
                       </td>
                       <td className="px-5 py-3.5 text-zinc-400 text-xs font-mono">{formatDuration(song.duration)}</td>
                       <td className="px-5 py-3.5 text-zinc-400 text-xs capitalize">{song.variant}</td>
@@ -714,9 +792,7 @@ export default function Library() {
           songTitle={editorState.title}
           format={editorState.format}
           onClose={() => setEditorState(prev => ({ ...prev, isOpen: false }))}
-          onSave={() => {
-            if (typeof loadAllData === 'function') loadAllData();
-          }}
+          onSave={handleLyricsUpdated}
         />
       </div>
     );
@@ -778,22 +854,11 @@ export default function Library() {
                     <td className="px-5 py-3.5 text-zinc-500 font-mono text-xs">{song.trackNumber || idx + 1}</td>
                     <td className="px-5 py-3.5 font-medium text-white flex items-center gap-3">
                       <span>{song.title}</span>
-                      {song.hasLrc && (
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); setEditorState({ isOpen: true, songId: song.id, title: song.title, format: 'lrc' }); }}
-                          className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/25 hover:bg-[#FF4FA3]/30 transition-colors cursor-pointer"
-                        >
-                          LRC
-                        </button>
-                      )}
-                      {song.hasElrc && (
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); setEditorState({ isOpen: true, songId: song.id, title: song.title, format: 'elrc' }); }}
-                          className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#3B82F6]/15 text-[#3B82F6] border border-[#3B82F6]/25 hover:bg-[#3B82F6]/30 transition-colors cursor-pointer"
-                        >
-                          ELRC
-                        </button>
-                      )}
+                      <LyricBadges
+                        hasLrc={song.hasLrc}
+                        hasElrc={song.hasElrc}
+                        onOpenLyrics={(format) => setEditorState({ isOpen: true, songId: song.id, title: song.title, format })}
+                      />
                     </td>
                     <td className="px-5 py-3.5 text-zinc-400 font-mono text-xs">{formatDuration(song.duration)}</td>
                     <td className="px-5 py-3.5 text-right">
@@ -821,9 +886,7 @@ export default function Library() {
           songTitle={editorState.title}
           format={editorState.format}
           onClose={() => setEditorState(prev => ({ ...prev, isOpen: false }))}
-          onSave={() => {
-            if (typeof loadAllData === 'function') loadAllData();
-          }}
+          onSave={handleLyricsUpdated}
         />
       </div>
     );
@@ -942,6 +1005,13 @@ export default function Library() {
                         )}
                       </div>
                       <span className="truncate">{item.title || item.name}</span>
+                      {item.type === 'song' && (
+                        <LyricBadges
+                          hasLrc={item.hasLrc}
+                          hasElrc={item.hasElrc}
+                          onOpenLyrics={(format) => setEditorState({ isOpen: true, songId: item.id, title: item.title, format })}
+                        />
+                      )}
                     </td>
                     <td className="px-5 py-3.5 text-zinc-400 text-xs">
                       {item.type === 'song' ? renderArtistLinks(item) : (item.artist || item.album || '—')}
@@ -1106,22 +1176,11 @@ export default function Library() {
                             )}
                           </div>
                           <span className="truncate" title={song.title}>{song.title}</span>
-                          {song.hasLrc && (
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); setEditorState({ isOpen: true, songId: song.id, title: song.title, format: 'lrc' }); }}
-                              className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/25 shrink-0 hover:bg-[#FF4FA3]/30 transition-colors cursor-pointer"
-                            >
-                              LRC
-                            </button>
-                          )}
-                          {song.hasElrc && (
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); setEditorState({ isOpen: true, songId: song.id, title: song.title, format: 'elrc' }); }}
-                              className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[#3B82F6]/15 text-[#3B82F6] border border-[#3B82F6]/25 shrink-0 hover:bg-[#3B82F6]/30 transition-colors cursor-pointer"
-                            >
-                              ELRC
-                            </button>
-                          )}
+                          <LyricBadges
+                            hasLrc={song.hasLrc}
+                            hasElrc={song.hasElrc}
+                            onOpenLyrics={(format) => setEditorState({ isOpen: true, songId: song.id, title: song.title, format })}
+                          />
                         </td>
                         <td className="px-5 py-3.5 text-zinc-300 text-xs truncate max-w-xs" title={song.artist}>
                           {renderArtistLinks(song)}
@@ -1226,9 +1285,7 @@ export default function Library() {
         songTitle={editorState.title}
         format={editorState.format}
         onClose={() => setEditorState(prev => ({ ...prev, isOpen: false }))}
-        onSave={() => {
-          if (typeof loadAllData === 'function') loadAllData();
-        }}
+        onSave={handleLyricsUpdated}
       />
     </div>
   );

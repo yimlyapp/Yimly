@@ -432,8 +432,8 @@ export default function Settings() {
                                 customFontUrl: null,
                                 customFontMime: null,
                                 customFontUpdatedAt: null,
-                                highlighted: { ...prev.highlighted, font: 'system' },
-                                unhighlighted: { ...prev.unhighlighted, font: 'system' }
+                                highlighted: { ...prev.highlighted, font: 'manrope' },
+                                unhighlighted: { ...prev.unhighlighted, font: 'manrope' }
                               }));
                             }}
                             className="text-xs text-rose-400 hover:text-rose-300 underline"

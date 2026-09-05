@@ -8,13 +8,14 @@ interface LyricsEditorModalProps {
   songTitle: string;
   format: 'lrc' | 'elrc';
   onClose: () => void;
-  onSave: () => void;
+  onSave: (songId?: number, format?: 'lrc' | 'elrc', exists?: boolean) => void;
 }
 
 export default function LyricsEditorModal({ isOpen, songId, songTitle, format, onClose, onSave }: LyricsEditorModalProps) {
   const [content, setContent] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isNew, setIsNew] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -22,12 +23,17 @@ export default function LyricsEditorModal({ isOpen, songId, songTitle, format, o
       setIsLoading(true);
       setError('');
       setContent('');
+      setIsNew(false);
       fetch(`/api/songs/${songId}/lyrics?format=${format}`)
         .then(res => {
           if (!res.ok) {
-            if (res.status === 404) return ''; // No existing lyrics, start empty
+            if (res.status === 404) {
+              setIsNew(true);
+              return ''; // No existing lyrics, start empty in create mode
+            }
             throw new Error('Failed to fetch lyrics');
           }
+          setIsNew(false);
           return res.text();
         })
         .then(text => {
@@ -51,11 +57,32 @@ export default function LyricsEditorModal({ isOpen, songId, songTitle, format, o
         headers: { 'Content-Type': 'text/plain' },
         body: content,
       });
-      if (!res.ok) throw new Error('Failed to save lyrics');
-      onSave();
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to save lyrics');
+      }
+      onSave(songId, format, true);
       onClose();
-    } catch (err) {
-      setError('An error occurred while saving.');
+    } catch (err: any) {
+      setError(err?.message || 'An error occurred while saving.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!songId || !window.confirm('Are you sure you want to delete these lyrics?')) return;
+    setIsSaving(true);
+    try {
+      const res = await fetch(`/api/songs/${songId}/lrc?format=${format}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to delete');
+      }
+      onSave(songId, format, false);
+      onClose();
+    } catch (e: any) {
+      setError(e?.message || 'Failed to delete.');
     } finally {
       setIsSaving(false);
     }
@@ -79,11 +106,20 @@ export default function LyricsEditorModal({ isOpen, songId, songTitle, format, o
         >
           <div className="flex items-center justify-between p-6 border-b border-white/10 bg-[#12131C]">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-[#FF4FA3]/15 flex items-center justify-center text-[#FF4FA3]">
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                format === 'elrc' ? 'bg-[#3B82F6]/15 text-[#3B82F6]' : 'bg-[#FF4FA3]/15 text-[#FF4FA3]'
+              }`}>
                 <Music className="w-5 h-5" />
               </div>
               <div>
-                <h2 className="text-xl font-bold text-white">Edit {format === 'elrc' ? 'ELRC' : 'LRC'} Lyrics</h2>
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <span>{isNew ? 'Create' : 'Edit'} {format === 'elrc' ? 'ELRC' : 'LRC'} Lyrics</span>
+                  {isNew && (
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                      New File
+                    </span>
+                  )}
+                </h2>
                 <p className="text-sm text-zinc-400 truncate max-w-sm">{songTitle}</p>
               </div>
             </div>
@@ -103,50 +139,54 @@ export default function LyricsEditorModal({ isOpen, songId, songTitle, format, o
             )}
             
             {isLoading ? (
-              <div className="flex-1 flex items-center justify-center text-zinc-400">Loading existing lyrics...</div>
+              <div className="flex-1 flex items-center justify-center text-zinc-400">Loading lyrics...</div>
             ) : (
               <textarea
                 value={content}
                 onChange={e => setContent(e.target.value)}
-                placeholder={format === 'elrc' ? "[00:00.00] <00:00.00>Word <00:01.00>word" : "[00:00.00] Line"}
+                placeholder={
+                  format === 'elrc'
+                    ? "[00:00.00] <00:00.00>Enter <00:00.50>word-synced <00:01.00>ELRC <00:01.50>lyrics\n[00:02.00] <00:02.00>Next <00:02.50>line..."
+                    : "[00:00.00] Enter line-synced LRC lyrics here\n[00:04.00] Next line..."
+                }
                 className="flex-1 w-full bg-black/40 border border-white/10 rounded-xl p-4 text-zinc-300 font-mono text-sm focus:outline-none focus:border-[#FF4FA3]/50 focus:ring-1 focus:ring-[#FF4FA3]/50 resize-none"
                 spellCheck={false}
               />
             )}
           </div>
 
-          <div className="p-6 border-t border-white/10 bg-[#12131C] flex items-center justify-end gap-3">
-            <button
-              onClick={onClose}
-              className="px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-white/5 hover:bg-white/10 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={isSaving || isLoading}
-              className="px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-[#FF4FA3] hover:bg-[#FF4FA3]/90 transition-colors flex items-center gap-2 disabled:opacity-50"
-            >
-              <Save className="w-4 h-4" />
-              {isSaving ? 'Saving...' : 'Save Lyrics'}
-            </button>
-            <button
-              onClick={async () => {
-                if (!songId || !window.confirm('Are you sure you want to delete these lyrics?')) return;
-                setIsSaving(true);
-                try {
-                  const res = await fetch(`/api/songs/${songId}/lrc?format=${format}`, { method: 'DELETE' });
-                  if (!res.ok) throw new Error('Failed to delete');
-                  onSave();
-                  onClose();
-                } catch (e) { setError('Failed to delete.'); }
-                finally { setIsSaving(false); }
-              }}
-              disabled={isSaving || isLoading}
-              className="px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-red-500 hover:bg-red-600 transition-colors flex items-center gap-2 disabled:opacity-50"
-            >
-              Delete
-            </button>
+          <div className="p-6 border-t border-white/10 bg-[#12131C] flex items-center justify-between gap-3">
+            <div>
+              {!isNew && (
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  disabled={isSaving || isLoading}
+                  className="px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-red-500/80 hover:bg-red-600 transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  Delete File
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-white/5 hover:bg-white/10 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={isSaving || isLoading}
+                className="px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-[#FF4FA3] hover:bg-[#FF4FA3]/90 transition-colors flex items-center gap-2 disabled:opacity-50 shadow-lg shadow-[#FF4FA3]/20"
+              >
+                <Save className="w-4 h-4" />
+                {isSaving ? 'Saving...' : (isNew ? `Create ${format === 'elrc' ? 'ELRC' : 'LRC'} File` : 'Save Lyrics')}
+              </button>
+            </div>
           </div>
         </motion.div>
       </motion.div>

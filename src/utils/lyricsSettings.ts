@@ -1,7 +1,7 @@
 import { loadAndRegisterCustomFont } from './customFontStorage';
 
 export interface LyricStyleSettings {
-  font: string; // 'system' | 'sans' | 'serif' | 'mono' | 'display' | 'rounded'
+  font: string; // 'manrope' | 'sora' | 'plus-jakarta-sans' | 'instrument-serif' | 'urbanist' | 'cormorant-garamond' | 'lobster' | 'super-sale' | 'huggable' | 'custom'
   size: number; // in px, e.g. 48
   weight: string; // '100' | '300' | '400' | '500' | '600' | '700' | '800' | '900'
   letterSpacing: number; // in px, e.g. -1, 0, 1, 2
@@ -33,7 +33,7 @@ export interface LyricsAppearanceSettings {
 
 export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
   highlighted: {
-    font: 'system',
+    font: 'manrope',
     size: 48,
     weight: '800',
     letterSpacing: -1,
@@ -43,7 +43,7 @@ export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
     color: '#FF4FA3'
   },
   unhighlighted: {
-    font: 'system',
+    font: 'manrope',
     size: 20,
     weight: '500',
     opacity: 0.45,
@@ -69,6 +69,25 @@ export const DEFAULT_LYRICS_SETTINGS: LyricsAppearanceSettings = {
 
 const STORAGE_KEY = 'yimly_lyrics_appearance_settings_v1';
 
+export function sanitizeLyricsFont(fontVal: any): string {
+  if (typeof fontVal !== 'string' || !fontVal.trim()) {
+    return 'manrope';
+  }
+  const norm = fontVal.toLowerCase().trim().replace(/_/g, '-').replace(/\s+/g, '-');
+  if (norm === 'custom') return 'custom';
+  if (norm === 'manrope') return 'manrope';
+  if (norm === 'sora') return 'sora';
+  if (norm === 'plus-jakarta-sans' || norm === 'plusjakartasans') return 'plus-jakarta-sans';
+  if (norm === 'instrument-serif' || norm === 'instrumentserif') return 'instrument-serif';
+  if (norm === 'urbanist') return 'urbanist';
+  if (norm === 'cormorant-garamond' || norm === 'cormorantgaramond') return 'cormorant-garamond';
+  if (norm === 'lobster') return 'lobster';
+  if (norm === 'super-sale' || norm === 'supersale') return 'super-sale';
+  if (norm === 'huggable') return 'huggable';
+  // Any removed built-in font (system, sans, serif, mono, display, rounded) or unknown -> fallback to manrope
+  return 'manrope';
+}
+
 /**
  * Deeply validates, sanitizes, and completes any partial or raw settings object
  * into the canonical full LyricsAppearanceSettings structure.
@@ -83,7 +102,7 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
 
   const resolved: LyricsAppearanceSettings = {
     highlighted: {
-      font: typeof high.font === 'string' && high.font.trim() ? high.font.trim() : DEFAULT_LYRICS_SETTINGS.highlighted.font,
+      font: sanitizeLyricsFont(high.font),
       size: typeof high.size === 'number' && !isNaN(high.size) ? high.size : DEFAULT_LYRICS_SETTINGS.highlighted.size,
       weight: high.weight ? String(high.weight) : DEFAULT_LYRICS_SETTINGS.highlighted.weight,
       letterSpacing: typeof high.letterSpacing === 'number' && !isNaN(high.letterSpacing) ? high.letterSpacing : DEFAULT_LYRICS_SETTINGS.highlighted.letterSpacing,
@@ -93,7 +112,7 @@ export function resolveLyricsSettings(raw?: any): LyricsAppearanceSettings {
       color: typeof high.color === 'string' && high.color.trim() ? high.color.trim() : DEFAULT_LYRICS_SETTINGS.highlighted.color
     },
     unhighlighted: {
-      font: typeof unhigh.font === 'string' && unhigh.font.trim() ? unhigh.font.trim() : DEFAULT_LYRICS_SETTINGS.unhighlighted.font,
+      font: sanitizeLyricsFont(unhigh.font),
       size: typeof unhigh.size === 'number' && !isNaN(unhigh.size) ? unhigh.size : DEFAULT_LYRICS_SETTINGS.unhighlighted.size,
       weight: unhigh.weight ? String(unhigh.weight) : DEFAULT_LYRICS_SETTINGS.unhighlighted.weight,
       letterSpacing: typeof unhigh.letterSpacing === 'number' && !isNaN(unhigh.letterSpacing) ? unhigh.letterSpacing : DEFAULT_LYRICS_SETTINGS.unhighlighted.letterSpacing,
@@ -246,44 +265,49 @@ export interface LyricFontOption {
 
 export const LYRICS_FONT_OPTIONS: LyricFontOption[] = [
   {
-    value: 'system',
-    label: 'Default / System',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
+    value: 'manrope',
+    label: 'Manrope — Modern Premium',
+    fontFamily: '"Manrope", system-ui, -apple-system, sans-serif'
   },
   {
-    value: 'huggable',
-    label: 'Huggable',
-    fontFamily: '"Huggable", "SF Pro Rounded", "Arial Rounded MT Bold", "Nunito", "Quicksand", system-ui, sans-serif'
+    value: 'sora',
+    label: 'Sora — Sleek/Futuristic',
+    fontFamily: '"Sora", system-ui, -apple-system, sans-serif'
+  },
+  {
+    value: 'plus-jakarta-sans',
+    label: 'Plus Jakarta Sans — Spotify-like',
+    fontFamily: '"Plus Jakarta Sans", system-ui, -apple-system, sans-serif'
+  },
+  {
+    value: 'instrument-serif',
+    label: 'Instrument Serif — Luxury',
+    fontFamily: '"Instrument Serif", Georgia, "Times New Roman", serif'
+  },
+  {
+    value: 'urbanist',
+    label: 'Urbanist — Stylish Lyrics',
+    fontFamily: '"Urbanist", system-ui, -apple-system, sans-serif'
+  },
+  {
+    value: 'cormorant-garamond',
+    label: 'Cormorant Garamond — Emotional',
+    fontFamily: '"Cormorant Garamond", Garamond, Georgia, serif'
+  },
+  {
+    value: 'lobster',
+    label: 'Lobster — Script / Playful',
+    fontFamily: '"Lobster", cursive, sans-serif'
   },
   {
     value: 'super-sale',
     label: 'Super Sale',
-    fontFamily: '"Super Sale", Impact, "Arial Black", "Trebuchet MS", system-ui, sans-serif'
+    fontFamily: '"Super Sale", Impact, "Arial Black", system-ui, sans-serif'
   },
   {
-    value: 'sans',
-    label: 'Sans-Serif',
-    fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-  },
-  {
-    value: 'serif',
-    label: 'Serif',
-    fontFamily: 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif'
-  },
-  {
-    value: 'mono',
-    label: 'Monospace',
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
-  },
-  {
-    value: 'display',
-    label: 'Display / Impact',
-    fontFamily: 'Impact, "Arial Black", "Trebuchet MS", sans-serif'
-  },
-  {
-    value: 'rounded',
-    label: 'Rounded',
-    fontFamily: '"SF Pro Rounded", "Arial Rounded MT Bold", "Nunito", "Quicksand", sans-serif'
+    value: 'huggable',
+    label: 'Huggable',
+    fontFamily: '"Huggable", "SF Pro Rounded", "Arial Rounded MT Bold", system-ui, sans-serif'
   },
   {
     value: 'custom',
@@ -293,55 +317,65 @@ export const LYRICS_FONT_OPTIONS: LyricFontOption[] = [
 ];
 
 export function getFontFamilyStyle(fontKey: string, customFontName?: string | null): string {
-  const normalized = (fontKey || '').toLowerCase().trim();
+  const normalized = (fontKey || '').toLowerCase().trim().replace(/_/g, '-').replace(/\s+/g, '-');
   if (normalized === 'custom' && customFontName) {
     return `"${customFontName}", sans-serif`;
   }
-  if (normalized === 'huggable') {
-    return '"Huggable", "SF Pro Rounded", "Arial Rounded MT Bold", "Nunito", "Quicksand", system-ui, sans-serif';
-  }
-  if (normalized === 'super sale' || normalized === 'super-sale' || normalized === 'supersale') {
-    return '"Super Sale", Impact, "Arial Black", "Trebuchet MS", system-ui, sans-serif';
-  }
   switch (normalized) {
-    case 'sans':
-      return 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    case 'serif':
-      return 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif';
-    case 'mono':
-      return 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
-    case 'display':
-      return 'Impact, "Arial Black", "Trebuchet MS", sans-serif';
-    case 'rounded':
-      return '"SF Pro Rounded", "Arial Rounded MT Bold", "Nunito", "Quicksand", sans-serif';
-    case 'system':
+    case 'manrope':
+      return '"Manrope", system-ui, -apple-system, sans-serif';
+    case 'sora':
+      return '"Sora", system-ui, -apple-system, sans-serif';
+    case 'plus-jakarta-sans':
+    case 'plusjakartasans':
+      return '"Plus Jakarta Sans", system-ui, -apple-system, sans-serif';
+    case 'instrument-serif':
+    case 'instrumentserif':
+      return '"Instrument Serif", Georgia, "Times New Roman", serif';
+    case 'urbanist':
+      return '"Urbanist", system-ui, -apple-system, sans-serif';
+    case 'cormorant-garamond':
+    case 'cormorantgaramond':
+      return '"Cormorant Garamond", Garamond, Georgia, serif';
+    case 'lobster':
+      return '"Lobster", cursive, sans-serif';
+    case 'super-sale':
+    case 'supersale':
+      return '"Super Sale", Impact, "Arial Black", system-ui, sans-serif';
+    case 'huggable':
+      return '"Huggable", "SF Pro Rounded", "Arial Rounded MT Bold", system-ui, sans-serif';
     default:
-      return '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+      return '"Manrope", system-ui, -apple-system, sans-serif';
   }
 }
 
 export function getFontFamilyClass(fontKey: string): string {
-  const normalized = (fontKey || '').toLowerCase().trim();
-  if (normalized === 'huggable') {
-    return 'font-["Huggable",sans-serif]';
-  }
-  if (normalized === 'super sale' || normalized === 'super-sale' || normalized === 'supersale') {
-    return 'font-["Super_Sale",sans-serif]';
-  }
+  const normalized = (fontKey || '').toLowerCase().trim().replace(/_/g, '-').replace(/\s+/g, '-');
   switch (normalized) {
-    case 'sans':
-      return 'font-sans';
-    case 'serif':
-      return 'font-serif';
-    case 'mono':
-      return 'font-mono';
-    case 'display':
-      return 'font-[Impact,Arial_Black,sans-serif]';
-    case 'rounded':
-      return 'font-["SF_Pro_Rounded",system-ui,sans-serif]';
-    case 'system':
+    case 'manrope':
+      return 'font-["Manrope",sans-serif]';
+    case 'sora':
+      return 'font-["Sora",sans-serif]';
+    case 'plus-jakarta-sans':
+    case 'plusjakartasans':
+      return 'font-["Plus_Jakarta_Sans",sans-serif]';
+    case 'instrument-serif':
+    case 'instrumentserif':
+      return 'font-["Instrument_Serif",serif]';
+    case 'urbanist':
+      return 'font-["Urbanist",sans-serif]';
+    case 'cormorant-garamond':
+    case 'cormorantgaramond':
+      return 'font-["Cormorant_Garamond",serif]';
+    case 'lobster':
+      return 'font-["Lobster",cursive]';
+    case 'super-sale':
+    case 'supersale':
+      return 'font-["Super_Sale",sans-serif]';
+    case 'huggable':
+      return 'font-["Huggable",sans-serif]';
     default:
-      return 'font-sans';
+      return 'font-["Manrope",sans-serif]';
   }
 }
 

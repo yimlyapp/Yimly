@@ -321,11 +321,11 @@ router.delete('/settings/lyrics/custom-font', requireAdmin, async (req: any, res
       ...current,
       highlighted: {
         ...current.highlighted,
-        font: current.highlighted?.font === 'custom' ? 'system' : current.highlighted?.font
+        font: current.highlighted?.font === 'custom' ? 'manrope' : current.highlighted?.font
       },
       unhighlighted: {
         ...current.unhighlighted,
-        font: current.unhighlighted?.font === 'custom' ? 'system' : current.unhighlighted?.font
+        font: current.unhighlighted?.font === 'custom' ? 'manrope' : current.unhighlighted?.font
       },
       customFontName: null,
       customFontFileName: null,
