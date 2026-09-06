@@ -55,9 +55,12 @@ router.get('/', async (req, res) => {
       genre: songs.genre,
       year: songs.year,
       trackNumber: songs.trackNumber,
+      discNumber: songs.discNumber,
       artworkPath: songs.artworkPath,
       albumArtworkPath: albums.artworkPath,
       lyricOffset: songs.lyricOffset,
+      lrcOffset: songs.lrcOffset,
+      elrcOffset: songs.elrcOffset,
       mainAudioPath: songs.mainAudioPath,
       instrumentalAudioPath: songs.instrumentalAudioPath,
     })
@@ -83,13 +86,19 @@ router.get('/', async (req, res) => {
     const formatted = allSongs.map(s => {
       const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
       const presence = checkLyricsPresenceForSong(s, lyricsMap.get(s.id));
+      const lrcOffsetVal = typeof s.lrcOffset === 'number' ? s.lrcOffset : (s.lyricOffset ?? 0);
+      const elrcOffsetVal = typeof s.elrcOffset === 'number' ? s.elrcOffset : (s.lyricOffset ?? 0);
       return {
         ...s,
         artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : s.artist),
         artists: trackArtists,
         hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
+        hasInstrumental: !!s.instrumentalAudioPath,
         hasLrc: presence.hasLrc,
         hasElrc: presence.hasElrc,
+        lrcOffset: lrcOffsetVal,
+        elrcOffset: elrcOffsetVal,
+        lyricOffset: s.lyricOffset ?? 0,
       };
     });
 
@@ -121,8 +130,17 @@ router.get('/search', async (req, res) => {
       artistId: songs.artistId,
       album: albums.title,
       albumId: songs.albumId,
+      duration: songs.duration,
+      variant: songs.variant,
+      genre: songs.genre,
+      year: songs.year,
+      trackNumber: songs.trackNumber,
+      discNumber: songs.discNumber,
       artworkPath: songs.artworkPath,
       albumArtworkPath: albums.artworkPath,
+      lyricOffset: songs.lyricOffset,
+      lrcOffset: songs.lrcOffset,
+      elrcOffset: songs.elrcOffset,
       mainAudioPath: songs.mainAudioPath,
       instrumentalAudioPath: songs.instrumentalAudioPath,
     })
@@ -157,14 +175,20 @@ router.get('/search', async (req, res) => {
     const formatted = searchSongs.map(s => {
       const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
       const presence = checkLyricsPresenceForSong(s, lyricsMap.get(s.id));
+      const lrcOffsetVal = typeof s.lrcOffset === 'number' ? s.lrcOffset : (s.lyricOffset ?? 0);
+      const elrcOffsetVal = typeof s.elrcOffset === 'number' ? s.elrcOffset : (s.lyricOffset ?? 0);
       return {
         type: 'song',
         ...s,
         artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : s.artist),
         artists: trackArtists,
         hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
+        hasInstrumental: !!s.instrumentalAudioPath,
         hasLrc: presence.hasLrc,
         hasElrc: presence.hasElrc,
+        lrcOffset: lrcOffsetVal,
+        elrcOffset: elrcOffsetVal,
+        lyricOffset: s.lyricOffset ?? 0,
       };
     });
 
@@ -295,25 +319,57 @@ router.get('/:id/artwork', async (req, res) => {
   }
 });
 
-router.get('/:id/audio', async (req, res) => {
+router.get(['/:id/audio', '/:id/stream', '/:id/file'], async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const type = req.query.type as string; // 'main' or 'instrumental'
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid song ID' });
+    const rawType = ((req.query.type as string) || (req.query.variant as string) || '').toLowerCase(); // 'main', 'original', 'instrumental'
 
     const song = await db.select().from(songs).where(eq(songs.id, id)).limit(1);
     if (song.length === 0) return res.status(404).json({ error: 'Song not found' });
 
-    let audioPath = song[0].mainAudioPath;
-    if (type === 'instrumental' && song[0].instrumentalAudioPath) {
-      audioPath = song[0].instrumentalAudioPath;
+    let rawAudioPath = song[0].mainAudioPath;
+    if (rawType === 'instrumental' && song[0].instrumentalAudioPath) {
+      rawAudioPath = song[0].instrumentalAudioPath;
+    } else if (!rawAudioPath && song[0].instrumentalAudioPath) {
+      rawAudioPath = song[0].instrumentalAudioPath;
     }
 
-    if (!fs.existsSync(audioPath)) {
+    if (!rawAudioPath) {
+      return res.status(404).json({ error: 'Audio file path not found for this song' });
+    }
+
+    const resolvedAudioPath = path.isAbsolute(rawAudioPath) ? rawAudioPath : path.resolve(process.cwd(), rawAudioPath);
+
+    if (!fs.existsSync(resolvedAudioPath)) {
       return res.status(404).json({ error: 'Audio file not found on disk' });
     }
 
-    res.sendFile(audioPath);
+    const ext = path.extname(resolvedAudioPath).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      '.mp3': 'audio/mpeg',
+      '.flac': 'audio/flac',
+      '.wav': 'audio/wav',
+      '.ogg': 'audio/ogg',
+      '.opus': 'audio/opus',
+      '.m4a': 'audio/mp4',
+      '.aac': 'audio/aac',
+      '.webm': 'audio/webm',
+      '.wma': 'audio/x-ms-wma',
+    };
+    const contentType = mimeMap[ext] || 'audio/mpeg';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Accept-Ranges', 'bytes');
+
+    res.sendFile(resolvedAudioPath, { acceptRanges: true, dotfiles: 'allow' }, (err) => {
+      if (err && !res.headersSent) {
+        console.error(`[AUDIO STREAM ERROR] Failed to send file ${resolvedAudioPath}:`, err);
+        res.status(500).json({ error: 'Failed to serve audio file' });
+      }
+    });
   } catch (error) {
+    console.error('[AUDIO STREAM ERROR]', error);
     res.status(500).json({ error: 'Failed to serve audio' });
   }
 });

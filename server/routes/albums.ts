@@ -89,6 +89,7 @@ router.get('/:id', async (req, res) => {
           artist: formatArtistDisplay(trackArtists),
           artists: trackArtists,
           hasArtwork: !!s.artworkPath || !!albumRec[0].artworkPath,
+          hasInstrumental: !!s.instrumentalAudioPath,
           hasLrc: presence.hasLrc,
           hasElrc: presence.hasElrc,
         };
