@@ -991,7 +991,7 @@ test('Enhanced LRC (eLRC) support test scenarios (Test A, B, C, D, E)', async ()
   const scanLibRes = await db.insert(libraries).values({ name: 'Scan eLRC Lib', path: scanLibPath }).returning();
   await scanLibrary(scanLibRes[0].id, scanLibPath);
 
-  // Verify Case 1 in DB and via API:
+  // Verify Case 1 (Both exist): hasLrc=true, hasElrc=true
   const songCase1 = await db.select().from(songs).where(eq(songs.title, 'Case1 Both')).limit(1);
   assert.strictEqual(songCase1.length, 1);
   const lrcRecordCase1 = await db.select().from(lyrics).where(eq(lyrics.songId, songCase1[0].id)).limit(1);
@@ -999,23 +999,35 @@ test('Enhanced LRC (eLRC) support test scenarios (Test A, B, C, D, E)', async ()
   assert.strictEqual(lrcRecordCase1[0].lrcPath?.endsWith('.lrc'), true);
   assert.strictEqual(lrcRecordCase1[0].elrcPath?.endsWith('.elrc.lrc'), true);
 
+  const apiCase1 = await (await fetch(`${baseUrl}/api/songs/${songCase1[0].id}`)).json() as any;
+  assert.strictEqual(apiCase1.hasLrc, true, 'Case 1: Both exist -> hasLrc must be true');
+  assert.strictEqual(apiCase1.hasElrc, true, 'Case 1: Both exist -> hasElrc must be true');
+
   const resCase1 = await fetch(`${baseUrl}/api/songs/${songCase1[0].id}/lyrics`);
   assert.strictEqual(resCase1.status, 200);
   const textCase1 = await resCase1.text();
   assert.strictEqual(textCase1.includes('<00:01.00>Word'), true);
   assert.strictEqual(textCase1.includes('Standard Line Case 1'), false);
 
-  // Verify Case 2 via API:
+  // Verify Case 2 (Only LRC): hasLrc=true, hasElrc=false
   const songCase2 = await db.select().from(songs).where(eq(songs.title, 'Case2 LRC')).limit(1);
   assert.strictEqual(songCase2.length, 1);
+  const apiCase2 = await (await fetch(`${baseUrl}/api/songs/${songCase2[0].id}`)).json() as any;
+  assert.strictEqual(apiCase2.hasLrc, true, 'Case 2: Only LRC -> hasLrc must be true');
+  assert.strictEqual(apiCase2.hasElrc, false, 'Case 2: Only LRC -> hasElrc must be false');
+
   const resCase2 = await fetch(`${baseUrl}/api/songs/${songCase2[0].id}/lyrics`);
   assert.strictEqual(resCase2.status, 200);
   const textCase2 = await resCase2.text();
   assert.strictEqual(textCase2.includes('Standard Line Case 2'), true);
 
-  // Verify Case 3 via API:
+  // Verify Case 3 (Only eLRC): hasLrc=false, hasElrc=true
   const songCase3 = await db.select().from(songs).where(eq(songs.title, 'Case3 eLRC')).limit(1);
   assert.strictEqual(songCase3.length, 1);
+  const apiCase3 = await (await fetch(`${baseUrl}/api/songs/${songCase3[0].id}`)).json() as any;
+  assert.strictEqual(apiCase3.hasLrc, false, 'Case 3: Only eLRC -> hasLrc must be false');
+  assert.strictEqual(apiCase3.hasElrc, true, 'Case 3: Only eLRC -> hasElrc must be true');
+
   const resCase3 = await fetch(`${baseUrl}/api/songs/${songCase3[0].id}/lyrics`);
   assert.strictEqual(resCase3.status, 200);
   const textCase3 = await resCase3.text();

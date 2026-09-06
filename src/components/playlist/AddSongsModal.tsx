@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Search, Plus, Check, Music, Loader2, AlertCircle } from 'lucide-react';
 import { Playlist, PlaylistSongItem } from '../../types';
+import LyricBadges from '../LyricBadges';
 
 interface AddSongsModalProps {
   isOpen: boolean;
@@ -95,6 +96,7 @@ export default function AddSongsModal({
         variant: song.variant,
         hasArtwork: song.hasArtwork,
         hasLrc: song.hasLrc,
+        hasElrc: song.hasElrc,
       });
     } catch (e: any) {
       alert(e.message || 'Failed to add song to playlist');
@@ -192,11 +194,10 @@ export default function AddSongsModal({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-semibold text-white truncate block">{song.title}</span>
-                      {song.hasLrc && (
-                        <span className="px-1 py-0.2 rounded text-[8px] font-bold uppercase tracking-wider bg-[#FF4FA3]/15 text-[#FF4FA3] border border-[#FF4FA3]/25 shrink-0">
-                          LRC
-                        </span>
-                      )}
+                      <LyricBadges
+                        hasLrc={song.hasLrc}
+                        hasElrc={song.hasElrc}
+                      />
                     </div>
                     <span className="text-[11px] text-zinc-400 truncate block">
                       {song.artist} {song.album ? `• ${song.album}` : ''}

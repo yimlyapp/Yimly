@@ -44,12 +44,19 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
     const artistsMap = await getSongArtistsMap(songIds);
 
     const lyricsList = songIds.length > 0
-      ? await db.select({ songId: lyrics.songId }).from(lyrics).where(inArray(lyrics.songId, songIds))
+      ? await db.select({ songId: lyrics.songId, lrcPath: lyrics.lrcPath, elrcPath: lyrics.elrcPath }).from(lyrics).where(inArray(lyrics.songId, songIds))
       : [];
-    const lyricsSet = new Set(lyricsList.map(l => l.songId));
+    const lyricsMap = new Map();
+    for (const l of lyricsList) {
+      lyricsMap.set(l.songId, {
+        hasLrc: !!l.lrcPath && l.lrcPath.trim().length > 0,
+        hasElrc: !!l.elrcPath && l.elrcPath.trim().length > 0
+      });
+    }
 
     const formatted = favs.map(f => {
       const trackArtists = artistsMap.get(f.id) || (f.artist ? [{ id: f.artistId, name: f.artist }] : []);
+      const lyr = lyricsMap.get(f.id) || { hasLrc: false, hasElrc: false };
       return {
         id: f.id,
         title: f.title,
@@ -65,7 +72,8 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
         artworkPath: f.artworkPath,
         albumArtworkPath: f.albumArtworkPath,
         hasArtwork: !!f.artworkPath || !!f.albumArtworkPath,
-        hasLrc: lyricsSet.has(f.id),
+        hasLrc: lyr.hasLrc,
+        hasElrc: lyr.hasElrc,
         favoriteId: f.favoriteId,
         favoritedAt: f.favoritedAt,
       };

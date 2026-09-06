@@ -3,8 +3,8 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { db } from '../db/index.js';
-import { playlists, playlistSongs, songs, artists, albums, users, playlistShares } from '../db/schema.js';
-import { eq, and, or, asc, sql } from 'drizzle-orm';
+import { playlists, playlistSongs, songs, artists, albums, users, playlistShares, lyrics } from '../db/schema.js';
+import { eq, and, or, asc, sql, inArray } from 'drizzle-orm';
 import { requireAuth, AuthenticatedRequest } from '../middleware/auth.js';
 import { formatArtistDisplay } from '../lib/artist-utils.js';
 import { getSongArtistsMap } from './songs.js';
@@ -222,8 +222,20 @@ router.get('/:id', async (req: AuthenticatedRequest, res) => {
     const songIds = pSongs.map(s => s.id);
     const artistsMap = await getSongArtistsMap(songIds);
 
+    const lyricsList = songIds.length > 0
+      ? await db.select({ songId: lyrics.songId, lrcPath: lyrics.lrcPath, elrcPath: lyrics.elrcPath }).from(lyrics).where(inArray(lyrics.songId, songIds))
+      : [];
+    const lyricsMap = new Map();
+    for (const l of lyricsList) {
+      lyricsMap.set(l.songId, {
+        hasLrc: !!l.lrcPath && l.lrcPath.trim().length > 0,
+        hasElrc: !!l.elrcPath && l.elrcPath.trim().length > 0
+      });
+    }
+
     const formattedSongs = pSongs.map(s => {
       const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
+      const lyr = lyricsMap.get(s.id) || { hasLrc: false, hasElrc: false };
       return {
         playlistSongId: s.playlistSongId,
         position: s.position,
@@ -237,6 +249,8 @@ router.get('/:id', async (req: AuthenticatedRequest, res) => {
         duration: s.duration,
         variant: s.variant,
         hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
+        hasLrc: lyr.hasLrc,
+        hasElrc: lyr.hasElrc,
       };
     });
 

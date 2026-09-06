@@ -65,7 +65,8 @@ router.get('/:id', async (req, res) => {
       duration: songs.duration,
       variant: songs.variant,
       artworkPath: songs.artworkPath,
-      hasLrc: lyrics.id,
+      lrcPath: lyrics.lrcPath,
+      elrcPath: lyrics.elrcPath,
     })
     .from(songs)
     .leftJoin(lyrics, eq(songs.id, lyrics.songId))
@@ -84,7 +85,8 @@ router.get('/:id', async (req, res) => {
           artist: formatArtistDisplay(trackArtists),
           artists: trackArtists,
           hasArtwork: !!s.artworkPath || !!albumRec[0].artworkPath,
-          hasLrc: !!s.hasLrc
+          hasLrc: !!s.lrcPath && s.lrcPath.trim().length > 0,
+          hasElrc: !!s.elrcPath && s.elrcPath.trim().length > 0,
         };
       }),
     });

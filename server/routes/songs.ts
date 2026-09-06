@@ -72,8 +72,8 @@ router.get('/', async (req, res) => {
     const lyricsMap = new Map();
     for (const l of lyricsList) {
       lyricsMap.set(l.songId, {
-        hasLrc: !!l.lrcPath,
-        hasElrc: !!l.elrcPath
+        hasLrc: !!l.lrcPath && l.lrcPath.trim().length > 0,
+        hasElrc: !!l.elrcPath && l.elrcPath.trim().length > 0
       });
     }
 
@@ -206,8 +206,8 @@ router.get('/:id', async (req, res) => {
 
     if (songRec.length === 0) return res.status(404).json({ error: 'Song not found' });
 
-    let hasElrc = !!songRec[0].elrcPath;
-    let hasLrc = !!songRec[0].lrcPath;
+    let hasElrc = !!songRec[0].elrcPath && songRec[0].elrcPath.trim().length > 0;
+    let hasLrc = !!songRec[0].lrcPath && songRec[0].lrcPath.trim().length > 0;
     const audioPath = songRec[0].mainAudioPath || songRec[0].instrumentalAudioPath;
     
     // Fallback: check filesystem if not in db
@@ -216,12 +216,23 @@ router.get('/:id', async (req, res) => {
       if (fs.existsSync(dir)) {
         try {
           const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-          const lrcEntries = entries.filter(e => e.isFile() && (e.name.toLowerCase().endsWith('.elrc.lrc') || e.name.toLowerCase().endsWith('.lrc')));
-          for (const e of lrcEntries) {
-            if (e.name.toLowerCase().endsWith('.elrc.lrc')) {
-              hasElrc = true;
-            } else if (e.name.toLowerCase().endsWith('.lrc')) {
-              hasLrc = true;
+          const audioExt = path.extname(audioPath);
+          const baseName = path.basename(audioPath, audioExt);
+          const cleanBase = baseName.replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim().toLowerCase();
+
+          for (const e of entries) {
+            if (!e.isFile()) continue;
+            const nameLower = e.name.toLowerCase();
+            if (nameLower.endsWith('.elrc.lrc')) {
+              const elrcBase = nameLower.slice(0, -9).replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim();
+              if (elrcBase === cleanBase) {
+                hasElrc = true;
+              }
+            } else if (nameLower.endsWith('.lrc')) {
+              const lrcBase = nameLower.slice(0, -4).replace(/\s*\((instrumental|karaoke|vocals|backing version|backing)\)\s*/gi, '').trim();
+              if (lrcBase === cleanBase) {
+                hasLrc = true;
+              }
             }
           }
         } catch (e) {}
