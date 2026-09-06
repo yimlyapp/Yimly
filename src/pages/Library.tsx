@@ -759,7 +759,6 @@ export default function Library() {
                         </div>
                         <span className="truncate">{song.title}</span>
                         <LyricBadges
-                          songId={song.id}
                           hasLrc={song.hasLrc}
                           hasElrc={song.hasElrc}
                           onOpenLyrics={(format) => setEditorState({ isOpen: true, songId: song.id, title: song.title, format })}
@@ -856,7 +855,6 @@ export default function Library() {
                     <td className="px-5 py-3.5 font-medium text-white flex items-center gap-3">
                       <span>{song.title}</span>
                       <LyricBadges
-                        songId={song.id}
                         hasLrc={song.hasLrc}
                         hasElrc={song.hasElrc}
                         onOpenLyrics={(format) => setEditorState({ isOpen: true, songId: song.id, title: song.title, format })}
@@ -1009,7 +1007,6 @@ export default function Library() {
                       <span className="truncate">{item.title || item.name}</span>
                       {item.type === 'song' && (
                         <LyricBadges
-                          songId={item.id}
                           hasLrc={item.hasLrc}
                           hasElrc={item.hasElrc}
                           onOpenLyrics={(format) => setEditorState({ isOpen: true, songId: item.id, title: item.title, format })}
