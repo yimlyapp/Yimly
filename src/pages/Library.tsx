@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { Search, Play, Plus, Music, Disc, Mic, RefreshCw, Calendar, FileText, ChevronRight, ArrowLeft, AlertCircle, Check, ListMusic } from 'lucide-react';
+import { Search, Play, Music, Disc, Mic, RefreshCw, Calendar, FileText, ChevronRight, ArrowLeft, AlertCircle, ListMusic, Trash2 } from 'lucide-react';
 import { Playlist, PlaylistSongItem } from '../types';
 import CreatePlaylistModal from '../components/playlist/CreatePlaylistModal';
 import EditPlaylistModal from '../components/playlist/EditPlaylistModal';
@@ -50,12 +50,41 @@ export default function Library() {
     setLoading(true);
     setError(null);
 
+    const fetchWithRetry = async (url: string, retries = 2, delayMs = 500): Promise<Response> => {
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+          const res = await fetch(url, { credentials: 'same-origin' });
+          if (res.ok) return res;
+          if (res.status === 401) {
+            // Do not retry 401 Unauthorized continuously
+            return res;
+          }
+          if (attempt < retries) {
+            await new Promise(r => setTimeout(r, delayMs));
+            continue;
+          }
+          return res;
+        } catch (err) {
+          if (attempt < retries) {
+            await new Promise(r => setTimeout(r, delayMs));
+            continue;
+          }
+          throw err;
+        }
+      }
+      throw new Error('Failed to connect to server');
+    };
+
     try {
       // 1. Fetch stats
-      const statsRes = await fetch('/api/libraries/stats');
-      if (statsRes.ok && statsRes.headers.get('content-type')?.includes('application/json')) {
-        const statsData = await statsRes.json();
-        setStats(prev => ({ ...prev, ...statsData }));
+      try {
+        const statsRes = await fetchWithRetry('/api/libraries/stats', 1, 300);
+        if (statsRes.ok && statsRes.headers.get('content-type')?.includes('application/json')) {
+          const statsData = await statsRes.json();
+          setStats(prev => ({ ...prev, ...statsData }));
+        }
+      } catch (e) {
+        console.warn('Failed to load library stats:', e);
       }
 
       // 2. Fetch tab data
@@ -65,10 +94,25 @@ export default function Library() {
         tab === 'songs' ? '/api/songs' : 
         '/api/playlists';
 
-      const dataRes = await fetch(endpoint);
-      if (!dataRes.ok || !dataRes.headers.get('content-type')?.includes('application/json')) {
-        throw new Error(`Failed to fetch ${tab}`);
+      const dataRes = await fetchWithRetry(endpoint, 2, 500);
+      if (!dataRes.ok) {
+        if (dataRes.status === 401) {
+          setError('Session expired or unauthorized. Please log in again.');
+          setLoading(false);
+          return;
+        }
+        let serverError = '';
+        if (dataRes.headers.get('content-type')?.includes('application/json')) {
+          const errJson = await dataRes.json().catch(() => ({}));
+          serverError = errJson.error || errJson.message || '';
+        }
+        throw new Error(serverError || `Failed to fetch ${tab} catalog (${dataRes.status})`);
       }
+
+      if (!dataRes.headers.get('content-type')?.includes('application/json')) {
+        throw new Error(`Invalid response format received for ${tab}`);
+      }
+
       const data = await dataRes.json();
 
       if (tab === 'artists') setArtists(Array.isArray(data) ? data : []);
@@ -81,6 +125,80 @@ export default function Library() {
       console.error('Library loading error:', err);
       setError(err.message || 'Failed to load library data');
       setLoading(false);
+    }
+  };
+
+  const handleDeleteSong = async (song: any) => {
+    const songTitle = song.title || 'this song';
+
+    const confirmed = window.confirm(
+      `Delete "${songTitle}"?\n\n` +
+      `This will permanently delete:\n` +
+      `• The main song\n` +
+      `• The instrumental, if available\n` +
+      `• The .lrc lyrics, if available\n` +
+      `• The .elrc.lrc lyrics, if available\n` +
+      `• Playlist, favorite and queue associations\n\n` +
+      `This cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch(`/api/songs/${song.id}`, {
+        method: 'DELETE',
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          throw new Error('You do not have permission to delete this song.');
+        }
+
+        throw new Error(data.error || 'Failed to delete song');
+      }
+
+      // Remove from main Songs list
+      setSongs(prev => prev.filter(s => s.id !== song.id));
+
+      // Remove from search results
+      setSearchResults(prev =>
+        prev.filter(item => !(item.type === 'song' && item.id === song.id))
+      );
+
+      // Remove from selected Artist view
+      setSelectedArtist(prev => {
+        if (!prev?.songs) return prev;
+
+        return {
+          ...prev,
+          songs: prev.songs.filter((s: any) => s.id !== song.id),
+        };
+      });
+
+      // Remove from selected Album view
+      setSelectedAlbum(prev => {
+        if (!prev?.songs) return prev;
+
+        return {
+          ...prev,
+          songs: prev.songs.filter((s: any) => s.id !== song.id),
+        };
+      });
+
+      // Update song count
+      setStats(prev => ({
+        ...prev,
+        songs: Math.max(0, prev.songs - 1),
+      }));
+
+      // Clear queued state if this was the deleted song
+      setQueuedSongId(prev => (prev === song.id ? null : prev));
+
+    } catch (error: any) {
+      console.error('Failed to delete song:', error);
+      alert(error.message || 'Failed to delete song');
     }
   };
 
@@ -739,7 +857,6 @@ export default function Library() {
               </thead>
               <tbody className="divide-y divide-white/5">
                 {selectedArtist.songs?.map((song: any) => {
-                  const isQueued = queuedSongId === song.id;
                   return (
                     <tr key={song.id} className="hover:bg-[#1A1C2C]/60 transition-colors group">
                       <td className="px-5 py-3.5 font-medium text-white flex items-center gap-3">
@@ -767,16 +884,13 @@ export default function Library() {
                       <td className="px-5 py-3.5 text-zinc-400 text-xs font-mono">{formatDuration(song.duration)}</td>
                       <td className="px-5 py-3.5 text-zinc-400 text-xs capitalize">{song.variant}</td>
                       <td className="px-5 py-3.5 text-right">
-                        <button 
-                          onClick={() => addToQueue(song.id)}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-all ${
-                            isQueued 
-                              ? 'bg-[#FF4FA3] text-white' 
-                              : 'bg-[#FF4FA3]/15 hover:bg-[#FF4FA3] text-[#FF4FA3] hover:text-white border border-[#FF4FA3]/30'
-                          }`}
+                        <button
+                          onClick={() => handleDeleteSong(song)}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-all bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white border border-red-500/20 hover:border-red-500"
+                          title="Delete song from library"
                         >
-                          {isQueued ? <Check className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
-                          <span>{isQueued ? 'Added' : 'Queue'}</span>
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete</span>
                         </button>
                       </td>
                     </tr>
@@ -848,7 +962,6 @@ export default function Library() {
             </thead>
             <tbody className="divide-y divide-white/5">
               {selectedAlbum.songs?.map((song: any, idx: number) => {
-                const isQueued = queuedSongId === song.id;
                 return (
                   <tr key={song.id} className="hover:bg-[#1A1C2C]/60 transition-colors group">
                     <td className="px-5 py-3.5 text-zinc-500 font-mono text-xs">{song.trackNumber || idx + 1}</td>
@@ -862,16 +975,13 @@ export default function Library() {
                     </td>
                     <td className="px-5 py-3.5 text-zinc-400 font-mono text-xs">{formatDuration(song.duration)}</td>
                     <td className="px-5 py-3.5 text-right">
-                      <button 
-                        onClick={() => addToQueue(song.id)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-all ${
-                          isQueued 
-                            ? 'bg-[#FF4FA3] text-white' 
-                            : 'bg-[#FF4FA3]/15 hover:bg-[#FF4FA3] text-[#FF4FA3] hover:text-white border border-[#FF4FA3]/30'
-                        }`}
+                      <button
+                        onClick={() => handleDeleteSong(song)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-all bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white border border-red-500/20 hover:border-red-500"
+                        title="Delete song from library"
                       >
-                        {isQueued ? <Check className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
-                        <span>{isQueued ? 'Added' : 'Queue'}</span>
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete</span>
                       </button>
                     </td>
                   </tr>
@@ -1024,7 +1134,14 @@ export default function Library() {
                         <button onClick={() => openAlbum(item.id)} className="px-3 py-1.5 bg-white/5 hover:bg-white/15 text-white rounded-lg text-xs font-medium">View</button>
                       )}
                       {item.type === 'song' && (
-                        <button onClick={() => addToQueue(item.id)} className="px-3 py-1.5 bg-[#FF4FA3]/15 hover:bg-[#FF4FA3] text-[#FF4FA3] hover:text-white rounded-lg text-xs font-medium">Queue</button>
+                        <button
+                          onClick={() => handleDeleteSong(item)}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-all bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white border border-red-500/20 hover:border-red-500"
+                          title="Delete song from library"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete</span>
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -1156,8 +1273,7 @@ export default function Library() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
-                  {songs.map(song => {
-                    const isQueued = queuedSongId === song.id;
+                  {songs.map((song) => {
                     return (
                       <tr key={song.id} className="hover:bg-[#1A1C2C]/60 transition-colors group">
                         <td className="px-5 py-3.5 font-medium text-white flex items-center gap-3">
@@ -1189,17 +1305,13 @@ export default function Library() {
                         <td className="px-5 py-3.5 text-zinc-400 text-xs font-mono">{formatDuration(song.duration)}</td>
                         <td className="px-5 py-3.5 text-zinc-400 text-xs capitalize">{song.variant}</td>
                         <td className="px-5 py-3.5 text-right">
-                          <button 
-                            onClick={() => addToQueue(song.id)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-all ${
-                              isQueued 
-                                ? 'bg-[#FF4FA3] text-white' 
-                                : 'bg-[#FF4FA3]/15 hover:bg-[#FF4FA3] text-[#FF4FA3] hover:text-white border border-[#FF4FA3]/30'
-                            }`}
-                            title="Add song to live room queue"
+                          <button
+                            onClick={() => handleDeleteSong(song)}
+                            className="px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-all bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white border border-red-500/20 hover:border-red-500"
+                            title="Delete song from library"
                           >
-                            {isQueued ? <Check className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
-                            <span>{isQueued ? 'Added' : 'Queue'}</span>
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete</span>
                           </button>
                         </td>
                       </tr>

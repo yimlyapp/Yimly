@@ -1572,9 +1572,14 @@ export default function RoomSession() {
                 >
                   -250ms
                 </button>
-                <span className="px-1.5 font-mono text-[#FF4FA3] font-bold text-[11px]">
+                <button
+                  data-tv-id="offset-sync-button"
+                  onClick={handleSyncReset}
+                  className="px-1.5 py-0.5 font-mono text-[#FF4FA3] hover:text-[#ff7ab8] font-bold text-[11px] rounded hover:bg-white/5 transition-colors focus:outline-none focus:ring-2 focus:ring-[#FF4FA3]"
+                  title={`Reset ${lyricsFormat.toUpperCase()} offset to 0ms`}
+                >
                   {activeOffset > 0 ? `+${activeOffset}` : activeOffset}ms
-                </span>
+                </button>
                 <button 
                   data-tv-id="offset-plus-button"
                   onClick={() => handleOffsetChange(250)}
@@ -1582,14 +1587,6 @@ export default function RoomSession() {
                   title="+250ms"
                 >
                   +250ms
-                </button>
-                <button
-                  data-tv-id="offset-sync-button"
-                  onClick={handleSyncReset}
-                  className="ml-1 px-2 py-0.5 bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 rounded text-[10px] font-semibold transition-colors border border-cyan-500/30 focus:outline-none focus:ring-2 focus:ring-cyan-400"
-                  title={`Reset ${lyricsFormat.toUpperCase()} offset to 0ms (does not seek audio)`}
-                >
-                  Sync
                 </button>
               </div>
             </>

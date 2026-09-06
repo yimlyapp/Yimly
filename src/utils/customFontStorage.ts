@@ -39,12 +39,26 @@ export async function loadAndRegisterCustomFont(
 
   const loadPromise = (async () => {
     try {
-      const fontFace = new FontFace(customFontName, `url(${fontUrl})`);
+      const res = await fetch(fontUrl, {
+        headers: { Accept: 'font/*, application/octet-stream, */*' }
+      });
+      if (!res.ok) {
+        console.warn(`[FontLoader] Custom font "${customFontName}" not available on server (status ${res.status})`);
+        loadedFontFaces.delete(cacheKey);
+        return;
+      }
+      const fontBuffer = await res.arrayBuffer();
+      if (!fontBuffer || fontBuffer.byteLength === 0) {
+        console.warn(`[FontLoader] Empty font response for "${customFontName}"`);
+        loadedFontFaces.delete(cacheKey);
+        return;
+      }
+      const fontFace = new FontFace(customFontName, fontBuffer);
       await fontFace.load();
       document.fonts.add(fontFace);
       console.log(`[FontLoader] Successfully loaded server-persisted custom font "${customFontName}" from ${fontUrl}`);
     } catch (err) {
-      console.error(`[FontLoader] Failed to load custom font "${customFontName}" from server:`, err);
+      console.warn(`[FontLoader] Could not load custom font "${customFontName}" from server:`, err);
       // Remove failed promise so retry is possible
       loadedFontFaces.delete(cacheKey);
     }
