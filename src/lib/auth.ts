@@ -8,6 +8,10 @@ let memoryToken: string | null = null;
 
 export function getAuthToken(): string | null {
   if (memoryToken) return memoryToken;
+  if (typeof window !== 'undefined' && (window as any).__yimly_token) {
+    memoryToken = (window as any).__yimly_token;
+    return memoryToken;
+  }
   try {
     const stored = localStorage.getItem('yimly_token');
     if (stored) {
@@ -30,6 +34,9 @@ export function getAuthToken(): string | null {
 export function setAuthToken(token: string): void {
   if (!token) return;
   memoryToken = token;
+  if (typeof window !== 'undefined') {
+    (window as any).__yimly_token = token;
+  }
   try {
     localStorage.setItem('yimly_token', token);
   } catch (e) {
@@ -42,6 +49,9 @@ export function setAuthToken(token: string): void {
 
 export function clearAuthToken(): void {
   memoryToken = null;
+  if (typeof window !== 'undefined') {
+    delete (window as any).__yimly_token;
+  }
   try {
     localStorage.removeItem('yimly_token');
   } catch (e) {}
@@ -52,8 +62,9 @@ export function clearAuthToken(): void {
 
 /**
  * Patch window.fetch once at startup so that all relative API requests
- * automatically include the Authorization Bearer header if a token exists.
- * This guarantees Safari 10 and browsers that block or drop cookies stay authenticated.
+ * automatically include the Authorization Bearer header if a token exists,
+ * and explicitly specify credentials: 'same-origin' for iOS 10 WebKit standalone WebClips.
+ * This guarantees Safari 10 and standalone Home Screen web apps stay authenticated.
  */
 let isFetchPatched = false;
 
@@ -66,23 +77,32 @@ export function initAuthFetchInterceptor(): void {
   const originalFetch = window.fetch;
 
   const authFetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    const token = getAuthToken();
-    if (token) {
-      let urlString = '';
-      if (typeof input === 'string') {
-        urlString = input;
-      } else if (input instanceof URL) {
-        urlString = input.toString();
-      } else if (input && typeof input === 'object' && 'url' in input) {
-        urlString = (input as Request).url;
+    let urlString = '';
+    if (typeof input === 'string') {
+      urlString = input;
+    } else if (input instanceof URL) {
+      urlString = input.toString();
+    } else if (input && typeof input === 'object' && 'url' in input) {
+      urlString = (input as Request).url;
+    }
+
+    const origin = typeof window !== 'undefined' && window.location ? window.location.origin : '';
+    const isApiCall = urlString.startsWith('/api/') || 
+                      urlString.startsWith('api/') ||
+                      urlString.includes('/api/') ||
+                      (Boolean(origin) && urlString.startsWith(origin + '/api/'));
+
+    if (isApiCall) {
+      init = init ? { ...init } : {};
+
+      // iOS 10 WebKit defaults fetch credentials to 'omit'.
+      // In standalone Home Screen web app mode, WebClips do not send cookies without explicit 'same-origin' credentials.
+      if (!init.credentials) {
+        init.credentials = 'same-origin';
       }
 
-      const isApiCall = urlString.startsWith('/api/') || 
-                        urlString.startsWith(window.location.origin + '/api/');
-
-      if (isApiCall) {
-        init = init ? { ...init } : {};
-
+      const token = getAuthToken();
+      if (token) {
         if (!init.headers) {
           init.headers = { 'Authorization': `Bearer ${token}` };
         } else if (init.headers instanceof Headers) {
@@ -107,26 +127,39 @@ export function initAuthFetchInterceptor(): void {
     return originalFetch.call(this, input, init);
   };
 
+  let patched = false;
   try {
-    const desc = Object.getOwnPropertyDescriptor(window, 'fetch');
-    if (desc && !desc.configurable && !desc.writable) {
-      // In environments (such as sandboxed iframes) where window.fetch is a locked/non-configurable
-      // getter property, do not attempt to overwrite it. Session cookies handle authentication.
-      return;
-    }
-
-    Object.defineProperty(window, 'fetch', {
-      value: authFetch,
-      writable: true,
-      configurable: true,
-      enumerable: true,
-    });
+    // Direct property assignment works on standard browsers and Safari 10 (iOS 10)
+    (window as any).fetch = authFetch;
+    patched = true;
   } catch (err) {
-    // If window.fetch cannot be redefined (e.g. read-only getter in sandboxed iframe),
-    // safely ignore and rely on standard cookie-based authentication.
-    // NEVER attempt direct assignment `window.fetch = ...` because that triggers:
-    // "TypeError: Cannot set property fetch of #<Window> which has only a getter"
-    console.warn('[AUTH] window.fetch could not be redefined with auth interceptor:', err);
+    // In restricted environments like sandboxed iframes where window.fetch has a locked getter
+  }
+
+  if (!patched) {
+    try {
+      if (typeof Window !== 'undefined' && Window.prototype) {
+        (Window.prototype as any).fetch = authFetch;
+        patched = true;
+      }
+    } catch (e2) {}
+  }
+
+  if (!patched) {
+    try {
+      const desc = Object.getOwnPropertyDescriptor(window, 'fetch');
+      if (!desc || desc.configurable || desc.writable) {
+        Object.defineProperty(window, 'fetch', {
+          value: authFetch,
+          writable: true,
+          configurable: true,
+          enumerable: true,
+        });
+        patched = true;
+      }
+    } catch (err) {
+      console.warn('[AUTH] window.fetch could not be redefined with Object.defineProperty:', err);
+    }
   }
 }
 

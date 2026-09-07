@@ -1,6 +1,7 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Play, LogIn, Users, Mic, Radio, Sparkles, ArrowRight, Disc, RefreshCw, User, LogOut, AlertCircle } from 'lucide-react';
+import { getAuthToken } from '../lib/auth';
 
 export default function Rooms() {
   const [sessions, setSessions] = useState<any[]>([]);
@@ -77,7 +78,16 @@ export default function Rooms() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/karaoke/sessions', { method: 'POST' });
+      const token = getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const res = await fetch('/api/karaoke/sessions', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers
+      });
       let data: any = {};
       if (res.headers.get('content-type')?.includes('application/json')) {
         try {

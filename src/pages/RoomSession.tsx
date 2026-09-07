@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, ChangeEvent } from 'react';
+import { useState, useEffect, useRef, useCallback, ChangeEvent } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import QRCode from 'qrcode';
@@ -21,6 +21,7 @@ import {
   Maximize2, Minimize2, Info, LogOut, QrCode, Clock, Volume2
 } from 'lucide-react';
 import { filterSongs, SearchableSong } from '../lib/search-utils';
+import { getAuthToken } from '../lib/auth';
 
 export interface LyricWord {
   text: string;
@@ -181,6 +182,34 @@ export default function RoomSession() {
   const lastFocusedTvIdRef = useRef<string | null>(null);
   const initialFocusSetRef = useRef(false);
 
+  // Safe focus helper that prevents scroll on older WebKit and resets unwanted scroll
+  const safeFocus = useCallback((el: HTMLElement | null) => {
+    if (!el) return;
+    try {
+      el.focus({ preventScroll: true });
+    } catch (e) {
+      try {
+        el.focus();
+      } catch (err) {}
+    }
+    if (typeof window !== 'undefined' && (window.scrollX !== 0 || window.scrollY !== 0)) {
+      try {
+        window.scrollTo(0, 0);
+      } catch (e) {}
+    }
+  }, []);
+
+  // Ensure host room layout stays anchored at (0, 0) and does not scroll
+  useEffect(() => {
+    const handleScroll = () => {
+      if (typeof window !== 'undefined' && (window.scrollY !== 0 || window.scrollX !== 0)) {
+        window.scrollTo(0, 0);
+      }
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
   // Track last focused element ID
   useEffect(() => {
     const handleFocusIn = (e: FocusEvent) => {
@@ -200,9 +229,11 @@ export default function RoomSession() {
   // Initial focus placement on Play button or primary action when Host room opens
   useEffect(() => {
     if (validationStatus === 'valid' && isHost) {
+      if (initialFocusSetRef.current) return;
       const focusPrimary = () => {
+        if (initialFocusSetRef.current) return;
         if (playButtonRef.current && !playButtonRef.current.hasAttribute('disabled')) {
-          playButtonRef.current.focus();
+          safeFocus(playButtonRef.current);
           initialFocusSetRef.current = true;
           return;
         }
@@ -210,7 +241,7 @@ export default function RoomSession() {
           '[data-tv-id="play-button"], [data-tv-id="start-session-button"], [data-tv-id="header-start-session-button"]'
         );
         if (candidate && !candidate.hasAttribute('disabled')) {
-          candidate.focus();
+          safeFocus(candidate);
           initialFocusSetRef.current = true;
         }
       };
@@ -222,21 +253,15 @@ export default function RoomSession() {
         clearTimeout(t2);
       };
     }
-  }, [validationStatus, isHost, session?.id, queue]);
+  }, [validationStatus, isHost, session?.id, safeFocus]);
 
-  // Focus recovery if focus lands back on body unexpectedly
+  // Focus recovery if focus lands back on body unexpectedly during TV navigation
   useEffect(() => {
-    if (validationStatus === 'valid' && isHost) {
+    if (validationStatus === 'valid' && isHost && lastFocusedTvIdRef.current) {
       if (document.activeElement === document.body) {
-        if (lastFocusedTvIdRef.current) {
-          const prevEl = document.querySelector<HTMLElement>(`[data-tv-id="${lastFocusedTvIdRef.current}"]`);
-          if (prevEl && !prevEl.hasAttribute('disabled')) {
-            prevEl.focus();
-            return;
-          }
-        }
-        if (playButtonRef.current && !playButtonRef.current.hasAttribute('disabled')) {
-          playButtonRef.current.focus();
+        const prevEl = document.querySelector<HTMLElement>(`[data-tv-id="${lastFocusedTvIdRef.current}"]`);
+        if (prevEl && !prevEl.hasAttribute('disabled')) {
+          safeFocus(prevEl);
         }
       }
     }
@@ -1062,10 +1087,14 @@ export default function RoomSession() {
     setIsRestartingSession(true);
     try {
       if (ws) {
-        ws.close();
+        try {
+          ws.close();
+        } catch (e) {}
       }
       if (audioRef.current) {
-        audioRef.current.pause();
+        try {
+          audioRef.current.pause();
+        } catch (e) {}
       }
       setPlaying(false);
       setCurrentTime(0);
@@ -1073,7 +1102,17 @@ export default function RoomSession() {
       setCurrentSongDetails(null);
       setQueue([]);
 
-      const res = await fetch('/api/karaoke/sessions', { method: 'POST' });
+      const token = getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const res = await fetch('/api/karaoke/sessions', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers
+      });
       let newSession: any = {};
       if (res.headers.get('content-type')?.includes('application/json')) {
         try {
@@ -1095,6 +1134,30 @@ export default function RoomSession() {
     }
   };
 
+  // Safe play helper for iOS 10 WebKit and modern browsers
+  const safePlay = useCallback((audio: HTMLAudioElement | null) => {
+    if (!audio) return;
+    try {
+      const playPromise = audio.play();
+      if (playPromise && typeof playPromise.then === 'function') {
+        playPromise
+          .then(() => {
+            setAudioAutoplayBlocked(false);
+          })
+          .catch((err: any) => {
+            console.warn('[AUDIO] Autoplay prevented or waiting for interaction:', err);
+            setAudioAutoplayBlocked(true);
+          });
+      } else {
+        // Legacy WebKit (iOS 10 Safari) returns undefined synchronously when play() succeeds
+        setAudioAutoplayBlocked(false);
+      }
+    } catch (err) {
+      console.warn('[AUDIO] Synchronous play failed:', err);
+      setAudioAutoplayBlocked(true);
+    }
+  }, []);
+
   // Host Control actions
   const togglePlay = () => {
     if (!isHost) return;
@@ -1102,6 +1165,17 @@ export default function RoomSession() {
     setPlaying(nextPlaying);
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: nextPlaying ? 'PLAY' : 'PAUSE' }));
+    }
+    // Direct, synchronous playback initiation within the user's tap gesture
+    if (audioRef.current && currentSong) {
+      if (nextPlaying) {
+        safePlay(audioRef.current);
+      } else {
+        try {
+          audioRef.current.pause();
+        } catch (e) {}
+        setAudioAutoplayBlocked(false);
+      }
     }
   };
 
@@ -1127,6 +1201,9 @@ export default function RoomSession() {
     if (audioRef.current) {
       audioRef.current.currentTime = 0;
       setCurrentTime(0);
+      if (playing) {
+        safePlay(audioRef.current);
+      }
     }
   };
 
@@ -1255,28 +1332,20 @@ export default function RoomSession() {
     if (!isHost || !audioRef.current || !currentSong) return;
 
     if (playing) {
-      const playPromise = audioRef.current.play();
-      if (playPromise !== undefined) {
-        playPromise
-          .then(() => {
-            setAudioAutoplayBlocked(false);
-          })
-          .catch(err => {
-            console.warn('[AUDIO] Autoplay prevented or waiting for interaction:', err);
-            setAudioAutoplayBlocked(true);
-          });
+      if (audioRef.current.paused) {
+        safePlay(audioRef.current);
       }
     } else {
-      audioRef.current.pause();
+      try {
+        audioRef.current.pause();
+      } catch (e) {}
       setAudioAutoplayBlocked(false);
     }
-  }, [playing, currentSong?.songId, variant, isHost]);
+  }, [playing, currentSong?.songId, variant, isHost, safePlay]);
 
   const handleEnableAudio = () => {
     if (audioRef.current) {
-      audioRef.current.play()
-        .then(() => setAudioAutoplayBlocked(false))
-        .catch(err => console.warn('User gesture play failed:', err));
+      safePlay(audioRef.current);
     }
   };
 
@@ -1484,7 +1553,7 @@ export default function RoomSession() {
   // Render: Active Karaoke Room Experience
   // -------------------------------------------------------------
   return (
-    <div className="flex h-screen bg-[#08090E] text-white overflow-hidden flex-col relative font-sans select-none">
+    <div className="fixed inset-0 flex h-full w-full bg-[#08090E] text-white overflow-hidden flex-col font-sans select-none">
       {/* Room Song Catalog / Add to Queue Modal (Guests Only) */}
       {!isHost && showLibrary && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 md:p-8">
@@ -1742,7 +1811,7 @@ export default function RoomSession() {
       </header>
 
       {/* Main Container */}
-      <div className="flex-1 flex overflow-hidden relative w-full h-full p-3 lg:p-4 gap-3 lg:gap-4">
+      <div className="flex-1 min-h-0 flex overflow-hidden relative w-full p-3 lg:p-4 gap-3 lg:gap-4">
         {/* Main Stage: Lyrics Card Container */}
         <main className="relative overflow-hidden rounded-2xl md:rounded-3xl bg-gradient-to-br from-[#171827] via-[#1b172a] to-[#141522] border border-white/10 shadow-xl flex-1 flex flex-col justify-between h-full min-h-0 min-w-0 transition-all select-none">
           {/* Ambient Glow matching Homepage & Sidebar Feature Cards */}
@@ -1909,11 +1978,12 @@ export default function RoomSession() {
           )}
 
           {/* Audio Player for Host */}
-          {isHost && currentSong && (
+          {isHost && (
             <audio 
               ref={audioRef}
-              src={`/api/songs/${currentSong.songId}/audio?type=${variant}`}
-              autoPlay={playing}
+              src={currentSong ? `/api/songs/${currentSong.songId}/audio?type=${variant}` : undefined}
+              preload="auto"
+              playsInline
               onTimeUpdate={() => {
                 if (audioRef.current) {
                   setCurrentTime(audioRef.current.currentTime);
@@ -1926,9 +1996,11 @@ export default function RoomSession() {
                   if (restorePositionRef.current) {
                     audioRef.current.currentTime = restorePositionRef.current.time;
                     if (restorePositionRef.current.playing) {
-                      audioRef.current.play().catch(err => console.log('Autoplay prevented:', err));
+                      safePlay(audioRef.current);
                     } else {
-                      audioRef.current.pause();
+                      try {
+                        audioRef.current.pause();
+                      } catch (e) {}
                     }
                     restorePositionRef.current = null;
                   }

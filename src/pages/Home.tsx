@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, ReactNode } from 'react';
 import { useOutletContext, Link, useNavigate } from 'react-router-dom';
 import { Play, Mic, Radio, Users, Music, Disc, ChevronRight, Plus, Sparkles, Folder, Download } from 'lucide-react';
+import { getAuthToken } from '../lib/auth';
 
 export default function Home() {
   const { user } = useOutletContext<{ user: any }>() || {};
@@ -50,7 +51,16 @@ export default function Home() {
 
   const createRoom = async () => {
     try {
-      const res = await fetch('/api/karaoke/sessions', { method: 'POST' });
+      const token = getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const res = await fetch('/api/karaoke/sessions', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers
+      });
       let data: any = {};
       if (res.headers.get('content-type')?.includes('application/json')) {
         try {
