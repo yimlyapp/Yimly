@@ -72,30 +72,28 @@
   font-display: swap;
 }
 
-@layer base {
-  :root {
-    --accent: #FF4FA3;
-    --accent-hover: #ff6eb3;
-    --accent-glow: rgba(255, 79, 163, 0.25);
-    --bg-main: #0a0b10;
-    --bg-surface: #12131c;
-    --bg-card: #181926;
-    --bg-elevated: #222436;
-    --border-subtle: rgba(255, 255, 255, 0.08);
-  }
+:root {
+  --accent: #FF4FA3;
+  --accent-hover: #ff6eb3;
+  --accent-glow: rgba(255, 79, 163, 0.25);
+  --bg-main: #0a0b10;
+  --bg-surface: #12131c;
+  --bg-card: #181926;
+  --bg-elevated: #222436;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+}
 
-  html, body {
-    background-color: #0a0b10;
-    color: #f3f4f6;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    -webkit-text-size-adjust: 100%;
-    text-size-adjust: 100%;
-    -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
-    overflow-x: hidden;
-  }
+html, body {
+  background-color: #0a0b10;
+  color: #f3f4f6;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  overflow-x: hidden;
 }
 
 /* Inertia touch scrolling on iOS */

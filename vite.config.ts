@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import legacy from '@vitejs/plugin-legacy';
 import path from 'path';
 import {defineConfig} from 'vite';
+import {legacyCssPlugin} from './vite-plugin-legacy-css';
 
 function fixSafari12LegacyDetector(): any {
   return {
@@ -30,6 +31,7 @@ export default defineConfig(() => {
         additionalLegacyPolyfills: ['regenerator-runtime/runtime'],
       }),
       fixSafari12LegacyDetector(),
+      legacyCssPlugin(),
     ],
     resolve: {
       alias: {
