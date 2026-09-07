@@ -457,6 +457,23 @@ export default function RoomSession() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isHost, showEndSessionModal, showSessionInfoModal, showLibrary]);
 
+  // Feature detect if native Element Fullscreen API is available
+  const isNativeFullscreenSupported = () => {
+    if (typeof document === 'undefined') return false;
+    const doc = document as any;
+    const docEl = document.documentElement as any;
+    return Boolean(
+      (docEl.requestFullscreen ||
+       docEl.webkitRequestFullscreen ||
+       docEl.mozRequestFullScreen ||
+       docEl.msRequestFullscreen) &&
+      doc.fullscreenEnabled !== false &&
+      doc.webkitFullscreenEnabled !== false &&
+      doc.mozFullScreenEnabled !== false &&
+      doc.msFullscreenEnabled !== false
+    );
+  };
+
   // Fullscreen change listener with vendor prefixes for iOS Safari
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -469,6 +486,8 @@ export default function RoomSession() {
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.documentElement.classList.remove('ios-fullscreen-fallback');
+      document.body.classList.remove('ios-fullscreen-fallback');
     };
   }, []);
 
@@ -476,25 +495,48 @@ export default function RoomSession() {
     try {
       const doc = document as any;
       const docEl = document.documentElement as any;
-      const fsEl = doc.fullscreenElement || doc.webkitFullscreenElement || doc.mozFullScreenElement || doc.msFullscreenElement;
 
-      if (!fsEl) {
-        if (docEl.requestFullscreen) {
-          docEl.requestFullscreen().catch((err: any) => console.warn('Fullscreen request failed:', err));
-        } else if (docEl.webkitRequestFullscreen) {
-          docEl.webkitRequestFullscreen();
-        } else if (docEl.msRequestFullscreen) {
-          docEl.msRequestFullscreen();
+      if (isNativeFullscreenSupported()) {
+        const fsEl = doc.fullscreenElement || doc.webkitFullscreenElement || doc.mozFullScreenElement || doc.msFullscreenElement;
+
+        if (!fsEl) {
+          if (docEl.requestFullscreen) {
+            docEl.requestFullscreen().catch((err: any) => console.warn('Fullscreen request failed:', err));
+          } else if (docEl.webkitRequestFullscreen) {
+            docEl.webkitRequestFullscreen();
+          } else if (docEl.msRequestFullscreen) {
+            docEl.msRequestFullscreen();
+          }
+        } else {
+          if (doc.exitFullscreen) {
+            doc.exitFullscreen().catch((err: any) => console.warn('Exit fullscreen failed:', err));
+          } else if (doc.webkitExitFullscreen) {
+            doc.webkitExitFullscreen();
+          } else if (doc.msExitFullscreen) {
+            doc.msExitFullscreen();
+          }
         }
-      } else {
-        if (doc.exitFullscreen) {
-          doc.exitFullscreen().catch((err: any) => console.warn('Exit fullscreen failed:', err));
-        } else if (doc.webkitExitFullscreen) {
-          doc.webkitExitFullscreen();
-        } else if (doc.msExitFullscreen) {
-          doc.msExitFullscreen();
-        }
+        return;
       }
+
+      // Fallback ONLY for legacy browsers lacking native Element Fullscreen API (iOS 10 Safari)
+      const nextFullscreen = !isFullscreen;
+      setIsFullscreen(nextFullscreen);
+
+      if (nextFullscreen) {
+        document.documentElement.classList.add('ios-fullscreen-fallback');
+        document.body.classList.add('ios-fullscreen-fallback');
+        try {
+          window.scrollTo(0, 1);
+        } catch (e) {}
+      } else {
+        document.documentElement.classList.remove('ios-fullscreen-fallback');
+        document.body.classList.remove('ios-fullscreen-fallback');
+      }
+
+      try {
+        window.dispatchEvent(new Event('resize'));
+      } catch (e) {}
     } catch (e) {
       console.warn('Fullscreen toggle failed:', e);
     }
