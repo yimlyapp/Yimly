@@ -18,7 +18,7 @@ import {
   Play, Pause, SkipForward, RotateCcw, Mic, Music, 
   FileText, ArrowLeft, Plus, Radio, Check, AlertCircle, 
   User, Library as LibraryIcon, Search, X, RefreshCw,
-  Maximize2, Minimize2, Info, LogOut, QrCode, Clock
+  Maximize2, Minimize2, Info, LogOut, QrCode, Clock, Volume2
 } from 'lucide-react';
 import { filterSongs, SearchableSong } from '../lib/search-utils';
 
@@ -44,12 +44,22 @@ export default function RoomSession() {
 
   const roleParam = searchParams.get('role');
   const urlControllerId = searchParams.get('controllerId');
-  const controllerId = urlControllerId || (sessionId ? localStorage.getItem(`yimly_controller_${sessionId}`) : null);
+  const getStoredControllerId = (sId?: string): string | null => {
+    if (!sId) return null;
+    try {
+      return localStorage.getItem(`yimly_controller_${sId}`);
+    } catch {
+      return null;
+    }
+  };
+  const controllerId = urlControllerId || getStoredControllerId(sessionId);
   const isHost = roleParam === 'host';
 
   useEffect(() => {
     if (sessionId && urlControllerId) {
-      localStorage.setItem(`yimly_controller_${sessionId}`, urlControllerId);
+      try {
+        localStorage.setItem(`yimly_controller_${sessionId}`, urlControllerId);
+      } catch {}
     }
   }, [sessionId, urlControllerId]);
 
@@ -447,24 +457,46 @@ export default function RoomSession() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isHost, showEndSessionModal, showSessionInfoModal, showLibrary]);
 
-  // Fullscreen change listener
+  // Fullscreen change listener with vendor prefixes for iOS Safari
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
+      const doc = document as any;
+      const fsEl = doc.fullscreenElement || doc.webkitFullscreenElement || doc.mozFullScreenElement || doc.msFullscreenElement;
+      setIsFullscreen(Boolean(fsEl));
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
   }, []);
 
   const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(err => {
-        console.warn('Fullscreen request failed:', err);
-      });
-    } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen().catch(console.error);
+    try {
+      const doc = document as any;
+      const docEl = document.documentElement as any;
+      const fsEl = doc.fullscreenElement || doc.webkitFullscreenElement || doc.mozFullScreenElement || doc.msFullscreenElement;
+
+      if (!fsEl) {
+        if (docEl.requestFullscreen) {
+          docEl.requestFullscreen().catch((err: any) => console.warn('Fullscreen request failed:', err));
+        } else if (docEl.webkitRequestFullscreen) {
+          docEl.webkitRequestFullscreen();
+        } else if (docEl.msRequestFullscreen) {
+          docEl.msRequestFullscreen();
+        }
+      } else {
+        if (doc.exitFullscreen) {
+          doc.exitFullscreen().catch((err: any) => console.warn('Exit fullscreen failed:', err));
+        } else if (doc.webkitExitFullscreen) {
+          doc.webkitExitFullscreen();
+        } else if (doc.msExitFullscreen) {
+          doc.msExitFullscreen();
+        }
       }
+    } catch (e) {
+      console.warn('Fullscreen toggle failed:', e);
     }
   };
 
@@ -719,8 +751,24 @@ export default function RoomSession() {
 
     connect();
 
+    const handleTabRecheck = () => {
+      if (document.visibilityState === 'visible' && !isClosedIntentionally && validationStatus === 'valid') {
+        if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          connect();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleTabRecheck);
+    window.addEventListener('pageshow', handleTabRecheck);
+    window.addEventListener('online', handleTabRecheck);
+
     return () => {
       isClosedIntentionally = true;
+      document.removeEventListener('visibilitychange', handleTabRecheck);
+      window.removeEventListener('pageshow', handleTabRecheck);
+      window.removeEventListener('online', handleTabRecheck);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (socket) socket.close();
     };
@@ -757,11 +805,15 @@ export default function RoomSession() {
 
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
     window.addEventListener('focus', handleVisibilityOrFocus);
+    window.addEventListener('pageshow', handleVisibilityOrFocus);
+    window.addEventListener('online', handleVisibilityOrFocus);
 
     return () => {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
       window.removeEventListener('focus', handleVisibilityOrFocus);
+      window.removeEventListener('pageshow', handleVisibilityOrFocus);
+      window.removeEventListener('online', handleVisibilityOrFocus);
     };
   }, [isHost, validationStatus, sessionId, ws]);
 
@@ -1154,18 +1206,37 @@ export default function RoomSession() {
     fetchState();
   };
 
+  const [audioAutoplayBlocked, setAudioAutoplayBlocked] = useState(false);
+
   // Host Audio Playback Synchronization Effect
   useEffect(() => {
     if (!isHost || !audioRef.current || !currentSong) return;
 
     if (playing) {
-      audioRef.current.play().catch(err => {
-        console.warn('[AUDIO] Autoplay prevented or waiting for interaction:', err);
-      });
+      const playPromise = audioRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            setAudioAutoplayBlocked(false);
+          })
+          .catch(err => {
+            console.warn('[AUDIO] Autoplay prevented or waiting for interaction:', err);
+            setAudioAutoplayBlocked(true);
+          });
+      }
     } else {
       audioRef.current.pause();
+      setAudioAutoplayBlocked(false);
     }
   }, [playing, currentSong?.songId, variant, isHost]);
+
+  const handleEnableAudio = () => {
+    if (audioRef.current) {
+      audioRef.current.play()
+        .then(() => setAudioAutoplayBlocked(false))
+        .catch(err => console.warn('User gesture play failed:', err));
+    }
+  };
 
   // High-frequency smooth animation loop for lyric sweep and position
   useEffect(() => {
@@ -1638,9 +1709,22 @@ export default function RoomSession() {
 
           {/* Card Top Header */}
           <div className="relative z-10 flex items-center justify-between p-3.5 sm:p-4 lg:p-5 pb-0 shrink-0">
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#FF4FA3]/15 border border-[#FF4FA3]/30 text-[#FF4FA3] text-[10px] font-bold uppercase tracking-wider">
-              <Mic className="w-3 h-3" />
-              <span>Live Lyrics</span>
+            <div className="flex items-center gap-2">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#FF4FA3]/15 border border-[#FF4FA3]/30 text-[#FF4FA3] text-[10px] font-bold uppercase tracking-wider">
+                <Mic className="w-3 h-3" />
+                <span>Live Lyrics</span>
+              </div>
+              {isHost && audioAutoplayBlocked && (
+                <button
+                  type="button"
+                  onClick={handleEnableAudio}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#FF4FA3] text-white text-[10px] font-bold uppercase tracking-wider animate-pulse hover:bg-[#ff6eb3] transition-colors shadow-lg shadow-[#FF4FA3]/40"
+                  title="Tap to enable sound"
+                >
+                  <Volume2 className="w-3 h-3" />
+                  <span>Tap to Enable Audio</span>
+                </button>
+              )}
             </div>
             {currentSong && (
               <div className="text-xs text-zinc-400 font-medium truncate max-w-[200px] sm:max-w-xs md:max-w-md">

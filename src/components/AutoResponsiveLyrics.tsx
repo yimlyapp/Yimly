@@ -285,20 +285,32 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
       recalculateLayout();
     };
 
-    const observer = new ResizeObserver(handleResize);
-    if (stageEl) observer.observe(stageEl);
-    if (groupEl) observer.observe(groupEl);
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      try {
+        observer = new ResizeObserver(handleResize);
+        if (stageEl) observer.observe(stageEl);
+        if (groupEl) observer.observe(groupEl);
+      } catch (e) {
+        console.warn('[AutoResponsiveLyrics] ResizeObserver failed:', e);
+      }
+    }
 
     window.addEventListener('resize', handleResize);
     window.addEventListener('orientationchange', handleResize);
     document.addEventListener('fullscreenchange', handleResize);
+    document.addEventListener('webkitfullscreenchange', handleResize);
 
     // Initial trigger after mount
     handleResize();
     const rafId = requestAnimationFrame(handleResize);
 
     return () => {
-      observer.disconnect();
+      if (observer) {
+        try {
+          observer.disconnect();
+        } catch (e) {}
+      }
       if (typeof document !== 'undefined' && document.fonts) {
         try {
           document.fonts.removeEventListener('loadingdone', handleFontLoad);
@@ -307,6 +319,7 @@ export const AutoResponsiveLyrics: React.FC<AutoResponsiveLyricsProps> = ({
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('orientationchange', handleResize);
       document.removeEventListener('fullscreenchange', handleResize);
+      document.removeEventListener('webkitfullscreenchange', handleResize);
       cancelAnimationFrame(rafId);
     };
   }, [recalculateLayout]);

@@ -1,11 +1,21 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import legacy from '@vitejs/plugin-legacy';
 import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      legacy({
+        targets: ['ios >= 12', 'safari >= 12'],
+        modernPolyfills: true,
+        renderLegacyChunks: true,
+        additionalLegacyPolyfills: ['regenerator-runtime/runtime'],
+      }),
+    ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, 'src'), // Fix alias to point to src!
@@ -13,6 +23,7 @@ export default defineConfig(() => {
     },
     build: {
       outDir: 'dist/client',
+      target: 'es2015',
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
