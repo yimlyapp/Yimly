@@ -1,5 +1,5 @@
 /**
- * Polyfills and compatibility shims for legacy browsers, specifically Safari on iOS 12.x.
+ * Polyfills and compatibility shims for legacy browsers, specifically Safari on iOS 10.3.4+.
  * This file is imported at the very top of src/main.tsx before any React code executes.
  */
 
@@ -22,7 +22,18 @@ if (!(Promise as any).allSettled) {
   };
 }
 
-// 3. Object.fromEntries
+// 3. Promise.prototype.finally
+if (!(Promise.prototype as any).finally) {
+  (Promise.prototype as any).finally = function (callback: () => void) {
+    const P = this.constructor || Promise;
+    return this.then(
+      (value: any) => P.resolve(callback()).then(() => value),
+      (reason: any) => P.resolve(callback()).then(() => { throw reason; })
+    );
+  };
+}
+
+// 4. Object.fromEntries
 if (!(Object as any).fromEntries) {
   (Object as any).fromEntries = function (entries: any) {
     if (!entries) return {};
@@ -34,7 +45,22 @@ if (!(Object as any).fromEntries) {
   };
 }
 
-// 4. String.prototype.replaceAll
+// 5. Object.values and Object.entries (iOS 10.0-10.2 compatibility)
+if (!Object.values) {
+  (Object as any).values = function (obj: any) {
+    if (obj == null) throw new TypeError('Cannot convert undefined or null to object');
+    return Object.keys(obj).map(function (key) { return obj[key]; });
+  };
+}
+
+if (!Object.entries) {
+  (Object as any).entries = function (obj: any) {
+    if (obj == null) throw new TypeError('Cannot convert undefined or null to object');
+    return Object.keys(obj).map(function (key) { return [key, obj[key]]; });
+  };
+}
+
+// 6. String.prototype.replaceAll
 if (!(String.prototype as any).replaceAll) {
   (String.prototype as any).replaceAll = function (searchValue: any, replaceValue: any): string {
     if (searchValue instanceof RegExp) {
@@ -45,7 +71,38 @@ if (!(String.prototype as any).replaceAll) {
   };
 }
 
-// 5. Array.prototype.flat and flatMap
+// 7. String.prototype.padStart and padEnd (Safari 10 compatibility)
+if (!String.prototype.padStart) {
+  String.prototype.padStart = function (targetLength: number, padString?: string): string {
+    targetLength = targetLength >> 0;
+    padString = String(typeof padString !== 'undefined' ? padString : ' ');
+    if (this.length >= targetLength) {
+      return String(this);
+    }
+    targetLength = targetLength - this.length;
+    if (targetLength > padString.length) {
+      padString += padString.repeat(targetLength / padString.length);
+    }
+    return padString.slice(0, targetLength) + String(this);
+  };
+}
+
+if (!String.prototype.padEnd) {
+  String.prototype.padEnd = function (targetLength: number, padString?: string): string {
+    targetLength = targetLength >> 0;
+    padString = String(typeof padString !== 'undefined' ? padString : ' ');
+    if (this.length >= targetLength) {
+      return String(this);
+    }
+    targetLength = targetLength - this.length;
+    if (targetLength > padString.length) {
+      padString += padString.repeat(targetLength / padString.length);
+    }
+    return String(this) + padString.slice(0, targetLength);
+  };
+}
+
+// 8. Array.prototype.flat and flatMap
 if (!(Array.prototype as any).flat) {
   (Array.prototype as any).flat = function (depth = 1): any[] {
     const d = typeof depth === 'number' ? depth : 1;
@@ -62,7 +119,85 @@ if (!(Array.prototype as any).flatMap) {
   };
 }
 
-// 6. crypto.randomUUID
+// 9. Element.prototype.closest
+if (typeof Element !== 'undefined' && !Element.prototype.closest) {
+  Element.prototype.closest = function (s: string) {
+    var el: any = this;
+    do {
+      if ((el.matches || (el as any).webkitMatchesSelector).call(el, s)) return el;
+      el = el.parentElement || el.parentNode;
+    } while (el !== null && el.nodeType === 1);
+    return null;
+  };
+}
+
+// 10. URLSearchParams fallback
+if (typeof window !== 'undefined' && typeof window.URLSearchParams === 'undefined') {
+  class URLSearchParamsPolyfill {
+    private params = new Map<string, string>();
+
+    constructor(init?: string | Record<string, string> | URLSearchParamsPolyfill) {
+      if (!init) return;
+      if (typeof init === 'string') {
+        let query = init;
+        if (query.startsWith('?')) query = query.slice(1);
+        const pairs = query.split('&');
+        for (const pair of pairs) {
+          if (!pair) continue;
+          const [key, val] = pair.split('=');
+          if (key) {
+            this.params.set(
+              decodeURIComponent(key.replace(/\+/g, ' ')),
+              val ? decodeURIComponent(val.replace(/\+/g, ' ')) : ''
+            );
+          }
+        }
+      } else if (init instanceof URLSearchParamsPolyfill) {
+        init.forEach((val, key) => this.params.set(key, val));
+      } else if (typeof init === 'object') {
+        for (const key of Object.keys(init)) {
+          this.params.set(key, String((init as any)[key]));
+        }
+      }
+    }
+
+    get(name: string): string | null {
+      return this.params.get(name) ?? null;
+    }
+
+    set(name: string, value: string): void {
+      this.params.set(name, value);
+    }
+
+    append(name: string, value: string): void {
+      this.params.set(name, value);
+    }
+
+    delete(name: string): void {
+      this.params.delete(name);
+    }
+
+    has(name: string): boolean {
+      return this.params.has(name);
+    }
+
+    toString(): string {
+      const parts: string[] = [];
+      this.params.forEach((value, key) => {
+        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+      });
+      return parts.join('&');
+    }
+
+    forEach(callback: (value: string, key: string) => void): void {
+      this.params.forEach(callback);
+    }
+  }
+
+  (window as any).URLSearchParams = URLSearchParamsPolyfill;
+}
+
+// 11. crypto.randomUUID
 if (typeof window !== 'undefined' && typeof window.crypto !== 'undefined' && !window.crypto.randomUUID) {
   window.crypto.randomUUID = function (): `${string}-${string}-${string}-${string}-${string}` {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
@@ -73,7 +208,7 @@ if (typeof window !== 'undefined' && typeof window.crypto !== 'undefined' && !wi
   };
 }
 
-// 7. CustomEvent constructor for older WebKit
+// 12. CustomEvent constructor for older WebKit
 if (typeof window !== 'undefined' && typeof (window as any).CustomEvent !== 'function') {
   function CustomEventPolyfill(event: string, params?: { bubbles?: boolean; cancelable?: boolean; detail?: any }) {
     params = params || { bubbles: false, cancelable: false, detail: null };
@@ -85,7 +220,7 @@ if (typeof window !== 'undefined' && typeof (window as any).CustomEvent !== 'fun
   (window as any).CustomEvent = CustomEventPolyfill;
 }
 
-// 8. ResizeObserver polyfill / shim
+// 13. ResizeObserver polyfill / shim
 if (typeof window !== 'undefined' && typeof (window as any).ResizeObserver === 'undefined') {
   class ResizeObserverPolyfill {
     private callback: (entries: any[], observer: any) => void;
@@ -119,7 +254,6 @@ if (typeof window !== 'undefined' && typeof (window as any).ResizeObserver === '
     observe(target: Element) {
       if (target) {
         this.targets.add(target);
-        // Trigger initial callback asynchronously
         requestAnimationFrame(this.listener);
       }
     }
@@ -138,7 +272,7 @@ if (typeof window !== 'undefined' && typeof (window as any).ResizeObserver === '
   (window as any).ResizeObserver = ResizeObserverPolyfill;
 }
 
-// 9. IntersectionObserver polyfill / shim
+// 14. IntersectionObserver polyfill / shim
 if (typeof window !== 'undefined' && typeof (window as any).IntersectionObserver === 'undefined') {
   class IntersectionObserverPolyfill {
     private callback: (entries: any[], observer: any) => void;
@@ -181,7 +315,7 @@ if (typeof window !== 'undefined' && typeof (window as any).IntersectionObserver
   (window as any).IntersectionObserver = IntersectionObserverPolyfill;
 }
 
-// 10. Clipboard API fallback
+// 15. Clipboard API fallback
 if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
   if (!navigator.clipboard) {
     (navigator as any).clipboard = {
@@ -209,9 +343,8 @@ if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
   }
 }
 
-// 11. Flex Gap detection & Mobile Safari Viewport Height fix
+// 16. Flex Gap detection & Mobile Safari Viewport Height fix
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-  // Test flex gap support
   function checkFlexGapSupport() {
     try {
       const flex = document.createElement('div');
@@ -227,12 +360,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
         document.documentElement.classList.add('no-flex-gap');
       }
     } catch (e) {
-      // If error occurs, assume no flex gap
       document.documentElement.classList.add('no-flex-gap');
     }
   }
 
-  // Set real viewport height for iOS Safari address bar quirks
   function setViewportHeight() {
     try {
       const vh = window.innerHeight * 0.01;
