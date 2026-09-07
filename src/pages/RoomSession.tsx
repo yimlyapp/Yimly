@@ -187,6 +187,11 @@ export default function RoomSession() {
   const [showStandaloneDiag, setShowStandaloneDiag] = useState(false);
   const [standaloneAudioDiag, setStandaloneAudioDiag] = useState<any>(null);
   const [standaloneLayoutDiag, setStandaloneLayoutDiag] = useState<any>(null);
+  const [mediaClockSamples, setMediaClockSamples] = useState<number[]>([]);
+  const [isClockAdvancing, setIsClockAdvancing] = useState<boolean>(false);
+  const [isNativeControlsVisible, setIsNativeControlsVisible] = useState<boolean>(true);
+  const [diagTestMessage, setDiagTestMessage] = useState<string>('');
+  const lastSampledTimeRef = useRef<number>(0);
   const prevQueueLengthRef = useRef<number>(0);
   const initialAudioElementRef = useRef<HTMLAudioElement | null>(null);
   const audioInstanceIdRef = useRef<string>('audio-dom-' + Math.random().toString(36).substring(2, 9));
@@ -243,8 +248,11 @@ export default function RoomSession() {
     if (audio.ended) return { status: 'ENDED', detail: 'Track finished playing' };
     
     if (!audio.paused) {
+      if (isClockAdvancing) {
+        return { status: 'PLAYING', detail: 'Clock advancing (active playback)' };
+      }
       if (audio.readyState >= 3) {
-        return { status: 'PLAYING', detail: 'Actively playing audio' };
+        return { status: 'CLOCK_FROZEN', detail: `paused=false, readyState=${audio.readyState} but currentTime frozen at ${audio.currentTime?.toFixed?.(1) || 0}s` };
       }
       if (audio.readyState === 2) {
         return { status: 'WAITING', detail: 'Waiting for buffer data' };
@@ -262,7 +270,7 @@ export default function RoomSession() {
       return { status: 'NOT_READY', detail: 'HAVE_NOTHING (not loaded yet)' };
     }
     return { status: 'PAUSED', detail: 'Paused' };
-  }, [audioAutoplayBlocked]);
+  }, [audioAutoplayBlocked, isClockAdvancing]);
 
   // Standalone mode comprehensive audio state diagnostic logging helper
   const logStandaloneAudioState = useCallback((eventName: string, audio: HTMLAudioElement | null, extra?: any) => {
@@ -294,6 +302,7 @@ export default function RoomSession() {
       lastEvent: eventName,
       status: statusInfo.status,
       statusDetail: statusInfo.detail,
+      isClockAdvancing,
       timestamp: Date.now(),
       standalone: Boolean((window.navigator as any)?.standalone),
       domInstanceId: domId,
@@ -310,6 +319,7 @@ export default function RoomSession() {
       duration: audio.duration,
       muted: audio.muted,
       volume: audio.volume,
+      seeking: audio.seeking,
       error: audio.error ? { code: audio.error.code, message: (audio.error as any).message || '' } : null,
       webkitDisplayingFullscreen: (audio as any).webkitDisplayingFullscreen ?? null,
       documentContains: document.contains ? document.contains(audio) : true,
@@ -339,14 +349,104 @@ export default function RoomSession() {
       extra: extra || null
     };
 
-    console.log(`[STANDALONE_AUDIO_DIAGNOSTIC] ${eventName} (status: ${statusInfo.status}):`, audioState);
     try {
       (window as any).__STANDALONE_AUDIO_DIAGNOSTICS__ = (window as any).__STANDALONE_AUDIO_DIAGNOSTICS__ || [];
       (window as any).__STANDALONE_AUDIO_DIAGNOSTICS__.push(audioState);
+      if ((window as any).__STANDALONE_AUDIO_DIAGNOSTICS__.length > 100) {
+        (window as any).__STANDALONE_AUDIO_DIAGNOSTICS__.shift();
+      }
     } catch (e) {}
     setStandaloneAudioDiag(audioState);
     return audioState;
-  }, [getAudioDiagnosticStatus]);
+  }, [getAudioDiagnosticStatus, isClockAdvancing]);
+
+  // Periodic Media Clock Sampler for iOS 10 Standalone Mode (every 300ms)
+  useEffect(() => {
+    if (!isTargetStandalone) return;
+    const interval = setInterval(() => {
+      const audio = audioRef.current;
+      if (!audio) return;
+
+      const curTime = audio.currentTime;
+      const prevTime = lastSampledTimeRef.current;
+      const timeDiff = curTime - prevTime;
+      const advancing = !audio.paused && (timeDiff > 0.02 || (prevTime === 0 && curTime > 0));
+
+      lastSampledTimeRef.current = curTime;
+      setIsClockAdvancing(advancing);
+      setMediaClockSamples(prev => {
+        const next = [...prev, Math.round(curTime * 10) / 10];
+        return next.slice(-8);
+      });
+
+      logStandaloneAudioState('sample_300ms', audio, { isClockAdvancing: advancing, sampleDiff: timeDiff });
+    }, 350);
+
+    return () => clearInterval(interval);
+  }, [isTargetStandalone, logStandaloneAudioState]);
+
+  // Diagnostic Test Actions
+  const handleSeekTest = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    try {
+      audio.currentTime = 10;
+      setDiagTestMessage(`[SEEK 10s] curTime=${audio.currentTime}, readyState=${audio.readyState}`);
+      logStandaloneAudioState('diag_seek_10s_test', audio);
+    } catch (e: any) {
+      setDiagTestMessage(`[SEEK ERR] ${e?.message || e}`);
+    }
+  };
+
+  const handlePauseSeekPlayTest = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    try {
+      audio.pause();
+      audio.currentTime = 10;
+      const p = audio.play();
+      if (p && typeof p.then === 'function') {
+        p.then(() => {
+          setDiagTestMessage(`[PAUSE-SEEK-PLAY] play() resolved, curTime=${audio.currentTime}`);
+          logStandaloneAudioState('diag_pause_seek_play_resolved', audio);
+        }).catch((err: any) => {
+          setDiagTestMessage(`[PAUSE-SEEK-PLAY ERR] ${err?.message || err}`);
+          logStandaloneAudioState('diag_pause_seek_play_rejected', audio, { error: err });
+        });
+      } else {
+        setDiagTestMessage(`[PAUSE-SEEK-PLAY] legacy play() returned, curTime=${audio.currentTime}`);
+        logStandaloneAudioState('diag_pause_seek_play_legacy', audio);
+      }
+    } catch (e: any) {
+      setDiagTestMessage(`[PAUSE-SEEK-PLAY ERR] ${e?.message || e}`);
+    }
+  };
+
+  const handleDirectGestureLoadPlay = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    try {
+      if (!audio.src && currentSong?.songId) {
+        audio.src = `/api/songs/${currentSong.songId}/audio?type=${variant}`;
+      }
+      audio.load();
+      const p = audio.play();
+      if (p && typeof p.then === 'function') {
+        p.then(() => {
+          setDiagTestMessage(`[DIRECT GESTURE] play() resolved, curTime=${audio.currentTime}`);
+          logStandaloneAudioState('diag_direct_gesture_resolved', audio);
+        }).catch((err: any) => {
+          setDiagTestMessage(`[DIRECT GESTURE ERR] ${err?.message || err}`);
+          logStandaloneAudioState('diag_direct_gesture_rejected', audio, { error: err });
+        });
+      } else {
+        setDiagTestMessage(`[DIRECT GESTURE] legacy play() returned, curTime=${audio.currentTime}`);
+        logStandaloneAudioState('diag_direct_gesture_legacy', audio);
+      }
+    } catch (e: any) {
+      setDiagTestMessage(`[DIRECT GESTURE ERR] ${e?.message || e}`);
+    }
+  };
 
   // Stable audio element ref callback to track DOM identity across renders
   const setAudioRef = useCallback((el: HTMLAudioElement | null) => {
@@ -1197,12 +1297,20 @@ export default function RoomSession() {
 
     const events = [
       'loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough',
-      'play', 'playing', 'pause', 'waiting', 'seeking', 'seeked', 'ended', 'error', 'stalled', 'suspend'
+      'play', 'playing', 'timeupdate', 'progress', 'waiting', 'stalled', 'suspend',
+      'pause', 'ended', 'abort', 'error', 'seeking', 'seeked', 'durationchange'
     ];
 
-    const handlers: Record<string, () => void> = {};
+    const handlers: Record<string, (e?: Event) => void> = {};
     events.forEach((evt) => {
-      handlers[evt] = () => logStandaloneAudioState(evt, audio);
+      handlers[evt] = (e?: Event) => {
+        const extraData: any = {};
+        if (evt === 'error' && audio.error) {
+          extraData.errorCode = audio.error.code;
+          extraData.errorMessage = (audio.error as any).message;
+        }
+        logStandaloneAudioState(evt, audio, extraData);
+      };
       audio.addEventListener(evt, handlers[evt]);
     });
 
@@ -2360,6 +2468,7 @@ export default function RoomSession() {
               preload="auto"
               playsInline
               {...(isTargetStandalone ? { 'webkit-playsinline': 'true' } : {})}
+              controls={isTargetStandalone && isNativeControlsVisible}
               onTimeUpdate={() => {
                 if (audioRef.current) {
                   setCurrentTime(audioRef.current.currentTime);
@@ -2385,16 +2494,27 @@ export default function RoomSession() {
                 }
               }}
               onEnded={handleSongEnded}
-              style={isTargetStandalone ? {
-                position: 'fixed',
-                width: '2px',
-                height: '2px',
-                bottom: '0px',
-                left: '0px',
-                opacity: 0.05,
-                pointerEvents: 'none',
-                zIndex: 10
-              } : undefined}
+              style={isTargetStandalone ? (
+                isNativeControlsVisible ? {
+                  position: 'fixed',
+                  left: '10px',
+                  top: '100px',
+                  width: '300px',
+                  height: '40px',
+                  opacity: 1,
+                  zIndex: 99999,
+                  pointerEvents: 'auto'
+                } : {
+                  position: 'fixed',
+                  width: '2px',
+                  height: '2px',
+                  bottom: '0px',
+                  left: '0px',
+                  opacity: 0.05,
+                  pointerEvents: 'none',
+                  zIndex: 10
+                }
+              ) : undefined}
               className={isTargetStandalone ? '' : 'hidden'}
             />
           )}
@@ -2615,12 +2735,13 @@ export default function RoomSession() {
                 </div>
               )}
               {standaloneAudioDiag && (
-                <div className="pt-1.5 border-t border-white/10 space-y-0.5">
+                <div className="pt-1.5 border-t border-white/10 space-y-1">
                   <div className="flex items-center justify-between">
                     <strong className="text-white">Audio Status:</strong>
                     <span className={`px-1.5 py-0.5 rounded font-bold uppercase text-[9px] ${
                       standaloneAudioDiag.status === 'PLAYING' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' :
-                      standaloneAudioDiag.status === 'PAUSED' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' :
+                      standaloneAudioDiag.status === 'CLOCK_FROZEN' ? 'bg-amber-500/30 text-amber-300 border border-amber-500/60 animate-pulse' :
+                      standaloneAudioDiag.status === 'PAUSED' ? 'bg-zinc-700/50 text-zinc-300 border border-zinc-500/40' :
                       standaloneAudioDiag.status === 'MEDIA_ERROR' ? 'bg-red-500/20 text-red-300 border border-red-500/40' :
                       standaloneAudioDiag.status === 'BLOCKED' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' :
                       'bg-blue-500/20 text-blue-300 border border-blue-500/40'
@@ -2629,12 +2750,27 @@ export default function RoomSession() {
                     </span>
                   </div>
                   <div className="text-zinc-400 text-[9px]">{standaloneAudioDiag.statusDetail}</div>
+
+                  <div className="flex items-center justify-between bg-white/5 px-1.5 py-1 rounded">
+                    <span>Clock Advancing:</span>
+                    <span className={isClockAdvancing ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
+                      {isClockAdvancing ? 'YES (MOVING)' : 'NO (FROZEN)'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <strong>Recent 300ms Samples:</strong>
+                    <div className="text-cyan-300 tracking-wider">
+                      [{mediaClockSamples.map(s => s.toFixed(1)).join(', ')}]
+                    </div>
+                  </div>
+
                   <div><strong>Last Event:</strong> <span className="text-cyan-300">{standaloneAudioDiag.lastEvent}</span></div>
                   <div><strong>Src:</strong> <span className="text-zinc-300 break-all">{standaloneAudioDiag.currentSrc || standaloneAudioDiag.src || 'None'}</span></div>
                   <div><strong>ReadyState:</strong> {standaloneAudioDiag.readyStateLabel}</div>
                   <div><strong>NetworkState:</strong> {standaloneAudioDiag.networkStateLabel}</div>
                   <div><strong>State:</strong> paused={String(standaloneAudioDiag.paused)}, muted={String(standaloneAudioDiag.muted)}, vol={standaloneAudioDiag.volume}</div>
-                  <div><strong>Position:</strong> {standaloneAudioDiag.currentTime?.toFixed?.(1) || 0}s / {standaloneAudioDiag.duration ? standaloneAudioDiag.duration.toFixed(1) + 's' : 'N/A'}</div>
+                  <div><strong>Position:</strong> {standaloneAudioDiag.currentTime?.toFixed?.(2) || 0}s / {standaloneAudioDiag.duration ? standaloneAudioDiag.duration.toFixed(1) + 's' : 'N/A'}</div>
                   <div><strong>DOM:</strong> connected={String(standaloneAudioDiag.isConnected)}, id={standaloneAudioDiag.domInstanceId}, initial={String(standaloneAudioDiag.survivesInitial)}</div>
                   {standaloneAudioDiag.computed && (
                     <div><strong>CSS:</strong> pos={standaloneAudioDiag.computed.position}, disp={standaloneAudioDiag.computed.display}, vis={standaloneAudioDiag.computed.visibility}, op={standaloneAudioDiag.computed.opacity}, z={standaloneAudioDiag.computed.zIndex}</div>
@@ -2642,6 +2778,46 @@ export default function RoomSession() {
                   {standaloneAudioDiag.error && (
                     <div className="text-red-400 font-bold">Error: code {standaloneAudioDiag.error.code} {standaloneAudioDiag.error.message}</div>
                   )}
+
+                  {/* Interactive Diagnostic Test Suite for iPad 4 iOS 10 */}
+                  <div className="pt-2 border-t border-white/10 space-y-1">
+                    <div className="text-emerald-400 font-semibold text-[9px]">EXPERIMENTAL TESTS (iOS 10):</div>
+                    <div className="grid grid-cols-2 gap-1 text-[8.5px]">
+                      <button
+                        type="button"
+                        onClick={handleSeekTest}
+                        className="bg-blue-600/30 hover:bg-blue-600/50 border border-blue-500/40 text-blue-200 px-1.5 py-1 rounded active:scale-95"
+                      >
+                        Seek +10s
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handlePauseSeekPlayTest}
+                        className="bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-200 px-1.5 py-1 rounded active:scale-95"
+                      >
+                        Pause&gt;Seek&gt;Play
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDirectGestureLoadPlay}
+                        className="bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-200 px-1.5 py-1 rounded active:scale-95"
+                      >
+                        Tap Load+Play
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsNativeControlsVisible(prev => !prev)}
+                        className="bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/40 text-amber-200 px-1.5 py-1 rounded active:scale-95"
+                      >
+                        {isNativeControlsVisible ? 'Hide Player Bar' : 'Show Player Bar'}
+                      </button>
+                    </div>
+                    {diagTestMessage && (
+                      <div className="bg-white/10 text-yellow-300 p-1 rounded break-all text-[8px]">
+                        {diagTestMessage}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
