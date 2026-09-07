@@ -170,6 +170,7 @@ export default function RoomSession() {
   const [searchQuery, setSearchQuery] = useState('');
   const [addingSongId, setAddingSongId] = useState<number | null>(null);
   const [addedSongId, setAddedSongId] = useState<number | null>(null);
+  const [audioAutoplayBlocked, setAudioAutoplayBlocked] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const restorePositionRef = useRef<{ time: number, playing: boolean } | null>(null);
@@ -187,6 +188,8 @@ export default function RoomSession() {
   const [standaloneAudioDiag, setStandaloneAudioDiag] = useState<any>(null);
   const [standaloneLayoutDiag, setStandaloneLayoutDiag] = useState<any>(null);
   const prevQueueLengthRef = useRef<number>(0);
+  const initialAudioElementRef = useRef<HTMLAudioElement | null>(null);
+  const audioInstanceIdRef = useRef<string>('audio-dom-' + Math.random().toString(36).substring(2, 9));
 
   // Standalone mode layout measurement helper
   const measureStandaloneLayout = useCallback((trigger: string) => {
@@ -197,6 +200,7 @@ export default function RoomSession() {
     const headerEl = document.getElementById('room-session-header') || document.querySelector('header');
     const contentEl = document.getElementById('room-session-content');
     const sidebarEl = document.getElementById('room-session-sidebar') || document.querySelector('aside');
+    const mainEl = document.getElementById('room-session-main');
 
     const measurements = {
       trigger,
@@ -210,6 +214,10 @@ export default function RoomSession() {
       windowScrollY: window.scrollY,
       documentScrollTop: document.documentElement.scrollTop,
       bodyScrollTop: document.body.scrollTop,
+      rootScrollTop: rootEl ? rootEl.scrollTop : 0,
+      contentScrollTop: contentEl ? contentEl.scrollTop : 0,
+      sidebarScrollTop: sidebarEl ? sidebarEl.scrollTop : 0,
+      mainScrollTop: mainEl ? mainEl.scrollTop : 0,
       qrRect: qrEl ? qrEl.getBoundingClientRect() : null,
       rootRect: rootEl ? rootEl.getBoundingClientRect() : null,
       headerRect: headerEl ? headerEl.getBoundingClientRect() : null,
@@ -226,37 +234,135 @@ export default function RoomSession() {
     return measurements;
   }, []);
 
-  // Standalone mode audio state diagnostic logging helper
+  // Helper to compute human-friendly status and details for standalone diagnostic
+  const getAudioDiagnosticStatus = useCallback((audio: HTMLAudioElement | null) => {
+    if (!audio) return { status: 'NO_SOURCE', detail: 'Audio element not mounted' };
+    if (!audio.src && !audio.currentSrc) return { status: 'NO_SOURCE', detail: 'No audio source assigned' };
+    if (audio.error) return { status: 'MEDIA_ERROR', detail: `Code ${audio.error.code}: ${audio.error.message || 'Media Error'}` };
+    if (audioAutoplayBlocked) return { status: 'BLOCKED', detail: 'User interaction required' };
+    if (audio.ended) return { status: 'ENDED', detail: 'Track finished playing' };
+    
+    if (!audio.paused) {
+      if (audio.readyState >= 3) {
+        return { status: 'PLAYING', detail: 'Actively playing audio' };
+      }
+      if (audio.readyState === 2) {
+        return { status: 'WAITING', detail: 'Waiting for buffer data' };
+      }
+      if (audio.networkState === 2) {
+        return { status: 'LOADING', detail: 'Buffering stream data' };
+      }
+      return { status: 'NOT_READY', detail: `ReadyState ${audio.readyState}` };
+    }
+
+    if (audio.networkState === 2 && audio.readyState < 2) {
+      return { status: 'LOADING', detail: 'Preloading audio file' };
+    }
+    if (audio.readyState === 0) {
+      return { status: 'NOT_READY', detail: 'HAVE_NOTHING (not loaded yet)' };
+    }
+    return { status: 'PAUSED', detail: 'Paused' };
+  }, [audioAutoplayBlocked]);
+
+  // Standalone mode comprehensive audio state diagnostic logging helper
   const logStandaloneAudioState = useCallback((eventName: string, audio: HTMLAudioElement | null, extra?: any) => {
     if (!audio || typeof window === 'undefined') return null;
 
+    const compStyle = window.getComputedStyle ? window.getComputedStyle(audio) : null;
+    const parent = audio.parentElement;
+    const parentCompStyle = parent && window.getComputedStyle ? window.getComputedStyle(parent) : null;
+    const domId = (audio as any).__audio_dom_instance_id || 'unassigned';
+    const isSameAsInitial = initialAudioElementRef.current !== null && audio === initialAudioElementRef.current;
+    const statusInfo = getAudioDiagnosticStatus(audio);
+
+    const READY_STATE_MAP: Record<number, string> = {
+      0: 'HAVE_NOTHING (0)',
+      1: 'HAVE_METADATA (1)',
+      2: 'HAVE_CURRENT_DATA (2)',
+      3: 'HAVE_FUTURE_DATA (3)',
+      4: 'HAVE_ENOUGH_DATA (4)'
+    };
+
+    const NETWORK_STATE_MAP: Record<number, string> = {
+      0: 'NETWORK_EMPTY (0)',
+      1: 'NETWORK_IDLE (1)',
+      2: 'NETWORK_LOADING (2)',
+      3: 'NETWORK_NO_SOURCE (3)'
+    };
+
     const audioState = {
-      event: eventName,
+      lastEvent: eventName,
+      status: statusInfo.status,
+      statusDetail: statusInfo.detail,
       timestamp: Date.now(),
       standalone: Boolean((window.navigator as any)?.standalone),
+      domInstanceId: domId,
+      survivesInitial: isSameAsInitial,
+      paused: audio.paused,
+      ended: audio.ended,
+      readyState: audio.readyState,
+      readyStateLabel: READY_STATE_MAP[audio.readyState] || String(audio.readyState),
+      networkState: audio.networkState,
+      networkStateLabel: NETWORK_STATE_MAP[audio.networkState] || String(audio.networkState),
       src: audio.src,
       currentSrc: audio.currentSrc,
-      readyState: audio.readyState,
-      networkState: audio.networkState,
-      paused: audio.paused,
-      muted: audio.muted,
-      volume: audio.volume,
-      error: audio.error ? { code: audio.error.code, message: (audio.error as any).message } : null,
       currentTime: audio.currentTime,
       duration: audio.duration,
+      muted: audio.muted,
+      volume: audio.volume,
+      error: audio.error ? { code: audio.error.code, message: (audio.error as any).message || '' } : null,
+      webkitDisplayingFullscreen: (audio as any).webkitDisplayingFullscreen ?? null,
+      documentContains: document.contains ? document.contains(audio) : true,
+      isConnected: 'isConnected' in audio ? (audio as any).isConnected : (document.contains ? document.contains(audio) : true),
+      parentTag: parent ? parent.tagName.toLowerCase() : null,
+      boundingRect: audio.getBoundingClientRect ? {
+        top: Math.round(audio.getBoundingClientRect().top),
+        left: Math.round(audio.getBoundingClientRect().left),
+        width: Math.round(audio.getBoundingClientRect().width),
+        height: Math.round(audio.getBoundingClientRect().height)
+      } : null,
+      computed: compStyle ? {
+        display: compStyle.display,
+        visibility: compStyle.visibility,
+        opacity: compStyle.opacity,
+        position: compStyle.position,
+        width: compStyle.width,
+        height: compStyle.height,
+        zIndex: compStyle.zIndex
+      } : null,
+      parentComputed: parentCompStyle ? {
+        display: parentCompStyle.display,
+        visibility: parentCompStyle.visibility,
+        opacity: parentCompStyle.opacity,
+        overflow: parentCompStyle.overflow
+      } : null,
       extra: extra || null
     };
 
-    console.log(`[STANDALONE_AUDIO_DIAGNOSTIC] ${eventName}:`, audioState);
+    console.log(`[STANDALONE_AUDIO_DIAGNOSTIC] ${eventName} (status: ${statusInfo.status}):`, audioState);
     try {
       (window as any).__STANDALONE_AUDIO_DIAGNOSTICS__ = (window as any).__STANDALONE_AUDIO_DIAGNOSTICS__ || [];
       (window as any).__STANDALONE_AUDIO_DIAGNOSTICS__.push(audioState);
     } catch (e) {}
     setStandaloneAudioDiag(audioState);
     return audioState;
-  }, []);
+  }, [getAudioDiagnosticStatus]);
 
-  // Standalone viewport anchoring: prevent body and root scroll drift in iOS 10 WebClip
+  // Stable audio element ref callback to track DOM identity across renders
+  const setAudioRef = useCallback((el: HTMLAudioElement | null) => {
+    if (el) {
+      if (!(el as any).__audio_dom_instance_id) {
+        (el as any).__audio_dom_instance_id = audioInstanceIdRef.current;
+        initialAudioElementRef.current = el;
+      }
+      audioRef.current = el;
+      if (isTargetStandalone) {
+        logStandaloneAudioState('audio_ref_mounted', el);
+      }
+    }
+  }, [isTargetStandalone, logStandaloneAudioState]);
+
+  // Standalone viewport and layout lockdown: prevent body, root, and sidebar scroll drift in iOS 10 WebClip
   useEffect(() => {
     if (!isTargetStandalone) return;
 
@@ -278,6 +384,26 @@ export default function RoomSession() {
         }
         if (document.documentElement.scrollTop !== 0) {
           document.documentElement.scrollTop = 0;
+        }
+        const rootEl = document.getElementById('room-session-root');
+        if (rootEl && (rootEl.scrollTop !== 0 || rootEl.scrollLeft !== 0)) {
+          rootEl.scrollTop = 0;
+          rootEl.scrollLeft = 0;
+        }
+        const contentEl = document.getElementById('room-session-content');
+        if (contentEl && (contentEl.scrollTop !== 0 || contentEl.scrollLeft !== 0)) {
+          contentEl.scrollTop = 0;
+          contentEl.scrollLeft = 0;
+        }
+        const sidebarEl = document.getElementById('room-session-sidebar');
+        if (sidebarEl && (sidebarEl.scrollTop !== 0 || sidebarEl.scrollLeft !== 0)) {
+          sidebarEl.scrollTop = 0;
+          sidebarEl.scrollLeft = 0;
+        }
+        const mainEl = document.getElementById('room-session-main');
+        if (mainEl && (mainEl.scrollTop !== 0 || mainEl.scrollLeft !== 0)) {
+          mainEl.scrollTop = 0;
+          mainEl.scrollLeft = 0;
         }
       } catch (e) {}
     };
@@ -312,6 +438,12 @@ export default function RoomSession() {
         if (document.documentElement.scrollTop !== 0) {
           document.documentElement.scrollTop = 0;
         }
+        const rootEl = document.getElementById('room-session-root');
+        if (rootEl) rootEl.scrollTop = 0;
+        const contentEl = document.getElementById('room-session-content');
+        if (contentEl) contentEl.scrollTop = 0;
+        const sidebarEl = document.getElementById('room-session-sidebar');
+        if (sidebarEl) sidebarEl.scrollTop = 0;
       }
       prevQueueLengthRef.current = curr;
     }
@@ -335,10 +467,32 @@ export default function RoomSession() {
         el.focus();
       } catch (err) {}
     }
-    if (typeof window !== 'undefined' && (window.scrollX !== 0 || window.scrollY !== 0)) {
-      try {
-        window.scrollTo(0, 0);
-      } catch (e) {}
+    if (typeof window !== 'undefined') {
+      if (window.scrollX !== 0 || window.scrollY !== 0) {
+        try {
+          window.scrollTo(0, 0);
+        } catch (e) {}
+      }
+      const rootEl = document.getElementById('room-session-root');
+      if (rootEl && (rootEl.scrollTop !== 0 || rootEl.scrollLeft !== 0)) {
+        rootEl.scrollTop = 0;
+        rootEl.scrollLeft = 0;
+      }
+      const contentEl = document.getElementById('room-session-content');
+      if (contentEl && (contentEl.scrollTop !== 0 || contentEl.scrollLeft !== 0)) {
+        contentEl.scrollTop = 0;
+        contentEl.scrollLeft = 0;
+      }
+      const sidebarEl = document.getElementById('room-session-sidebar');
+      if (sidebarEl && (sidebarEl.scrollTop !== 0 || sidebarEl.scrollLeft !== 0)) {
+        sidebarEl.scrollTop = 0;
+        sidebarEl.scrollLeft = 0;
+      }
+      const mainEl = document.getElementById('room-session-main');
+      if (mainEl && (mainEl.scrollTop !== 0 || mainEl.scrollLeft !== 0)) {
+        mainEl.scrollTop = 0;
+        mainEl.scrollLeft = 0;
+      }
     }
   }, []);
 
@@ -348,6 +502,12 @@ export default function RoomSession() {
       if (typeof window !== 'undefined' && (window.scrollY !== 0 || window.scrollX !== 0)) {
         window.scrollTo(0, 0);
       }
+      const rootEl = document.getElementById('room-session-root');
+      if (rootEl && rootEl.scrollTop !== 0) rootEl.scrollTop = 0;
+      const contentEl = document.getElementById('room-session-content');
+      if (contentEl && contentEl.scrollTop !== 0) contentEl.scrollTop = 0;
+      const sidebarEl = document.getElementById('room-session-sidebar');
+      if (sidebarEl && sidebarEl.scrollTop !== 0) sidebarEl.scrollTop = 0;
     };
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
@@ -400,7 +560,7 @@ export default function RoomSession() {
 
   // Focus recovery if focus lands back on body unexpectedly during TV navigation
   useEffect(() => {
-    if (validationStatus === 'valid' && isHost && lastFocusedTvIdRef.current) {
+    if (validationStatus === 'valid' && isHost && lastFocusedTvIdRef.current && !isTargetStandalone) {
       if (document.activeElement === document.body) {
         const prevEl = document.querySelector<HTMLElement>(`[data-tv-id="${lastFocusedTvIdRef.current}"]`);
         if (prevEl && !prevEl.hasAttribute('disabled')) {
@@ -408,7 +568,7 @@ export default function RoomSession() {
         }
       }
     }
-  });
+  }, [validationStatus, isHost, isTargetStandalone, safeFocus]);
 
   // Overlay Focus Traps and Restoration
   useEffect(() => {
@@ -1055,13 +1215,18 @@ export default function RoomSession() {
     };
   }, [isTargetStandalone, logStandaloneAudioState, currentSong?.songId]);
 
-  // In iOS 10 standalone mode, dynamically calling .load() when the audio src changes is required
+  // In iOS 10 standalone mode, dynamically calling .load() when the audio src changes prepares media buffer
   useEffect(() => {
     if (isTargetStandalone && audioRef.current && currentSong?.songId) {
+      const audio = audioRef.current;
+      const targetSrc = `/api/songs/${currentSong.songId}/audio?type=${variant}`;
       try {
-        logStandaloneAudioState('song_changed_calling_load', audioRef.current);
-        audioRef.current.load();
-        logStandaloneAudioState('song_changed_after_load', audioRef.current);
+        if (!audio.src || !audio.src.includes(`/api/songs/${currentSong.songId}/audio`)) {
+          audio.src = targetSrc;
+        }
+        logStandaloneAudioState('song_changed_calling_load', audio);
+        audio.load();
+        logStandaloneAudioState('song_changed_after_load', audio);
       } catch (e) {
         console.warn('[Audio] Error calling load on track change:', e);
       }
@@ -1321,13 +1486,9 @@ export default function RoomSession() {
     try {
       if (isTargetStandalone) {
         logStandaloneAudioState('before_safePlay', audio);
-        if (audio.readyState === 0 && audio.src) {
-          try {
-            audio.load();
-            logStandaloneAudioState('after_load_in_safePlay', audio);
-          } catch (e) {
-            console.warn('[Audio] load error in safePlay:', e);
-          }
+        audio.muted = false;
+        if (!audio.src && currentSong?.songId) {
+          audio.src = `/api/songs/${currentSong.songId}/audio?type=${variant}`;
         }
       }
 
@@ -1361,7 +1522,7 @@ export default function RoomSession() {
         logStandaloneAudioState('play_sync_exception', audio, { error: String(err) });
       }
     }
-  }, [isTargetStandalone, logStandaloneAudioState]);
+  }, [isTargetStandalone, logStandaloneAudioState, currentSong?.songId, variant]);
 
   // Host Control actions
   const togglePlay = () => {
@@ -1529,8 +1690,6 @@ export default function RoomSession() {
     }
     fetchState();
   };
-
-  const [audioAutoplayBlocked, setAudioAutoplayBlocked] = useState(false);
 
   // Host Audio Playback Synchronization Effect
   useEffect(() => {
@@ -2196,7 +2355,7 @@ export default function RoomSession() {
           {/* Audio Player for Host */}
           {isHost && (
             <audio 
-              ref={audioRef}
+              ref={setAudioRef}
               src={currentSong ? `/api/songs/${currentSong.songId}/audio?type=${variant}` : undefined}
               preload="auto"
               playsInline
@@ -2210,7 +2369,7 @@ export default function RoomSession() {
                 if (audioRef.current) {
                   setDuration(audioRef.current.duration);
                   if (isTargetStandalone) {
-                    logStandaloneAudioState('onLoadedMetadata_jsx', audioRef.current);
+                    logStandaloneAudioState('loadedmetadata', audioRef.current);
                   }
                   if (restorePositionRef.current) {
                     audioRef.current.currentTime = restorePositionRef.current.time;
@@ -2227,15 +2386,14 @@ export default function RoomSession() {
               }}
               onEnded={handleSongEnded}
               style={isTargetStandalone ? {
-                position: 'absolute',
-                width: '1px',
-                height: '1px',
-                top: '0px',
+                position: 'fixed',
+                width: '2px',
+                height: '2px',
+                bottom: '0px',
                 left: '0px',
-                opacity: 0.01,
+                opacity: 0.05,
                 pointerEvents: 'none',
-                clip: 'rect(0, 0, 0, 0)',
-                zIndex: -1
+                zIndex: 10
               } : undefined}
               className={isTargetStandalone ? '' : 'hidden'}
             />
@@ -2442,10 +2600,10 @@ export default function RoomSession() {
             iOS10 Diag
           </button>
           {showStandaloneDiag && (
-            <div className="fixed bottom-10 left-2 z-50 bg-black/95 text-zinc-200 border border-emerald-500/50 p-3 rounded-xl font-mono text-[10px] max-w-sm max-h-72 overflow-y-auto space-y-1 shadow-2xl backdrop-blur-md select-text pointer-events-auto">
-              <div className="text-emerald-400 font-bold border-b border-white/10 pb-1 flex justify-between">
+            <div className="fixed bottom-10 left-2 z-50 bg-black/95 text-zinc-200 border border-emerald-500/50 p-3 rounded-xl font-mono text-[10px] max-w-sm max-h-80 overflow-y-auto space-y-1.5 shadow-2xl backdrop-blur-md select-text pointer-events-auto">
+              <div className="text-emerald-400 font-bold border-b border-white/10 pb-1 flex justify-between items-center">
                 <span>iOS 10 Standalone Diag</span>
-                <button onClick={() => setShowStandaloneDiag(false)} className="text-zinc-400">✕</button>
+                <button onClick={() => setShowStandaloneDiag(false)} className="text-zinc-400 hover:text-white px-1">✕</button>
               </div>
               <div><strong>Win:</strong> {typeof window !== 'undefined' ? `${window.innerWidth}x${window.innerHeight}` : 'N/A'} (scrollY: {typeof window !== 'undefined' ? window.scrollY : 0})</div>
               <div><strong>Doc/Body:</strong> clientH: {typeof document !== 'undefined' ? document.documentElement.clientHeight : 0}, scrollH: {typeof document !== 'undefined' ? document.body.scrollHeight : 0}</div>
@@ -2457,12 +2615,33 @@ export default function RoomSession() {
                 </div>
               )}
               {standaloneAudioDiag && (
-                <div className="pt-1 border-t border-white/10">
-                  <strong>Audio ({standaloneAudioDiag.event}):</strong>
-                  <div>readyState: {standaloneAudioDiag.readyState}, net: {standaloneAudioDiag.networkState}</div>
-                  <div>paused: {String(standaloneAudioDiag.paused)}, muted: {String(standaloneAudioDiag.muted)}</div>
-                  <div>curTime: {standaloneAudioDiag.currentTime?.toFixed?.(1) || 0}s / {standaloneAudioDiag.duration?.toFixed?.(1) || 0}s</div>
-                  {standaloneAudioDiag.error && <div className="text-red-400">Err: {standaloneAudioDiag.error.code}</div>}
+                <div className="pt-1.5 border-t border-white/10 space-y-0.5">
+                  <div className="flex items-center justify-between">
+                    <strong className="text-white">Audio Status:</strong>
+                    <span className={`px-1.5 py-0.5 rounded font-bold uppercase text-[9px] ${
+                      standaloneAudioDiag.status === 'PLAYING' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' :
+                      standaloneAudioDiag.status === 'PAUSED' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' :
+                      standaloneAudioDiag.status === 'MEDIA_ERROR' ? 'bg-red-500/20 text-red-300 border border-red-500/40' :
+                      standaloneAudioDiag.status === 'BLOCKED' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' :
+                      'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+                    }`}>
+                      {standaloneAudioDiag.status}
+                    </span>
+                  </div>
+                  <div className="text-zinc-400 text-[9px]">{standaloneAudioDiag.statusDetail}</div>
+                  <div><strong>Last Event:</strong> <span className="text-cyan-300">{standaloneAudioDiag.lastEvent}</span></div>
+                  <div><strong>Src:</strong> <span className="text-zinc-300 break-all">{standaloneAudioDiag.currentSrc || standaloneAudioDiag.src || 'None'}</span></div>
+                  <div><strong>ReadyState:</strong> {standaloneAudioDiag.readyStateLabel}</div>
+                  <div><strong>NetworkState:</strong> {standaloneAudioDiag.networkStateLabel}</div>
+                  <div><strong>State:</strong> paused={String(standaloneAudioDiag.paused)}, muted={String(standaloneAudioDiag.muted)}, vol={standaloneAudioDiag.volume}</div>
+                  <div><strong>Position:</strong> {standaloneAudioDiag.currentTime?.toFixed?.(1) || 0}s / {standaloneAudioDiag.duration ? standaloneAudioDiag.duration.toFixed(1) + 's' : 'N/A'}</div>
+                  <div><strong>DOM:</strong> connected={String(standaloneAudioDiag.isConnected)}, id={standaloneAudioDiag.domInstanceId}, initial={String(standaloneAudioDiag.survivesInitial)}</div>
+                  {standaloneAudioDiag.computed && (
+                    <div><strong>CSS:</strong> pos={standaloneAudioDiag.computed.position}, disp={standaloneAudioDiag.computed.display}, vis={standaloneAudioDiag.computed.visibility}, op={standaloneAudioDiag.computed.opacity}, z={standaloneAudioDiag.computed.zIndex}</div>
+                  )}
+                  {standaloneAudioDiag.error && (
+                    <div className="text-red-400 font-bold">Error: code {standaloneAudioDiag.error.code} {standaloneAudioDiag.error.message}</div>
+                  )}
                 </div>
               )}
             </div>
