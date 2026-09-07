@@ -10,10 +10,21 @@ function fixSafari12LegacyDetector(): any {
     name: 'fix-safari12-legacy-detector',
     enforce: 'post',
     transformIndexHtml(html: string) {
-      return html.replace(
+      let result = html.replace(
         'import.meta.url;import("_").catch(()=>1);(async function*(){})().next();',
         'import.meta.url;import("_").catch(()=>1);(async function*(){})().next();if(typeof BigInt==="undefined"||typeof globalThis==="undefined")throw new Error("legacy");'
       );
+
+      // Ensure <meta charset="UTF-8"> and Apple standalone metadata remain at the very top of <head>
+      // by moving any Vite legacy modern polyfill script after the metadata and before the entry script.
+      const polyfillScriptMatch = result.match(/<head>\s*(<script type="module" crossorigin src="[^"]*polyfills[^"]*"><\/script>)/i);
+      if (polyfillScriptMatch) {
+        const polyfillScript = polyfillScriptMatch[1];
+        result = result.replace(polyfillScriptMatch[0], '<head>\n');
+        result = result.replace(/(<script type="module" crossorigin src="[^"]*index[^"]*"><\/script>)/i, `${polyfillScript}\n    $1`);
+      }
+
+      return result;
     },
   };
 }

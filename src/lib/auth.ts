@@ -65,7 +65,7 @@ export function initAuthFetchInterceptor(): void {
 
   const originalFetch = window.fetch;
 
-  window.fetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const authFetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const token = getAuthToken();
     if (token) {
       let urlString = '';
@@ -106,6 +106,28 @@ export function initAuthFetchInterceptor(): void {
 
     return originalFetch.call(this, input, init);
   };
+
+  try {
+    const desc = Object.getOwnPropertyDescriptor(window, 'fetch');
+    if (desc && !desc.configurable && !desc.writable) {
+      // In environments (such as sandboxed iframes) where window.fetch is a locked/non-configurable
+      // getter property, do not attempt to overwrite it. Session cookies handle authentication.
+      return;
+    }
+
+    Object.defineProperty(window, 'fetch', {
+      value: authFetch,
+      writable: true,
+      configurable: true,
+      enumerable: true,
+    });
+  } catch (err) {
+    // If window.fetch cannot be redefined (e.g. read-only getter in sandboxed iframe),
+    // safely ignore and rely on standard cookie-based authentication.
+    // NEVER attempt direct assignment `window.fetch = ...` because that triggers:
+    // "TypeError: Cannot set property fetch of #<Window> which has only a getter"
+    console.warn('[AUTH] window.fetch could not be redefined with auth interceptor:', err);
+  }
 }
 
 // Initialize immediately upon module import
