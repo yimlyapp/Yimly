@@ -174,6 +174,149 @@ export default function RoomSession() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const restorePositionRef = useRef<{ time: number, playing: boolean } | null>(null);
 
+  // Narrow detection of iOS 10.3.4 Standalone mode (WebClip)
+  const isIOSStandalone = typeof window !== 'undefined' && Boolean((window.navigator as any)?.standalone);
+  const isLegacyIOSWebKit = typeof navigator !== 'undefined' && (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) &&
+    (/OS 10_/.test(navigator.userAgent) || /WebKit\/603/.test(navigator.userAgent))
+  );
+  const isTargetStandalone = isIOSStandalone && isLegacyIOSWebKit;
+
+  // Standalone diagnostic tracking state
+  const [showStandaloneDiag, setShowStandaloneDiag] = useState(false);
+  const [standaloneAudioDiag, setStandaloneAudioDiag] = useState<any>(null);
+  const [standaloneLayoutDiag, setStandaloneLayoutDiag] = useState<any>(null);
+  const prevQueueLengthRef = useRef<number>(0);
+
+  // Standalone mode layout measurement helper
+  const measureStandaloneLayout = useCallback((trigger: string) => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return null;
+
+    const qrEl = document.getElementById('room-session-qr-element') || document.getElementById('room-session-qr-card');
+    const rootEl = document.getElementById('room-session-root');
+    const headerEl = document.getElementById('room-session-header') || document.querySelector('header');
+    const contentEl = document.getElementById('room-session-content');
+    const sidebarEl = document.getElementById('room-session-sidebar') || document.querySelector('aside');
+
+    const measurements = {
+      trigger,
+      timestamp: Date.now(),
+      windowInnerHeight: window.innerHeight,
+      windowInnerWidth: window.innerWidth,
+      documentClientHeight: document.documentElement.clientHeight,
+      documentClientWidth: document.documentElement.clientWidth,
+      bodyClientHeight: document.body.clientHeight,
+      bodyScrollHeight: document.body.scrollHeight,
+      windowScrollY: window.scrollY,
+      documentScrollTop: document.documentElement.scrollTop,
+      bodyScrollTop: document.body.scrollTop,
+      qrRect: qrEl ? qrEl.getBoundingClientRect() : null,
+      rootRect: rootEl ? rootEl.getBoundingClientRect() : null,
+      headerRect: headerEl ? headerEl.getBoundingClientRect() : null,
+      contentRect: contentEl ? contentEl.getBoundingClientRect() : null,
+      sidebarRect: sidebarEl ? sidebarEl.getBoundingClientRect() : null,
+    };
+
+    console.log(`[STANDALONE_LAYOUT_DIAGNOSTIC] ${trigger}:`, measurements);
+    try {
+      (window as any).__STANDALONE_LAYOUT_DIAGNOSTICS__ = (window as any).__STANDALONE_LAYOUT_DIAGNOSTICS__ || [];
+      (window as any).__STANDALONE_LAYOUT_DIAGNOSTICS__.push(measurements);
+    } catch (e) {}
+    setStandaloneLayoutDiag(measurements);
+    return measurements;
+  }, []);
+
+  // Standalone mode audio state diagnostic logging helper
+  const logStandaloneAudioState = useCallback((eventName: string, audio: HTMLAudioElement | null, extra?: any) => {
+    if (!audio || typeof window === 'undefined') return null;
+
+    const audioState = {
+      event: eventName,
+      timestamp: Date.now(),
+      standalone: Boolean((window.navigator as any)?.standalone),
+      src: audio.src,
+      currentSrc: audio.currentSrc,
+      readyState: audio.readyState,
+      networkState: audio.networkState,
+      paused: audio.paused,
+      muted: audio.muted,
+      volume: audio.volume,
+      error: audio.error ? { code: audio.error.code, message: (audio.error as any).message } : null,
+      currentTime: audio.currentTime,
+      duration: audio.duration,
+      extra: extra || null
+    };
+
+    console.log(`[STANDALONE_AUDIO_DIAGNOSTIC] ${eventName}:`, audioState);
+    try {
+      (window as any).__STANDALONE_AUDIO_DIAGNOSTICS__ = (window as any).__STANDALONE_AUDIO_DIAGNOSTICS__ || [];
+      (window as any).__STANDALONE_AUDIO_DIAGNOSTICS__.push(audioState);
+    } catch (e) {}
+    setStandaloneAudioDiag(audioState);
+    return audioState;
+  }, []);
+
+  // Standalone viewport anchoring: prevent body and root scroll drift in iOS 10 WebClip
+  useEffect(() => {
+    if (!isTargetStandalone) return;
+
+    const enforceViewportLock = () => {
+      try {
+        document.documentElement.style.height = '100%';
+        document.documentElement.style.overflow = 'hidden';
+        document.documentElement.style.position = 'fixed';
+        document.documentElement.style.width = '100%';
+        document.body.style.height = '100%';
+        document.body.style.overflow = 'hidden';
+        document.body.style.position = 'fixed';
+        document.body.style.width = '100%';
+        if (window.scrollY !== 0 || window.scrollX !== 0) {
+          window.scrollTo(0, 0);
+        }
+        if (document.body.scrollTop !== 0) {
+          document.body.scrollTop = 0;
+        }
+        if (document.documentElement.scrollTop !== 0) {
+          document.documentElement.scrollTop = 0;
+        }
+      } catch (e) {}
+    };
+
+    enforceViewportLock();
+    measureStandaloneLayout('initial_mount');
+    window.addEventListener('scroll', enforceViewportLock, { passive: true });
+    window.addEventListener('orientationchange', enforceViewportLock);
+    return () => {
+      window.removeEventListener('scroll', enforceViewportLock);
+      window.removeEventListener('orientationchange', enforceViewportLock);
+    };
+  }, [isTargetStandalone, measureStandaloneLayout]);
+
+  // Track queue length changes to measure layout immediately before and after adding a song
+  useEffect(() => {
+    if (isTargetStandalone) {
+      const prev = prevQueueLengthRef.current;
+      const curr = queue.length;
+      if (prev === 0 && curr > 0) {
+        measureStandaloneLayout('after_song_added_sync');
+        setTimeout(() => measureStandaloneLayout('after_song_added_50ms'), 50);
+        setTimeout(() => measureStandaloneLayout('after_song_added_200ms'), 200);
+        setTimeout(() => measureStandaloneLayout('after_song_added_500ms'), 500);
+
+        if (window.scrollY !== 0 || window.scrollX !== 0) {
+          window.scrollTo(0, 0);
+        }
+        if (document.body.scrollTop !== 0) {
+          document.body.scrollTop = 0;
+        }
+        if (document.documentElement.scrollTop !== 0) {
+          document.documentElement.scrollTop = 0;
+        }
+      }
+      prevQueueLengthRef.current = curr;
+    }
+  }, [queue.length, isTargetStandalone, measureStandaloneLayout]);
+
   // -------------------------------------------------------------
   // TV Remote / D-pad Navigation Focus Management
   // -------------------------------------------------------------
@@ -887,6 +1030,44 @@ export default function RoomSession() {
   // Determine current song
   const currentSong = queue.find(q => q.status === 'playing') || queue.find(q => q.status === 'pending') || queue[0];
 
+  // Audio lifecycle monitoring in iOS 10 standalone mode
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !isTargetStandalone) return;
+
+    const events = [
+      'loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough',
+      'play', 'playing', 'pause', 'waiting', 'seeking', 'seeked', 'ended', 'error', 'stalled', 'suspend'
+    ];
+
+    const handlers: Record<string, () => void> = {};
+    events.forEach((evt) => {
+      handlers[evt] = () => logStandaloneAudioState(evt, audio);
+      audio.addEventListener(evt, handlers[evt]);
+    });
+
+    logStandaloneAudioState('initial_mount_inspect', audio);
+
+    return () => {
+      events.forEach((evt) => {
+        audio.removeEventListener(evt, handlers[evt]);
+      });
+    };
+  }, [isTargetStandalone, logStandaloneAudioState, currentSong?.songId]);
+
+  // In iOS 10 standalone mode, dynamically calling .load() when the audio src changes is required
+  useEffect(() => {
+    if (isTargetStandalone && audioRef.current && currentSong?.songId) {
+      try {
+        logStandaloneAudioState('song_changed_calling_load', audioRef.current);
+        audioRef.current.load();
+        logStandaloneAudioState('song_changed_after_load', audioRef.current);
+      } catch (e) {
+        console.warn('[Audio] Error calling load on track change:', e);
+      }
+    }
+  }, [currentSong?.songId, variant, isTargetStandalone, logStandaloneAudioState]);
+
   // Fetch song details and lyrics whenever currentSong changes
   useEffect(() => {
     let isCancelled = false;
@@ -1138,25 +1319,49 @@ export default function RoomSession() {
   const safePlay = useCallback((audio: HTMLAudioElement | null) => {
     if (!audio) return;
     try {
+      if (isTargetStandalone) {
+        logStandaloneAudioState('before_safePlay', audio);
+        if (audio.readyState === 0 && audio.src) {
+          try {
+            audio.load();
+            logStandaloneAudioState('after_load_in_safePlay', audio);
+          } catch (e) {
+            console.warn('[Audio] load error in safePlay:', e);
+          }
+        }
+      }
+
       const playPromise = audio.play();
       if (playPromise && typeof playPromise.then === 'function') {
         playPromise
           .then(() => {
             setAudioAutoplayBlocked(false);
+            if (isTargetStandalone) {
+              logStandaloneAudioState('play_promise_resolved', audio);
+            }
           })
           .catch((err: any) => {
             console.warn('[AUDIO] Autoplay prevented or waiting for interaction:', err);
             setAudioAutoplayBlocked(true);
+            if (isTargetStandalone) {
+              logStandaloneAudioState('play_promise_rejected', audio, { error: String(err) });
+            }
           });
       } else {
         // Legacy WebKit (iOS 10 Safari) returns undefined synchronously when play() succeeds
         setAudioAutoplayBlocked(false);
+        if (isTargetStandalone) {
+          logStandaloneAudioState('play_sync_legacy_return', audio);
+        }
       }
     } catch (err) {
       console.warn('[AUDIO] Synchronous play failed:', err);
       setAudioAutoplayBlocked(true);
+      if (isTargetStandalone) {
+        logStandaloneAudioState('play_sync_exception', audio, { error: String(err) });
+      }
     }
-  }, []);
+  }, [isTargetStandalone, logStandaloneAudioState]);
 
   // Host Control actions
   const togglePlay = () => {
@@ -1376,6 +1581,9 @@ export default function RoomSession() {
   const handleAddSongToQueue = async (songId: number) => {
     if (!sessionId) return;
     try {
+      if (isTargetStandalone) {
+        measureStandaloneLayout('immediately_before_adding_song');
+      }
       setAddingSongId(songId);
       const res = await fetch(`/api/karaoke/sessions/${sessionId}/queue`, {
         method: 'POST',
@@ -1553,7 +1761,7 @@ export default function RoomSession() {
   // Render: Active Karaoke Room Experience
   // -------------------------------------------------------------
   return (
-    <div className="fixed inset-0 flex h-full w-full bg-[#08090E] text-white overflow-hidden flex-col font-sans select-none">
+    <div id="room-session-root" className="fixed inset-0 flex h-full w-full bg-[#08090E] text-white overflow-hidden flex-col font-sans select-none">
       {/* Room Song Catalog / Add to Queue Modal (Guests Only) */}
       {!isHost && showLibrary && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 md:p-8">
@@ -1665,7 +1873,7 @@ export default function RoomSession() {
       )}
 
       {/* Top Room Navigation Bar */}
-      <header className="px-4 md:px-6 py-3 border-b border-white/5 bg-[#0D0E17]/95 backdrop-blur-md flex items-center justify-between relative z-50 shrink-0 select-none">
+      <header id="room-session-header" className="px-4 md:px-6 py-3 border-b border-white/5 bg-[#0D0E17]/95 backdrop-blur-md flex items-center justify-between relative z-50 shrink-0 select-none">
         {/* Left Side: ↻ Start New Session, Room Code, [ LIVE ] */}
         <div className="flex items-center gap-3 md:gap-4 min-w-0">
           {/* ↻ Start New Session Button */}
@@ -1811,9 +2019,17 @@ export default function RoomSession() {
       </header>
 
       {/* Main Container */}
-      <div className="flex-1 min-h-0 flex overflow-hidden relative w-full p-3 lg:p-4 gap-3 lg:gap-4">
+      <div 
+        id="room-session-content"
+        style={isTargetStandalone ? { height: 'calc(100% - 54px)', maxHeight: 'calc(100% - 54px)', minHeight: 0 } : undefined}
+        className="flex-1 min-h-0 flex overflow-hidden relative w-full p-3 lg:p-4 gap-3 lg:gap-4"
+      >
         {/* Main Stage: Lyrics Card Container */}
-        <main className="relative overflow-hidden rounded-2xl md:rounded-3xl bg-gradient-to-br from-[#171827] via-[#1b172a] to-[#141522] border border-white/10 shadow-xl flex-1 flex flex-col justify-between h-full min-h-0 min-w-0 transition-all select-none">
+        <main 
+          id="room-session-main"
+          style={isTargetStandalone ? { height: '100%', maxHeight: '100%', minHeight: 0 } : undefined}
+          className="relative overflow-hidden rounded-2xl md:rounded-3xl bg-gradient-to-br from-[#171827] via-[#1b172a] to-[#141522] border border-white/10 shadow-xl flex-1 flex flex-col justify-between h-full min-h-0 min-w-0 transition-all select-none"
+        >
           {/* Ambient Glow matching Homepage & Sidebar Feature Cards */}
           <div className="absolute top-0 right-0 w-80 h-80 bg-[#FF4FA3]/10 rounded-full blur-3xl pointer-events-none -mr-16 -mt-16" />
           <div className="absolute bottom-0 left-0 w-80 h-80 bg-[#FF4FA3]/5 rounded-full blur-3xl pointer-events-none -ml-16 -mb-16" />
@@ -1984,6 +2200,7 @@ export default function RoomSession() {
               src={currentSong ? `/api/songs/${currentSong.songId}/audio?type=${variant}` : undefined}
               preload="auto"
               playsInline
+              {...(isTargetStandalone ? { 'webkit-playsinline': 'true' } : {})}
               onTimeUpdate={() => {
                 if (audioRef.current) {
                   setCurrentTime(audioRef.current.currentTime);
@@ -1992,7 +2209,9 @@ export default function RoomSession() {
               onLoadedMetadata={() => {
                 if (audioRef.current) {
                   setDuration(audioRef.current.duration);
-                  
+                  if (isTargetStandalone) {
+                    logStandaloneAudioState('onLoadedMetadata_jsx', audioRef.current);
+                  }
                   if (restorePositionRef.current) {
                     audioRef.current.currentTime = restorePositionRef.current.time;
                     if (restorePositionRef.current.playing) {
@@ -2007,16 +2226,31 @@ export default function RoomSession() {
                 }
               }}
               onEnded={handleSongEnded}
-              className="hidden"
+              style={isTargetStandalone ? {
+                position: 'absolute',
+                width: '1px',
+                height: '1px',
+                top: '0px',
+                left: '0px',
+                opacity: 0.01,
+                pointerEvents: 'none',
+                clip: 'rect(0, 0, 0, 0)',
+                zIndex: -1
+              } : undefined}
+              className={isTargetStandalone ? '' : 'hidden'}
             />
           )}
         </main>
 
         {/* Floating Join Room / Queue Card Area (Landscape = 20% width, Portrait = Hidden) */}
         {isHost && (
-          <aside className="hidden landscape:flex portrait:hidden flex-col h-full landscape:w-[20%] min-w-[210px] max-w-[320px] bg-[#0A0B12]/80 backdrop-blur-xl border-l border-white/10 p-3 lg:p-4 gap-3 lg:gap-4 shadow-2xl z-20 select-none overflow-hidden shrink-0">
+          <aside 
+            id="room-session-sidebar"
+            style={isTargetStandalone ? { height: '100%', maxHeight: '100%', minHeight: 0 } : undefined}
+            className="hidden landscape:flex portrait:hidden flex-col h-full landscape:w-[20%] min-w-[210px] max-w-[320px] bg-[#0A0B12]/80 backdrop-blur-xl border-l border-white/10 p-3 lg:p-4 gap-3 lg:gap-4 shadow-2xl z-20 select-none overflow-hidden shrink-0"
+          >
             {/* Card 1: Join Session / QR Code Card */}
-            <div className="relative overflow-hidden rounded-2xl md:rounded-3xl bg-gradient-to-br from-[#171827] via-[#1b172a] to-[#141522] border border-white/10 p-3.5 lg:p-4 shadow-xl flex flex-col items-center shrink-0">
+            <div id="room-session-qr-card" className="relative overflow-hidden rounded-2xl md:rounded-3xl bg-gradient-to-br from-[#171827] via-[#1b172a] to-[#141522] border border-white/10 p-3.5 lg:p-4 shadow-xl flex flex-col items-center shrink-0">
               {/* Ambient Glow matching Homepage Feature Card */}
               <div className="absolute top-0 right-0 w-32 h-32 bg-[#FF4FA3]/15 rounded-full blur-2xl pointer-events-none -mr-10 -mt-10" />
 
@@ -2029,7 +2263,7 @@ export default function RoomSession() {
 
                 {/* QR Code Container */}
                 {qrCodeDataUrl ? (
-                  <div className="bg-white p-2 rounded-xl shadow-md mx-auto w-24 h-24 sm:w-28 sm:h-28 flex items-center justify-center">
+                  <div id="room-session-qr-element" className="bg-white p-2 rounded-xl shadow-md mx-auto w-24 h-24 sm:w-28 sm:h-28 flex items-center justify-center">
                     <img 
                       src={qrCodeDataUrl} 
                       alt="Join Room QR Code" 
@@ -2037,7 +2271,7 @@ export default function RoomSession() {
                     />
                   </div>
                 ) : (
-                  <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
+                  <div id="room-session-qr-element" className="w-24 h-24 sm:w-28 sm:h-28 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
                     <span className="text-[10px] text-zinc-500 font-mono">Loading QR...</span>
                   </div>
                 )}
@@ -2197,6 +2431,44 @@ export default function RoomSession() {
           </div>
         )}
       </AnimatePresence>
+      {/* Optional In-App Diagnostic Widget for Standalone iOS 10 testing */}
+      {isTargetStandalone && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowStandaloneDiag(prev => !prev)}
+            className="fixed bottom-2 left-2 z-50 text-[10px] font-mono bg-black/80 text-emerald-400 border border-emerald-500/40 px-2 py-1 rounded opacity-75 hover:opacity-100"
+          >
+            iOS10 Diag
+          </button>
+          {showStandaloneDiag && (
+            <div className="fixed bottom-10 left-2 z-50 bg-black/95 text-zinc-200 border border-emerald-500/50 p-3 rounded-xl font-mono text-[10px] max-w-sm max-h-72 overflow-y-auto space-y-1 shadow-2xl backdrop-blur-md select-text pointer-events-auto">
+              <div className="text-emerald-400 font-bold border-b border-white/10 pb-1 flex justify-between">
+                <span>iOS 10 Standalone Diag</span>
+                <button onClick={() => setShowStandaloneDiag(false)} className="text-zinc-400">✕</button>
+              </div>
+              <div><strong>Win:</strong> {typeof window !== 'undefined' ? `${window.innerWidth}x${window.innerHeight}` : 'N/A'} (scrollY: {typeof window !== 'undefined' ? window.scrollY : 0})</div>
+              <div><strong>Doc/Body:</strong> clientH: {typeof document !== 'undefined' ? document.documentElement.clientHeight : 0}, scrollH: {typeof document !== 'undefined' ? document.body.scrollHeight : 0}</div>
+              {standaloneLayoutDiag && (
+                <div>
+                  <strong>Layout ({standaloneLayoutDiag.trigger}):</strong>
+                  <div>QR Top: {standaloneLayoutDiag.qrRect ? Math.round(standaloneLayoutDiag.qrRect.top) : 'N/A'}px</div>
+                  <div>Header Bottom: {standaloneLayoutDiag.headerRect ? Math.round(standaloneLayoutDiag.headerRect.bottom) : 'N/A'}px</div>
+                </div>
+              )}
+              {standaloneAudioDiag && (
+                <div className="pt-1 border-t border-white/10">
+                  <strong>Audio ({standaloneAudioDiag.event}):</strong>
+                  <div>readyState: {standaloneAudioDiag.readyState}, net: {standaloneAudioDiag.networkState}</div>
+                  <div>paused: {String(standaloneAudioDiag.paused)}, muted: {String(standaloneAudioDiag.muted)}</div>
+                  <div>curTime: {standaloneAudioDiag.currentTime?.toFixed?.(1) || 0}s / {standaloneAudioDiag.duration?.toFixed?.(1) || 0}s</div>
+                  {standaloneAudioDiag.error && <div className="text-red-400">Err: {standaloneAudioDiag.error.code}</div>}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
