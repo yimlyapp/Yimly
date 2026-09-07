@@ -1,6 +1,7 @@
 import { useEffect, useState, ReactNode } from 'react';
 import { Outlet, useNavigate, NavLink, useLocation } from 'react-router-dom';
 import { Home, Music, Mic, Settings, Users, LogOut, Loader2, Disc, Menu, X, Radio, Download } from 'lucide-react';
+import { clearAuthToken } from '../lib/auth';
 
 export default function Layout() {
   const [user, setUser] = useState<any>(null);
@@ -33,6 +34,7 @@ export default function Layout() {
   }, [location.pathname]);
 
   const handleLogout = async () => {
+    clearAuthToken();
     await fetch('/api/auth/logout', { method: 'POST' });
     navigate('/login');
   };

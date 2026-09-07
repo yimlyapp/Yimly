@@ -1,6 +1,7 @@
 import { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Mic, ArrowRight, Lock, User, AlertCircle } from 'lucide-react';
+import { setAuthToken } from '../lib/auth';
 
 export default function Login() {
   const [username, setUsername] = useState('');
@@ -21,16 +22,21 @@ export default function Login() {
         body: JSON.stringify({ username, password }),
       });
 
-      if (!res.ok) {
-        let data: any = {};
-        if (res.headers.get('content-type')?.includes('application/json')) {
-          try {
-            data = await res.json();
-          } catch (e) {
-            console.error('Failed to parse login response', e);
-          }
+      let data: any = {};
+      if (res.headers.get('content-type')?.includes('application/json')) {
+        try {
+          data = await res.json();
+        } catch (e) {
+          console.error('Failed to parse login response', e);
         }
+      }
+
+      if (!res.ok) {
         throw new Error(data.error || 'Login failed');
+      }
+
+      if (data.token) {
+        setAuthToken(data.token);
       }
 
       navigate('/');
