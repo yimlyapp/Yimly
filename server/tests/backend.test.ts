@@ -9,16 +9,17 @@ import fsSync from 'fs';
 import path from 'path';
 import { db, setupDatabase } from '../db/index.js';
 import { users, libraries, artists, songs, favorites, playlists, playlistSongs, lyrics } from '../db/schema.js';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 
 import playlistsRoutes from '../routes/playlists.js';
 import favoritesRoutes from '../routes/favorites.js';
 import authRoutes from '../routes/auth.js';
-import songsRoutes from '../routes/songs.js';
+import songsRoutes, { handleAudioStream } from '../routes/songs.js';
 import karaokeRoutes from '../routes/karaoke.js';
 import librariesRoutes from '../routes/libraries.js';
 import artistsRoutes from '../routes/artists.js';
 import albumsRoutes from '../routes/albums.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_for_dev';
 
@@ -27,6 +28,8 @@ app.use(express.json());
 app.use(cookieParser());
 app.use('/api/auth', authRoutes);
 app.use('/api/songs', songsRoutes);
+app.get('/api/stream/:id', requireAuth, handleAudioStream);
+app.head('/api/stream/:id', requireAuth, handleAudioStream);
 app.use('/api/playlists', playlistsRoutes);
 app.use('/api/favorites', favoritesRoutes);
 app.use('/api/karaoke', karaokeRoutes);
@@ -1571,6 +1574,635 @@ test('Lyrics Font System: 9 built-in fonts, removed font fallback to manrope, an
   assert.strictEqual(customRetrieved.settings.highlighted.font, 'custom');
   assert.strictEqual(customRetrieved.settings.unhighlighted.font, 'custom');
   assert.strictEqual(customRetrieved.settings.customFontName, 'MyStudioFont');
+});
+
+test('MP3 Audio Streaming & HTTP Byte-Range Delivery Suite', async () => {
+  // 1. Create a dummy test library and sample MP3 binary file with known deterministic byte pattern
+  const testLibDir = path.resolve(process.cwd(), 'data', 'test_stream_lib');
+  if (!fsSync.existsSync(testLibDir)) {
+    fsSync.mkdirSync(testLibDir, { recursive: true });
+  }
+
+  const testMp3Path = path.join(testLibDir, 'sample_stream_track.mp3');
+  const totalFileSize = 120000; // 120 KB
+  const mp3Buffer = Buffer.alloc(totalFileSize);
+  for (let i = 0; i < totalFileSize; i++) {
+    mp3Buffer[i] = i % 256;
+  }
+  fsSync.writeFileSync(testMp3Path, mp3Buffer);
+
+  // Register in database
+  let lib = (await db.select().from(libraries).where(eq(libraries.name, 'Streaming Test Library')).limit(1))[0];
+  if (!lib) {
+    [lib] = await db.insert(libraries).values({
+      name: 'Streaming Test Library',
+      path: testLibDir
+    }).returning();
+  }
+
+  let artist = (await db.select().from(artists).where(eq(artists.name, 'Streaming Test Artist')).limit(1))[0];
+  if (!artist) {
+    [artist] = await db.insert(artists).values({
+      name: 'Streaming Test Artist'
+    }).returning();
+  }
+
+  const [song] = await db.insert(songs).values({
+    libraryId: lib.id,
+    artistId: artist.id,
+    title: 'Streaming Test Song',
+    mainAudioPath: testMp3Path,
+    duration: 210,
+    format: 'mp3',
+    fileSize: totalFileSize
+  }).returning();
+
+  const songId = song.id;
+
+  // 2. Full Audio Stream (HTTP 200 OK) without Range Header
+  const fullRes = await fetch(`${baseUrl}/api/songs/${songId}/audio`, {
+    headers: { Authorization: `Bearer ${tokenA}` }
+  });
+  assert.strictEqual(fullRes.status, 200, 'Full audio request must return 200 OK');
+  assert.strictEqual(fullRes.headers.get('content-type'), 'audio/mpeg');
+  assert.strictEqual(fullRes.headers.get('accept-ranges'), 'bytes');
+  assert.strictEqual(fullRes.headers.get('content-length'), String(totalFileSize));
+  assert.strictEqual(fullRes.headers.get('content-disposition'), 'inline');
+  const etag = fullRes.headers.get('etag');
+  assert.ok(etag, 'Response must include ETag header');
+
+  const fullData = Buffer.from(await fullRes.arrayBuffer());
+  assert.strictEqual(fullData.length, totalFileSize);
+  assert.ok(fullData.equals(mp3Buffer), 'Streamed full content must match file byte-for-byte');
+
+  // 3. Initial Byte Range: bytes=0-10485 (10486 bytes) -> HTTP 206 Partial Content
+  const range1Res = await fetch(`${baseUrl}/api/songs/${songId}/audio`, {
+    headers: {
+      Authorization: `Bearer ${tokenA}`,
+      Range: 'bytes=0-10485'
+    }
+  });
+  assert.strictEqual(range1Res.status, 206, 'Valid range must return 206 Partial Content');
+  assert.strictEqual(range1Res.headers.get('content-type'), 'audio/mpeg');
+  assert.strictEqual(range1Res.headers.get('accept-ranges'), 'bytes');
+  assert.strictEqual(range1Res.headers.get('content-range'), `bytes 0-10485/${totalFileSize}`);
+  assert.strictEqual(range1Res.headers.get('content-length'), '10486');
+  const range1Data = Buffer.from(await range1Res.arrayBuffer());
+  assert.strictEqual(range1Data.length, 10486);
+  assert.ok(range1Data.equals(mp3Buffer.subarray(0, 10486)), 'Range 0-10485 must match exactly');
+
+  // 4. Open-Ended Range: bytes=60000- (to EOF) -> HTTP 206 Partial Content
+  const rangeOpenRes = await fetch(`${baseUrl}/api/songs/${songId}/audio`, {
+    headers: {
+      Authorization: `Bearer ${tokenA}`,
+      Range: 'bytes=60000-'
+    }
+  });
+  assert.strictEqual(rangeOpenRes.status, 206);
+  assert.strictEqual(rangeOpenRes.headers.get('content-range'), `bytes 60000-${totalFileSize - 1}/${totalFileSize}`);
+  assert.strictEqual(rangeOpenRes.headers.get('content-length'), String(totalFileSize - 60000));
+  const rangeOpenData = Buffer.from(await rangeOpenRes.arrayBuffer());
+  assert.strictEqual(rangeOpenData.length, totalFileSize - 60000);
+  assert.ok(rangeOpenData.equals(mp3Buffer.subarray(60000, totalFileSize)));
+
+  // 5. Middle Seeking Range: bytes=25000-49999 (Seeking simulation) -> HTTP 206 Partial Content
+  const seekRes = await fetch(`${baseUrl}/api/songs/${songId}/audio`, {
+    headers: {
+      Authorization: `Bearer ${tokenA}`,
+      Range: 'bytes=25000-49999'
+    }
+  });
+  assert.strictEqual(seekRes.status, 206);
+  assert.strictEqual(seekRes.headers.get('content-range'), `bytes 25000-49999/${totalFileSize}`);
+  assert.strictEqual(seekRes.headers.get('content-length'), '25000');
+  const seekData = Buffer.from(await seekRes.arrayBuffer());
+  assert.strictEqual(seekData.length, 25000);
+  assert.ok(seekData.equals(mp3Buffer.subarray(25000, 50000)));
+
+  // 6. Suffix Range: bytes=-1000 (last 1000 bytes) -> HTTP 206 Partial Content
+  const suffixRes = await fetch(`${baseUrl}/api/songs/${songId}/audio`, {
+    headers: {
+      Authorization: `Bearer ${tokenA}`,
+      Range: 'bytes=-1000'
+    }
+  });
+  assert.strictEqual(suffixRes.status, 206);
+  assert.strictEqual(suffixRes.headers.get('content-range'), `bytes ${totalFileSize - 1000}-${totalFileSize - 1}/${totalFileSize}`);
+  assert.strictEqual(suffixRes.headers.get('content-length'), '1000');
+  const suffixData = Buffer.from(await suffixRes.arrayBuffer());
+  assert.strictEqual(suffixData.length, 1000);
+  assert.ok(suffixData.equals(mp3Buffer.subarray(totalFileSize - 1000, totalFileSize)));
+
+  // 7. Invalid Range: Beyond EOF (bytes=200000-) -> HTTP 416 Range Not Satisfiable
+  const beyondEofRes = await fetch(`${baseUrl}/api/songs/${songId}/audio`, {
+    headers: {
+      Authorization: `Bearer ${tokenA}`,
+      Range: 'bytes=200000-'
+    }
+  });
+  assert.strictEqual(beyondEofRes.status, 416, 'Range beyond EOF must return 416');
+  assert.strictEqual(beyondEofRes.headers.get('content-range'), `bytes */${totalFileSize}`);
+
+  // 8. Invalid Range: Inverted start/end (bytes=5000-2000) -> HTTP 416
+  const invertedRes = await fetch(`${baseUrl}/api/songs/${songId}/audio`, {
+    headers: {
+      Authorization: `Bearer ${tokenA}`,
+      Range: 'bytes=5000-2000'
+    }
+  });
+  assert.strictEqual(invertedRes.status, 416);
+  assert.strictEqual(invertedRes.headers.get('content-range'), `bytes */${totalFileSize}`);
+
+  // 9. HEAD Request metadata verification (no body)
+  const headRes = await fetch(`${baseUrl}/api/songs/${songId}/audio`, {
+    method: 'HEAD',
+    headers: { Authorization: `Bearer ${tokenA}` }
+  });
+  assert.strictEqual(headRes.status, 200);
+  assert.strictEqual(headRes.headers.get('content-type'), 'audio/mpeg');
+  assert.strictEqual(headRes.headers.get('accept-ranges'), 'bytes');
+  assert.strictEqual(headRes.headers.get('content-length'), String(totalFileSize));
+  const headBody = await headRes.text();
+  assert.strictEqual(headBody.length, 0, 'HEAD request must have empty body');
+
+  // 10. Conditional GET with ETag (HTTP 304 Not Modified)
+  if (etag) {
+    const notModifiedRes = await fetch(`${baseUrl}/api/songs/${songId}/audio`, {
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        'If-None-Match': etag
+      }
+    });
+    assert.strictEqual(notModifiedRes.status, 304, 'Matching ETag must return 304 Not Modified');
+  }
+
+  // 11. Dedicated /api/stream/:id route verification
+  const streamEndpointRes = await fetch(`${baseUrl}/api/stream/${songId}`, {
+    headers: {
+      Authorization: `Bearer ${tokenA}`,
+      Range: 'bytes=1000-1999'
+    }
+  });
+  assert.strictEqual(streamEndpointRes.status, 206);
+  assert.strictEqual(streamEndpointRes.headers.get('content-range'), `bytes 1000-1999/${totalFileSize}`);
+  assert.strictEqual(streamEndpointRes.headers.get('content-length'), '1000');
+  const streamData = Buffer.from(await streamEndpointRes.arrayBuffer());
+  assert.strictEqual(streamData.length, 1000);
+  assert.ok(streamData.equals(mp3Buffer.subarray(1000, 2000)));
+
+  // 12. Nonexistent Song ID -> 404 Not Found
+  const notFoundRes = await fetch(`${baseUrl}/api/songs/888888/audio`, {
+    headers: { Authorization: `Bearer ${tokenA}` }
+  });
+  assert.strictEqual(notFoundRes.status, 404);
+
+  // Clean up test file and directory
+  try {
+    fsSync.unlinkSync(testMp3Path);
+    fsSync.rmdirSync(testLibDir);
+  } catch (e) {}
+});
+
+test('Song Matching & Instrumental Pairing Suite', async () => {
+  const { importSingleAudioFile, scanLibrary, reconcileDuplicateSongs } = await import('../lib/scanner.js');
+
+  const matchLibDir = path.resolve(process.cwd(), 'data', 'test_match_lib');
+  if (!fsSync.existsSync(matchLibDir)) {
+    fsSync.mkdirSync(matchLibDir, { recursive: true });
+  }
+
+  const [matchLib] = await db.insert(libraries).values({
+    name: 'Song Matching Test Library',
+    path: matchLibDir
+  }).returning();
+  const libId = matchLib.id;
+
+  // 1. Scenario: Normal track imported first, then Instrumental track
+  const goldenNormalPath = path.join(matchLibDir, 'Jungkook - Golden.mp3');
+  const goldenInstPath = path.join(matchLibDir, 'Jungkook - Golden (Instrumental).mp3');
+  fsSync.writeFileSync(goldenNormalPath, Buffer.from('golden normal audio data'));
+  fsSync.writeFileSync(goldenInstPath, Buffer.from('golden instrumental audio data'));
+
+  await importSingleAudioFile(libId, goldenNormalPath);
+
+  let goldenSongs = await db.select().from(songs).where(eq(songs.libraryId, libId));
+  assert.strictEqual(goldenSongs.length, 1, 'Should have 1 song after importing normal track');
+  assert.strictEqual(goldenSongs[0].title, 'Golden');
+  assert.strictEqual(goldenSongs[0].mainAudioPath, goldenNormalPath);
+  assert.strictEqual(goldenSongs[0].instrumentalAudioPath, null);
+  assert.strictEqual(goldenSongs[0].variant, 'original');
+
+  // Import instrumental track
+  await importSingleAudioFile(libId, goldenInstPath);
+
+  goldenSongs = await db.select().from(songs).where(eq(songs.libraryId, libId));
+  assert.strictEqual(goldenSongs.length, 1, 'Should STILL have exactly 1 song record after importing instrumental track');
+  assert.strictEqual(goldenSongs[0].title, 'Golden');
+  assert.strictEqual(goldenSongs[0].mainAudioPath, goldenNormalPath);
+  assert.strictEqual(goldenSongs[0].instrumentalAudioPath, goldenInstPath);
+  assert.strictEqual(goldenSongs[0].variant, 'original');
+
+  // Verify via API
+  const goldenApiRes = await fetch(`${baseUrl}/api/songs/${goldenSongs[0].id}`, {
+    headers: { Authorization: `Bearer ${tokenA}` }
+  });
+  assert.strictEqual(goldenApiRes.status, 200);
+  const goldenApiData = await goldenApiRes.json();
+  assert.strictEqual(goldenApiData.title, 'Golden');
+  assert.strictEqual(goldenApiData.hasInstrumental, true);
+  assert.strictEqual(goldenApiData.variant, 'original');
+
+  // 2. Scenario: Instrumental track imported first, then Normal track
+  const silverInstPath = path.join(matchLibDir, 'Artist Silver - Silver (Instrumental).mp3');
+  const silverNormalPath = path.join(matchLibDir, 'Artist Silver - Silver.mp3');
+  fsSync.writeFileSync(silverInstPath, Buffer.from('silver instrumental audio'));
+  fsSync.writeFileSync(silverNormalPath, Buffer.from('silver normal audio'));
+
+  await importSingleAudioFile(libId, silverInstPath);
+
+  let silverSongs = await db.select().from(songs).where(
+    and(eq(songs.libraryId, libId), eq(songs.title, 'Silver'))
+  );
+  assert.strictEqual(silverSongs.length, 1, 'Should have 1 song after importing instrumental track first');
+  assert.strictEqual(silverSongs[0].variant, 'instrumental');
+  assert.strictEqual(silverSongs[0].instrumentalAudioPath, silverInstPath);
+
+  // Now import normal track
+  await importSingleAudioFile(libId, silverNormalPath);
+
+  silverSongs = await db.select().from(songs).where(
+    and(eq(songs.libraryId, libId), eq(songs.title, 'Silver'))
+  );
+  assert.strictEqual(silverSongs.length, 1, 'Should STILL have exactly 1 song after importing normal track');
+  assert.strictEqual(silverSongs[0].mainAudioPath, silverNormalPath);
+  assert.strictEqual(silverSongs[0].instrumentalAudioPath, silverInstPath);
+  assert.strictEqual(silverSongs[0].variant, 'original');
+
+  // 3. Scenario: Concurrent watcher imports (simultaneous race condition prevention)
+  const bronzeNormalPath = path.join(matchLibDir, 'Bronze Band - Bronze.mp3');
+  const bronzeInstPath = path.join(matchLibDir, 'Bronze Band - Bronze [Instrumental].mp3');
+  fsSync.writeFileSync(bronzeNormalPath, Buffer.from('bronze normal audio'));
+  fsSync.writeFileSync(bronzeInstPath, Buffer.from('bronze instrumental audio'));
+
+  // Trigger both imports in parallel
+  await Promise.all([
+    importSingleAudioFile(libId, bronzeNormalPath),
+    importSingleAudioFile(libId, bronzeInstPath),
+  ]);
+
+  const bronzeSongs = await db.select().from(songs).where(
+    and(eq(songs.libraryId, libId), eq(songs.title, 'Bronze'))
+  );
+  assert.strictEqual(bronzeSongs.length, 1, 'Concurrent imports must produce exactly 1 song record');
+  assert.strictEqual(bronzeSongs[0].mainAudioPath, bronzeNormalPath);
+  assert.strictEqual(bronzeSongs[0].instrumentalAudioPath, bronzeInstPath);
+
+  // 4. Scenario: Reconciliation of pre-existing duplicate records
+  const rubyNormalPath = path.join(matchLibDir, 'Ruby Artist - Ruby Song.mp3');
+  const rubyInstPath = path.join(matchLibDir, 'Ruby Artist - Ruby Song (Instrumental).mp3');
+  fsSync.writeFileSync(rubyNormalPath, Buffer.from('ruby normal audio'));
+  fsSync.writeFileSync(rubyInstPath, Buffer.from('ruby instrumental audio'));
+
+  let rubyArtist = (await db.select().from(artists).where(eq(artists.name, 'Ruby Artist')).limit(1))[0];
+  if (!rubyArtist) {
+    [rubyArtist] = await db.insert(artists).values({ name: 'Ruby Artist' }).returning();
+  }
+  
+  // Seed two distinct duplicate song rows
+  const [dup1] = await db.insert(songs).values({
+    libraryId: libId,
+    artistId: rubyArtist.id,
+    title: 'Ruby Song',
+    mainAudioPath: rubyNormalPath,
+    variant: 'original',
+    duration: 180,
+  }).returning();
+
+  const [dup2] = await db.insert(songs).values({
+    libraryId: libId,
+    artistId: rubyArtist.id,
+    title: 'Ruby Song (Instrumental)',
+    mainAudioPath: rubyInstPath,
+    instrumentalAudioPath: rubyInstPath,
+    variant: 'instrumental',
+    duration: 180,
+  }).returning();
+
+  // Create playlist and favorite pointing to dup2
+  const [rubyPlaylist] = await db.insert(playlists).values({
+    userId: userAId,
+    name: 'Ruby Test Playlist',
+    createdAt: new Date(),
+    updatedAt: new Date()
+  }).returning();
+
+  await db.insert(playlistSongs).values({
+    playlistId: rubyPlaylist.id,
+    songId: dup2.id,
+    position: 0,
+    addedAt: new Date()
+  });
+
+  await db.insert(favorites).values({
+    userId: userAId,
+    songId: dup2.id,
+    createdAt: new Date(),
+  });
+
+  // Run reconciliation
+  const mergedCount = await reconcileDuplicateSongs(libId);
+  assert.ok(mergedCount >= 1, 'Reconciliation should merge duplicate records');
+
+  const rubySongs = await db.select().from(songs).where(
+    and(eq(songs.libraryId, libId), eq(songs.artistId, rubyArtist.id))
+  );
+  assert.strictEqual(rubySongs.length, 1, 'Should have exactly 1 reconciled song record');
+  assert.strictEqual(rubySongs[0].title, 'Ruby Song');
+  assert.strictEqual(rubySongs[0].mainAudioPath, rubyNormalPath);
+  assert.strictEqual(rubySongs[0].instrumentalAudioPath, rubyInstPath);
+
+  // Verify playlist item and favorite were migrated to primary song
+  const migratedPlaylistSongs = await db.select().from(playlistSongs).where(eq(playlistSongs.playlistId, rubyPlaylist.id));
+  assert.strictEqual(migratedPlaylistSongs[0].songId, rubySongs[0].id);
+
+  const migratedFavs = await db.select().from(favorites).where(eq(favorites.userId, userAId));
+  assert.ok(migratedFavs.some(f => f.songId === rubySongs[0].id));
+
+  // Verify files on disk were NEVER deleted
+  assert.strictEqual(fsSync.existsSync(rubyNormalPath), true);
+  assert.strictEqual(fsSync.existsSync(rubyInstPath), true);
+
+  // 5. Full scanLibrary test on directory with multiple pairs
+  await scanLibrary(libId, matchLibDir);
+
+  const allLibSongs = await db.select().from(songs).where(eq(songs.libraryId, libId));
+  // Total songs: Golden (1), Silver (1), Bronze (1), Ruby Song (1) = 4
+  assert.strictEqual(allLibSongs.length, 4, 'Library scan should have exactly 4 uniquely matched songs');
+
+  for (const s of allLibSongs) {
+    assert.ok(s.mainAudioPath, `Song ${s.title} must have mainAudioPath`);
+    assert.ok(s.instrumentalAudioPath, `Song ${s.title} must have instrumentalAudioPath`);
+    assert.strictEqual(s.variant, 'original');
+  }
+
+  // Cleanup test files
+  try {
+    fsSync.rmSync(matchLibDir, { recursive: true, force: true });
+  } catch (e) {}
+});
+
+test('Comprehensive Song Matching, Lock Concurrency & Invariant Regression Suite', async () => {
+  const {
+    withSongLock,
+    findExistingSongRecord,
+    importSingleAudioFile,
+    scanLibrary,
+    reconcileDuplicateSongs,
+    removeSingleFile,
+    cleanSongTitle,
+    normalizeSongTitle,
+    getOrCreateArtist,
+    syncSongArtists
+  } = await import('../lib/scanner.js');
+
+  const testDir = path.resolve(process.cwd(), 'data', 'test_regression_lib');
+  if (!fsSync.existsSync(testDir)) {
+    fsSync.mkdirSync(testDir, { recursive: true });
+  }
+
+  const [testLib] = await db.insert(libraries).values({
+    name: 'Regression Test Library',
+    path: testDir
+  }).returning();
+  const libId = testLib.id;
+
+  // --- REQUIREMENT 1: withSongLock Concurrency Verification ---
+  // A. 3+ simultaneous calls on SAME key must be strictly serialized (activeCount never exceeds 1)
+  let activeCount = 0;
+  let maxConcurrent = 0;
+  const executionOrder: number[] = [];
+
+  const task = (id: number, delayMs: number) => async () => {
+    activeCount++;
+    if (activeCount > maxConcurrent) maxConcurrent = activeCount;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    executionOrder.push(id);
+    activeCount--;
+    return id;
+  };
+
+  const results = await Promise.all([
+    withSongLock(libId, 'concurrency_test', task(1, 40)),
+    withSongLock(libId, 'concurrency_test', task(2, 20)),
+    withSongLock(libId, 'concurrency_test', task(3, 10)),
+    withSongLock(libId, 'concurrency_test', task(4, 5)),
+  ]);
+
+  assert.strictEqual(maxConcurrent, 1, 'Max concurrent executions on same lockKey must be exactly 1');
+  assert.deepStrictEqual(results, [1, 2, 3, 4], 'Execution results must preserve queued promises');
+  assert.deepStrictEqual(executionOrder, [1, 2, 3, 4], 'Queue order must be strictly first-in first-out');
+
+  // B. Errors in withSongLock must not deadlock subsequent queued tasks
+  let errorTaskRan = false;
+  let subsequentTaskRan = false;
+
+  await Promise.allSettled([
+    withSongLock(libId, 'error_test', async () => {
+      errorTaskRan = true;
+      throw new Error('Simulated error inside critical section');
+    }),
+    withSongLock(libId, 'error_test', async () => {
+      subsequentTaskRan = true;
+      return 'recovered';
+    })
+  ]);
+
+  assert.strictEqual(errorTaskRan, true, 'Error task must execute');
+  assert.strictEqual(subsequentTaskRan, true, 'Subsequent task on same lockKey must execute without deadlock');
+
+  // C. Different keys can execute concurrently
+  let diffKeyMaxConcurrent = 0;
+  let diffActive = 0;
+  const diffTask = (delayMs: number) => async () => {
+    diffActive++;
+    if (diffActive > diffKeyMaxConcurrent) diffKeyMaxConcurrent = diffActive;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    diffActive--;
+  };
+
+  await Promise.all([
+    withSongLock(libId, 'key_alpha', diffTask(30)),
+    withSongLock(libId, 'key_beta', diffTask(30)),
+    withSongLock(libId, 'key_gamma', diffTask(30)),
+  ]);
+
+  assert.ok(diffKeyMaxConcurrent > 1, 'Different lock keys must be allowed to execute concurrently');
+
+  // --- REQUIREMENT 3, 10, 11: Exact Artist Set Matching & Metadata Invariance ---
+  const artistAId = await getOrCreateArtist('Artist Alpha');
+  const artistBId = await getOrCreateArtist('Artist Beta');
+  const artistCId = await getOrCreateArtist('Artist Gamma');
+
+  // Seed song: "Song Delta" by [Artist Alpha, Artist Beta]
+  const [songDelta] = await db.insert(songs).values({
+    libraryId: libId,
+    artistId: artistAId,
+    title: 'Song Delta',
+    mainAudioPath: path.join(testDir, 'Song Delta.mp3'),
+    variant: 'original',
+    duration: 200,
+    albumId: null,
+  }).returning();
+  await syncSongArtists(songDelta.id, [artistAId, artistBId]);
+
+  // Query with [Artist Beta, Artist Alpha] (different order) -> MATCH
+  const matchReversed = await findExistingSongRecord(libId, 'Song Delta', [artistBId, artistAId]);
+  assert.ok(matchReversed, 'Exact artist set in different order must MATCH');
+  assert.strictEqual(matchReversed.id, songDelta.id);
+
+  // Query with [Artist Alpha] -> NO MATCH (subset is not exact set)
+  const matchSubset = await findExistingSongRecord(libId, 'Song Delta', [artistAId]);
+  assert.strictEqual(matchSubset, null, 'Subset of artists must NOT match');
+
+  // Query with [Artist Alpha, Artist Gamma] -> NO MATCH (different second artist)
+  const matchDifferent = await findExistingSongRecord(libId, 'Song Delta', [artistAId, artistCId]);
+  assert.strictEqual(matchDifferent, null, 'Different artist set must NOT match');
+
+  // Query with [Artist Gamma] -> NO MATCH
+  const matchSingleDiff = await findExistingSongRecord(libId, 'Song Delta', [artistCId]);
+  assert.strictEqual(matchSingleDiff, null, 'Unrelated artist must NOT match');
+
+  // Different artist same title: "Song Delta" by Artist Gamma
+  const [songDeltaGamma] = await db.insert(songs).values({
+    libraryId: libId,
+    artistId: artistCId,
+    title: 'Song Delta',
+    mainAudioPath: path.join(testDir, 'Song Delta Gamma.mp3'),
+    variant: 'original',
+    duration: 220,
+  }).returning();
+  await syncSongArtists(songDeltaGamma.id, [artistCId]);
+
+  // Verify both exist independently
+  const songsDelta = await db.select().from(songs).where(
+    and(eq(songs.libraryId, libId), eq(songs.title, 'Song Delta'))
+  );
+  assert.strictEqual(songsDelta.length, 2, 'Same title with different artist sets must remain separate');
+
+  // --- REQUIREMENT 4 & 13: Instrumental Invariant & Removal ---
+  const removalNormal = path.join(testDir, 'Pair Removal - Track.mp3');
+  const removalInst = path.join(testDir, 'Pair Removal - Track (Instrumental).mp3');
+  fsSync.writeFileSync(removalNormal, Buffer.from('normal removal test audio'));
+  fsSync.writeFileSync(removalInst, Buffer.from('inst removal test audio'));
+
+  await importSingleAudioFile(libId, removalNormal);
+  await importSingleAudioFile(libId, removalInst);
+
+  let pairSong = (await db.select().from(songs).where(
+    and(eq(songs.libraryId, libId), eq(songs.title, 'Track'))
+  ))[0];
+  assert.ok(pairSong);
+  assert.strictEqual(pairSong.mainAudioPath, removalNormal);
+  assert.strictEqual(pairSong.instrumentalAudioPath, removalInst);
+  assert.strictEqual(pairSong.variant, 'original');
+
+  // Remove normal audio file from disk and call removeSingleFile
+  fsSync.unlinkSync(removalNormal);
+  await removeSingleFile(libId, removalNormal);
+
+  pairSong = (await db.select().from(songs).where(eq(songs.id, pairSong.id)))[0];
+  assert.ok(pairSong, 'Song record should persist with instrumental when normal is removed');
+  assert.strictEqual(pairSong.mainAudioPath, null, 'mainAudioPath MUST be null when normal audio is removed');
+  assert.strictEqual(pairSong.instrumentalAudioPath, removalInst, 'instrumentalAudioPath must remain intact');
+  assert.strictEqual(pairSong.variant, 'instrumental', 'variant must become instrumental');
+
+  // Remove instrumental audio file from disk and call removeSingleFile
+  fsSync.unlinkSync(removalInst);
+  await removeSingleFile(libId, removalInst);
+
+  const deletedSong = await db.select().from(songs).where(eq(songs.id, pairSong.id));
+  assert.strictEqual(deletedSong.length, 0, 'Song must be removed completely when all audio is removed');
+
+  // --- REQUIREMENT 12: Title Normalization Variations ---
+  const titleVariants = [
+    'Golden',
+    'Golden (Instrumental)',
+    'Golden [Instrumental]',
+    'Golden - Instrumental',
+    'Golden (Inst)',
+    'Golden [Inst.]',
+    'Golden (Karaoke)',
+    'Golden (Official Instrumental Version)',
+    'Golden (Backing Track)',
+  ];
+
+  for (const variant of titleVariants) {
+    const cleaned = cleanSongTitle(variant);
+    const normalized = normalizeSongTitle(variant);
+    assert.strictEqual(cleaned, 'Golden', `cleanSongTitle failed for: ${variant}`);
+    assert.strictEqual(normalized, 'golden', `normalizeSongTitle failed for: ${variant}`);
+  }
+
+  // --- REQUIREMENT 5 & 6: Legacy Repair & Duplicate Reconciliation ---
+  const legacyNormal = path.join(testDir, 'Legacy - Anthem.mp3');
+  const legacyInst = path.join(testDir, 'Legacy - Anthem (Inst).mp3');
+  fsSync.writeFileSync(legacyNormal, Buffer.from('legacy normal'));
+  fsSync.writeFileSync(legacyInst, Buffer.from('legacy inst'));
+
+  const [legacyRow1] = await db.insert(songs).values({
+    libraryId: libId,
+    artistId: artistAId,
+    title: 'Anthem',
+    mainAudioPath: legacyNormal,
+    variant: 'original',
+    duration: 190,
+  }).returning();
+  await syncSongArtists(legacyRow1.id, [artistAId]);
+
+  // Legacy incorrect row where instrumental file was stored in mainAudioPath
+  const [legacyRow2] = await db.insert(songs).values({
+    libraryId: libId,
+    artistId: artistAId,
+    title: 'Anthem (Inst)',
+    mainAudioPath: legacyInst,
+    variant: 'instrumental',
+    duration: 190,
+  }).returning();
+  await syncSongArtists(legacyRow2.id, [artistAId]);
+
+  // Insert lyrics rows for both
+  await db.insert(lyrics).values({
+    songId: legacyRow1.id,
+    lrcPath: '/path/to/anthem.lrc',
+    elrcPath: null
+  });
+  await db.insert(lyrics).values({
+    songId: legacyRow2.id,
+    lrcPath: '',
+    elrcPath: '/path/to/anthem.elrc.lrc'
+  });
+
+  const merged = await reconcileDuplicateSongs(libId, 'Anthem');
+  assert.ok(merged >= 1, 'Reconciliation should merge legacy duplicate rows');
+
+  const reconciledAnthem = await db.select().from(songs).where(
+    and(eq(songs.libraryId, libId), eq(songs.artistId, artistAId), eq(songs.title, 'Anthem'))
+  );
+  assert.strictEqual(reconciledAnthem.length, 1, 'Must have exactly 1 reconciled Anthem song');
+  assert.strictEqual(reconciledAnthem[0].mainAudioPath, legacyNormal);
+  assert.strictEqual(reconciledAnthem[0].instrumentalAudioPath, legacyInst);
+  assert.strictEqual(reconciledAnthem[0].variant, 'original');
+
+  // Verify lyrics paths were merged without data loss
+  const anthemLyrics = await db.select().from(lyrics).where(eq(lyrics.songId, reconciledAnthem[0].id));
+  assert.strictEqual(anthemLyrics.length, 1);
+  assert.strictEqual(anthemLyrics[0].lrcPath, '/path/to/anthem.lrc');
+  assert.strictEqual(anthemLyrics[0].elrcPath, '/path/to/anthem.elrc.lrc');
+
+  // Cleanup regression test directory
+  try {
+    fsSync.rmSync(testDir, { recursive: true, force: true });
+  } catch (e) {}
 });
 
 test('Close server', async () => {

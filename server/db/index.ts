@@ -204,6 +204,51 @@ export async function setupDatabase() {
     console.error('Failed to ensure nullable queue_items.user_id:', e);
   }
 
+  // Ensure songs.main_audio_path is nullable (to support instrumental-only songs)
+  try {
+    const songTableInfo = await sqlite.execute("PRAGMA table_info(songs);");
+    const mainAudioCol = songTableInfo.rows?.find((r: any) => r.name === 'main_audio_path');
+    if (mainAudioCol && mainAudioCol.notnull === 1) {
+      await sqlite.execute('PRAGMA foreign_keys=OFF;');
+      await sqlite.execute(`
+        CREATE TABLE IF NOT EXISTS songs_new (
+          id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+          library_id integer NOT NULL,
+          artist_id integer NOT NULL,
+          album_id integer,
+          title text NOT NULL,
+          main_audio_path text,
+          instrumental_audio_path text,
+          duration integer,
+          track_number integer,
+          disc_number integer,
+          genre text,
+          year integer,
+          variant text DEFAULT 'original' NOT NULL,
+          file_size integer,
+          format text,
+          artwork_path text,
+          lrc_offset integer DEFAULT 0,
+          elrc_offset integer DEFAULT 0,
+          lyric_offset integer DEFAULT 0,
+          FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE,
+          FOREIGN KEY (artist_id) REFERENCES artists(id) ON DELETE CASCADE,
+          FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE SET NULL
+        );
+      `);
+      await sqlite.execute(`
+        INSERT INTO songs_new (id, library_id, artist_id, album_id, title, main_audio_path, instrumental_audio_path, duration, track_number, disc_number, genre, year, variant, file_size, format, artwork_path, lrc_offset, elrc_offset, lyric_offset)
+        SELECT id, library_id, artist_id, album_id, title, main_audio_path, instrumental_audio_path, duration, track_number, disc_number, genre, year, variant, file_size, format, artwork_path, lrc_offset, elrc_offset, lyric_offset FROM songs;
+      `);
+      await sqlite.execute('DROP TABLE songs;');
+      await sqlite.execute('ALTER TABLE songs_new RENAME TO songs;');
+      await sqlite.execute('PRAGMA foreign_keys=ON;');
+      console.log('Migrated songs.main_audio_path to be nullable.');
+    }
+  } catch (e) {
+    console.error('Failed to ensure nullable songs.main_audio_path:', e);
+  }
+
   // Ensure song_artists table exists (backward compatibility safety)
   try {
     await sqlite.execute(`

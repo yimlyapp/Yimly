@@ -4,7 +4,7 @@
   "description": "A lightweight, self-hosted karaoke media server and web application.",
   "start_url": "/",
   "scope": "/",
-  "display": "standalone",
+  "display": "browser",
   "background_color": "#08090E",
   "theme_color": "#08090E",
   "icons": [

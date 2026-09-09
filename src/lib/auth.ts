@@ -63,8 +63,8 @@ export function clearAuthToken(): void {
 /**
  * Patch window.fetch once at startup so that all relative API requests
  * automatically include the Authorization Bearer header if a token exists,
- * and explicitly specify credentials: 'same-origin' for iOS 10 WebKit standalone WebClips.
- * This guarantees Safari 10 and standalone Home Screen web apps stay authenticated.
+ * and explicitly specify credentials: 'same-origin' for iOS 10 WebKit browsers.
+ * This guarantees Safari 10 and mobile browsers stay authenticated.
  */
 let isFetchPatched = false;
 
@@ -96,7 +96,7 @@ export function initAuthFetchInterceptor(): void {
       init = init ? { ...init } : {};
 
       // iOS 10 WebKit defaults fetch credentials to 'omit'.
-      // In standalone Home Screen web app mode, WebClips do not send cookies without explicit 'same-origin' credentials.
+      // Explicit 'same-origin' ensures cookies are sent with API calls.
       if (!init.credentials) {
         init.credentials = 'same-origin';
       }

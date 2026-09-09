@@ -15,7 +15,7 @@ function fixSafari12LegacyDetector(): any {
         'import.meta.url;import("_").catch(()=>1);(async function*(){})().next();if(typeof BigInt==="undefined"||typeof globalThis==="undefined")throw new Error("legacy");'
       );
 
-      // Ensure <meta charset="UTF-8"> and Apple standalone metadata remain at the very top of <head>
+      // Ensure <meta charset="UTF-8"> and head metadata remain at the very top of <head>
       // by moving any Vite legacy modern polyfill script after the metadata and before the entry script.
       const polyfillScriptMatch = result.match(/<head>\s*(<script type="module" crossorigin src="[^"]*polyfills[^"]*"><\/script>)/i);
       if (polyfillScriptMatch) {

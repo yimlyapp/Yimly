@@ -79,8 +79,14 @@ app.use('/api/artists', artistsRoutes);
 import albumsRoutes from './server/routes/albums.js';
 app.use('/api/albums', albumsRoutes);
 
-import songsRoutes from './server/routes/songs.js';
+import songsRoutes, { handleAudioStream } from './server/routes/songs.js';
 app.use('/api/songs', songsRoutes);
+
+// Dedicated /api/stream endpoints for MP3 streaming & playback compatibility
+app.get('/api/stream/:id', requireAuth, handleAudioStream);
+app.head('/api/stream/:id', requireAuth, handleAudioStream);
+app.get('/api/stream/:id/audio', requireAuth, handleAudioStream);
+app.head('/api/stream/:id/audio', requireAuth, handleAudioStream);
 
 import karaokeRoutes from './server/routes/karaoke.js';
 app.use('/api/karaoke', karaokeRoutes);

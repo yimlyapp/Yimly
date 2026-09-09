@@ -310,28 +310,203 @@ router.get('/:id/artwork', async (req, res) => {
   }
 });
 
-router.get('/:id/audio', async (req, res) => {
+/**
+ * Audio streaming handler supporting HTTP byte-range requests (RFC 7233),
+ * seeking, efficient stream piping without buffering into memory,
+ * caching headers (ETag, Last-Modified), HEAD requests, and edge-case handling.
+ */
+export async function handleAudioStream(req: express.Request, res: express.Response) {
   try {
-    const id = parseInt(req.params.id);
-    const type = req.query.type as string; // 'main' or 'instrumental'
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id) || id <= 0) {
+      return res.status(400).json({ error: 'Invalid song ID' });
+    }
+
+    const type = (req.query.type as string)?.toLowerCase(); // 'main' or 'instrumental'
 
     const song = await db.select().from(songs).where(eq(songs.id, id)).limit(1);
-    if (song.length === 0) return res.status(404).json({ error: 'Song not found' });
+    if (song.length === 0) {
+      return res.status(404).json({ error: 'Song not found' });
+    }
 
     let audioPath = song[0].mainAudioPath;
     if (type === 'instrumental' && song[0].instrumentalAudioPath) {
       audioPath = song[0].instrumentalAudioPath;
+    } else if (!audioPath && song[0].instrumentalAudioPath) {
+      audioPath = song[0].instrumentalAudioPath;
     }
 
-    if (!fs.existsSync(audioPath)) {
-      return res.status(404).json({ error: 'Audio file not found on disk' });
+    if (!audioPath || typeof audioPath !== 'string' || audioPath.trim().length === 0) {
+      return res.status(404).json({ error: 'Audio file not found' });
     }
 
-    res.sendFile(audioPath);
+    const resolvedPath = path.resolve(audioPath);
+
+    // Verify file exists, is readable, and obtain filesystem size and modification time
+    let stat: fs.Stats;
+    try {
+      await fs.promises.access(resolvedPath, fs.constants.R_OK);
+      stat = await fs.promises.stat(resolvedPath);
+    } catch (accessErr: any) {
+      return res.status(404).json({ error: 'Audio file not found or inaccessible on disk' });
+    }
+
+    if (!stat.isFile()) {
+      return res.status(404).json({ error: 'Audio path is not a file' });
+    }
+
+    const ext = path.extname(resolvedPath).toLowerCase();
+    let contentType = 'audio/mpeg';
+    if (ext === '.mp3') {
+      contentType = 'audio/mpeg';
+    } else if (ext === '.flac') {
+      contentType = 'audio/flac';
+    } else if (ext === '.m4a' || ext === '.aac') {
+      contentType = 'audio/mp4';
+    } else if (ext === '.ogg' || ext === '.opus') {
+      contentType = 'audio/ogg';
+    } else if (ext === '.wav') {
+      contentType = 'audio/wav';
+    }
+
+    const fileSize = stat.size;
+    const lastModified = stat.mtime.toUTCString();
+    const etag = `"${fileSize.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('ETag', etag);
+    res.setHeader('Last-Modified', lastModified);
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Cache-Control', 'private, no-transform, max-age=3600');
+
+    const rangeHeader = req.headers.range;
+
+    // Handle conditional GET caching when no range is requested
+    if (!rangeHeader && req.method === 'GET') {
+      const ifNoneMatch = req.headers['if-none-match'];
+      if (ifNoneMatch && ifNoneMatch === etag) {
+        return res.status(304).end();
+      }
+
+      const ifModifiedSince = req.headers['if-modified-since'];
+      if (ifModifiedSince) {
+        const ifModTime = new Date(ifModifiedSince).getTime();
+        if (!isNaN(ifModTime) && stat.mtimeMs <= ifModTime + 1000) {
+          return res.status(304).end();
+        }
+      }
+    }
+
+    // Handle empty file
+    if (fileSize === 0) {
+      res.setHeader('Content-Length', 0);
+      return res.status(200).end();
+    }
+
+    // Handle standard request without Range header (HTTP 200 OK)
+    if (!rangeHeader) {
+      res.setHeader('Content-Length', fileSize);
+      res.status(200);
+
+      if (req.method === 'HEAD') {
+        return res.end();
+      }
+
+      const stream = fs.createReadStream(resolvedPath);
+      req.on('close', () => {
+        stream.destroy();
+      });
+      stream.on('error', (err) => {
+        console.error(`[AUDIO STREAM] Error on full stream for song #${id}:`, err);
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Failed to stream audio file' });
+        }
+      });
+
+      return stream.pipe(res);
+    }
+
+    // Handle HTTP Range Request (RFC 7233)
+    if (!rangeHeader.startsWith('bytes=')) {
+      res.setHeader('Content-Range', `bytes */${fileSize}`);
+      return res.status(416).end();
+    }
+
+    const rangeSpec = rangeHeader.slice(6).trim();
+    const firstRange = rangeSpec.split(',')[0].trim();
+    const match = /^(\d*)-(\d*)$/.exec(firstRange);
+
+    if (!match) {
+      res.setHeader('Content-Range', `bytes */${fileSize}`);
+      return res.status(416).end();
+    }
+
+    const [_, startStr, endStr] = match;
+    let start: number;
+    let end: number;
+
+    if (startStr !== '' && endStr !== '') {
+      start = parseInt(startStr, 10);
+      end = parseInt(endStr, 10);
+    } else if (startStr !== '' && endStr === '') {
+      start = parseInt(startStr, 10);
+      end = fileSize - 1;
+    } else if (startStr === '' && endStr !== '') {
+      const suffix = parseInt(endStr, 10);
+      start = Math.max(0, fileSize - suffix);
+      end = fileSize - 1;
+    } else {
+      res.setHeader('Content-Range', `bytes */${fileSize}`);
+      return res.status(416).end();
+    }
+
+    if (isNaN(start) || isNaN(end) || start < 0 || start >= fileSize || start > end) {
+      res.setHeader('Content-Range', `bytes */${fileSize}`);
+      return res.status(416).end();
+    }
+
+    // Constrain end within file bounds
+    end = Math.min(end, fileSize - 1);
+    const contentLength = end - start + 1;
+
+    if (contentLength <= 0) {
+      res.setHeader('Content-Range', `bytes */${fileSize}`);
+      return res.status(416).end();
+    }
+
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+    res.setHeader('Content-Length', contentLength);
+
+    if (req.method === 'HEAD') {
+      return res.end();
+    }
+
+    const stream = fs.createReadStream(resolvedPath, { start, end });
+    req.on('close', () => {
+      stream.destroy();
+    });
+    stream.on('error', (err) => {
+      console.error(`[AUDIO STREAM] Error on range stream for song #${id} (${start}-${end}):`, err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to stream audio chunk' });
+      }
+    });
+
+    return stream.pipe(res);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to serve audio' });
+    console.error('[AUDIO STREAM] Unhandled server error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to serve audio' });
+    }
   }
-});
+}
+
+router.get('/:id/audio', handleAudioStream);
+router.head('/:id/audio', handleAudioStream);
+router.get('/:id/stream', handleAudioStream);
+router.head('/:id/stream', handleAudioStream);
 
 router.get('/:id/lyrics', async (req, res) => {
   try {

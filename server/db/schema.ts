@@ -57,7 +57,7 @@ export const songs = sqliteTable('songs', {
   artistId: integer('artist_id').references(() => artists.id, { onDelete: 'cascade' }).notNull(),
   albumId: integer('album_id').references(() => albums.id, { onDelete: 'set null' }),
   title: text('title').notNull(),
-  mainAudioPath: text('main_audio_path').notNull(),
+  mainAudioPath: text('main_audio_path'),
   instrumentalAudioPath: text('instrumental_audio_path'),
   duration: integer('duration'), // seconds
   trackNumber: integer('track_number'),

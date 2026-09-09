@@ -58,8 +58,8 @@ export const isPublicRoute = (req: Request): boolean => {
     return true;
   }
 
-  // Active song playback, lyrics, artwork & lyric offset (needed for TV/room player & connected displays)
-  if (method === 'GET' && /^\/api\/songs\/\d+(\/(artwork|audio|lyrics(\/offset)?))?$/.test(url)) {
+  // Active song playback, stream, lyrics, artwork & lyric offset (needed for TV/room player & connected displays)
+  if ((method === 'GET' || method === 'HEAD') && (/^\/api\/songs\/\d+(\/(artwork|audio|stream|lyrics(\/offset)?))?$/.test(url) || /^\/api\/stream\/\d+(\/audio)?$/.test(url))) {
     return true;
   }
 

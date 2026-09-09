@@ -175,383 +175,7 @@ export default function RoomSession() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const restorePositionRef = useRef<{ time: number, playing: boolean } | null>(null);
 
-  // Narrow detection of iOS 10.3.4 Standalone mode (WebClip)
-  const isIOSStandalone = typeof window !== 'undefined' && Boolean((window.navigator as any)?.standalone);
-  const isLegacyIOSWebKit = typeof navigator !== 'undefined' && (
-    /iPad|iPhone|iPod/.test(navigator.userAgent) &&
-    (/OS 10_/.test(navigator.userAgent) || /WebKit\/603/.test(navigator.userAgent))
-  );
-  const isTargetStandalone = isIOSStandalone && isLegacyIOSWebKit;
-
-  // Standalone diagnostic tracking state
-  const [showStandaloneDiag, setShowStandaloneDiag] = useState(false);
-  const [standaloneAudioDiag, setStandaloneAudioDiag] = useState<any>(null);
-  const [standaloneLayoutDiag, setStandaloneLayoutDiag] = useState<any>(null);
-  const [mediaClockSamples, setMediaClockSamples] = useState<number[]>([]);
-  const [isClockAdvancing, setIsClockAdvancing] = useState<boolean>(false);
-  const [isNativeControlsVisible, setIsNativeControlsVisible] = useState<boolean>(true);
-  const [diagTestMessage, setDiagTestMessage] = useState<string>('');
-  const lastSampledTimeRef = useRef<number>(0);
-  const prevQueueLengthRef = useRef<number>(0);
-  const initialAudioElementRef = useRef<HTMLAudioElement | null>(null);
-  const audioInstanceIdRef = useRef<string>('audio-dom-' + Math.random().toString(36).substring(2, 9));
-
-  // Standalone mode layout measurement helper
-  const measureStandaloneLayout = useCallback((trigger: string) => {
-    if (typeof window === 'undefined' || typeof document === 'undefined') return null;
-
-    const qrEl = document.getElementById('room-session-qr-element') || document.getElementById('room-session-qr-card');
-    const rootEl = document.getElementById('room-session-root');
-    const headerEl = document.getElementById('room-session-header') || document.querySelector('header');
-    const contentEl = document.getElementById('room-session-content');
-    const sidebarEl = document.getElementById('room-session-sidebar') || document.querySelector('aside');
-    const mainEl = document.getElementById('room-session-main');
-
-    const measurements = {
-      trigger,
-      timestamp: Date.now(),
-      windowInnerHeight: window.innerHeight,
-      windowInnerWidth: window.innerWidth,
-      documentClientHeight: document.documentElement.clientHeight,
-      documentClientWidth: document.documentElement.clientWidth,
-      bodyClientHeight: document.body.clientHeight,
-      bodyScrollHeight: document.body.scrollHeight,
-      windowScrollY: window.scrollY,
-      documentScrollTop: document.documentElement.scrollTop,
-      bodyScrollTop: document.body.scrollTop,
-      rootScrollTop: rootEl ? rootEl.scrollTop : 0,
-      contentScrollTop: contentEl ? contentEl.scrollTop : 0,
-      sidebarScrollTop: sidebarEl ? sidebarEl.scrollTop : 0,
-      mainScrollTop: mainEl ? mainEl.scrollTop : 0,
-      qrRect: qrEl ? qrEl.getBoundingClientRect() : null,
-      rootRect: rootEl ? rootEl.getBoundingClientRect() : null,
-      headerRect: headerEl ? headerEl.getBoundingClientRect() : null,
-      contentRect: contentEl ? contentEl.getBoundingClientRect() : null,
-      sidebarRect: sidebarEl ? sidebarEl.getBoundingClientRect() : null,
-    };
-
-    console.log(`[STANDALONE_LAYOUT_DIAGNOSTIC] ${trigger}:`, measurements);
-    try {
-      (window as any).__STANDALONE_LAYOUT_DIAGNOSTICS__ = (window as any).__STANDALONE_LAYOUT_DIAGNOSTICS__ || [];
-      (window as any).__STANDALONE_LAYOUT_DIAGNOSTICS__.push(measurements);
-    } catch (e) {}
-    setStandaloneLayoutDiag(measurements);
-    return measurements;
-  }, []);
-
-  // Helper to compute human-friendly status and details for standalone diagnostic
-  const getAudioDiagnosticStatus = useCallback((audio: HTMLAudioElement | null) => {
-    if (!audio) return { status: 'NO_SOURCE', detail: 'Audio element not mounted' };
-    if (!audio.src && !audio.currentSrc) return { status: 'NO_SOURCE', detail: 'No audio source assigned' };
-    if (audio.error) return { status: 'MEDIA_ERROR', detail: `Code ${audio.error.code}: ${audio.error.message || 'Media Error'}` };
-    if (audioAutoplayBlocked) return { status: 'BLOCKED', detail: 'User interaction required' };
-    if (audio.ended) return { status: 'ENDED', detail: 'Track finished playing' };
-    
-    if (!audio.paused) {
-      if (isClockAdvancing) {
-        return { status: 'PLAYING', detail: 'Clock advancing (active playback)' };
-      }
-      if (audio.readyState >= 3) {
-        return { status: 'CLOCK_FROZEN', detail: `paused=false, readyState=${audio.readyState} but currentTime frozen at ${audio.currentTime?.toFixed?.(1) || 0}s` };
-      }
-      if (audio.readyState === 2) {
-        return { status: 'WAITING', detail: 'Waiting for buffer data' };
-      }
-      if (audio.networkState === 2) {
-        return { status: 'LOADING', detail: 'Buffering stream data' };
-      }
-      return { status: 'NOT_READY', detail: `ReadyState ${audio.readyState}` };
-    }
-
-    if (audio.networkState === 2 && audio.readyState < 2) {
-      return { status: 'LOADING', detail: 'Preloading audio file' };
-    }
-    if (audio.readyState === 0) {
-      return { status: 'NOT_READY', detail: 'HAVE_NOTHING (not loaded yet)' };
-    }
-    return { status: 'PAUSED', detail: 'Paused' };
-  }, [audioAutoplayBlocked, isClockAdvancing]);
-
-  // Standalone mode comprehensive audio state diagnostic logging helper
-  const logStandaloneAudioState = useCallback((eventName: string, audio: HTMLAudioElement | null, extra?: any) => {
-    if (!audio || typeof window === 'undefined') return null;
-
-    const compStyle = window.getComputedStyle ? window.getComputedStyle(audio) : null;
-    const parent = audio.parentElement;
-    const parentCompStyle = parent && window.getComputedStyle ? window.getComputedStyle(parent) : null;
-    const domId = (audio as any).__audio_dom_instance_id || 'unassigned';
-    const isSameAsInitial = initialAudioElementRef.current !== null && audio === initialAudioElementRef.current;
-    const statusInfo = getAudioDiagnosticStatus(audio);
-
-    const READY_STATE_MAP: Record<number, string> = {
-      0: 'HAVE_NOTHING (0)',
-      1: 'HAVE_METADATA (1)',
-      2: 'HAVE_CURRENT_DATA (2)',
-      3: 'HAVE_FUTURE_DATA (3)',
-      4: 'HAVE_ENOUGH_DATA (4)'
-    };
-
-    const NETWORK_STATE_MAP: Record<number, string> = {
-      0: 'NETWORK_EMPTY (0)',
-      1: 'NETWORK_IDLE (1)',
-      2: 'NETWORK_LOADING (2)',
-      3: 'NETWORK_NO_SOURCE (3)'
-    };
-
-    const audioState = {
-      lastEvent: eventName,
-      status: statusInfo.status,
-      statusDetail: statusInfo.detail,
-      isClockAdvancing,
-      timestamp: Date.now(),
-      standalone: Boolean((window.navigator as any)?.standalone),
-      domInstanceId: domId,
-      survivesInitial: isSameAsInitial,
-      paused: audio.paused,
-      ended: audio.ended,
-      readyState: audio.readyState,
-      readyStateLabel: READY_STATE_MAP[audio.readyState] || String(audio.readyState),
-      networkState: audio.networkState,
-      networkStateLabel: NETWORK_STATE_MAP[audio.networkState] || String(audio.networkState),
-      src: audio.src,
-      currentSrc: audio.currentSrc,
-      currentTime: audio.currentTime,
-      duration: audio.duration,
-      muted: audio.muted,
-      volume: audio.volume,
-      seeking: audio.seeking,
-      error: audio.error ? { code: audio.error.code, message: (audio.error as any).message || '' } : null,
-      webkitDisplayingFullscreen: (audio as any).webkitDisplayingFullscreen ?? null,
-      documentContains: document.contains ? document.contains(audio) : true,
-      isConnected: 'isConnected' in audio ? (audio as any).isConnected : (document.contains ? document.contains(audio) : true),
-      parentTag: parent ? parent.tagName.toLowerCase() : null,
-      boundingRect: audio.getBoundingClientRect ? {
-        top: Math.round(audio.getBoundingClientRect().top),
-        left: Math.round(audio.getBoundingClientRect().left),
-        width: Math.round(audio.getBoundingClientRect().width),
-        height: Math.round(audio.getBoundingClientRect().height)
-      } : null,
-      computed: compStyle ? {
-        display: compStyle.display,
-        visibility: compStyle.visibility,
-        opacity: compStyle.opacity,
-        position: compStyle.position,
-        width: compStyle.width,
-        height: compStyle.height,
-        zIndex: compStyle.zIndex
-      } : null,
-      parentComputed: parentCompStyle ? {
-        display: parentCompStyle.display,
-        visibility: parentCompStyle.visibility,
-        opacity: parentCompStyle.opacity,
-        overflow: parentCompStyle.overflow
-      } : null,
-      extra: extra || null
-    };
-
-    try {
-      (window as any).__STANDALONE_AUDIO_DIAGNOSTICS__ = (window as any).__STANDALONE_AUDIO_DIAGNOSTICS__ || [];
-      (window as any).__STANDALONE_AUDIO_DIAGNOSTICS__.push(audioState);
-      if ((window as any).__STANDALONE_AUDIO_DIAGNOSTICS__.length > 100) {
-        (window as any).__STANDALONE_AUDIO_DIAGNOSTICS__.shift();
-      }
-    } catch (e) {}
-    setStandaloneAudioDiag(audioState);
-    return audioState;
-  }, [getAudioDiagnosticStatus, isClockAdvancing]);
-
-  // Periodic Media Clock Sampler for iOS 10 Standalone Mode (every 300ms)
-  useEffect(() => {
-    if (!isTargetStandalone) return;
-    const interval = setInterval(() => {
-      const audio = audioRef.current;
-      if (!audio) return;
-
-      const curTime = audio.currentTime;
-      const prevTime = lastSampledTimeRef.current;
-      const timeDiff = curTime - prevTime;
-      const advancing = !audio.paused && (timeDiff > 0.02 || (prevTime === 0 && curTime > 0));
-
-      lastSampledTimeRef.current = curTime;
-      setIsClockAdvancing(advancing);
-      setMediaClockSamples(prev => {
-        const next = [...prev, Math.round(curTime * 10) / 10];
-        return next.slice(-8);
-      });
-
-      logStandaloneAudioState('sample_300ms', audio, { isClockAdvancing: advancing, sampleDiff: timeDiff });
-    }, 350);
-
-    return () => clearInterval(interval);
-  }, [isTargetStandalone, logStandaloneAudioState]);
-
-  // Diagnostic Test Actions
-  const handleSeekTest = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    try {
-      audio.currentTime = 10;
-      setDiagTestMessage(`[SEEK 10s] curTime=${audio.currentTime}, readyState=${audio.readyState}`);
-      logStandaloneAudioState('diag_seek_10s_test', audio);
-    } catch (e: any) {
-      setDiagTestMessage(`[SEEK ERR] ${e?.message || e}`);
-    }
-  };
-
-  const handlePauseSeekPlayTest = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    try {
-      audio.pause();
-      audio.currentTime = 10;
-      const p = audio.play();
-      if (p && typeof p.then === 'function') {
-        p.then(() => {
-          setDiagTestMessage(`[PAUSE-SEEK-PLAY] play() resolved, curTime=${audio.currentTime}`);
-          logStandaloneAudioState('diag_pause_seek_play_resolved', audio);
-        }).catch((err: any) => {
-          setDiagTestMessage(`[PAUSE-SEEK-PLAY ERR] ${err?.message || err}`);
-          logStandaloneAudioState('diag_pause_seek_play_rejected', audio, { error: err });
-        });
-      } else {
-        setDiagTestMessage(`[PAUSE-SEEK-PLAY] legacy play() returned, curTime=${audio.currentTime}`);
-        logStandaloneAudioState('diag_pause_seek_play_legacy', audio);
-      }
-    } catch (e: any) {
-      setDiagTestMessage(`[PAUSE-SEEK-PLAY ERR] ${e?.message || e}`);
-    }
-  };
-
-  const handleDirectGestureLoadPlay = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    try {
-      if (!audio.src && currentSong?.songId) {
-        audio.src = `/api/songs/${currentSong.songId}/audio?type=${variant}`;
-      }
-      audio.load();
-      const p = audio.play();
-      if (p && typeof p.then === 'function') {
-        p.then(() => {
-          setDiagTestMessage(`[DIRECT GESTURE] play() resolved, curTime=${audio.currentTime}`);
-          logStandaloneAudioState('diag_direct_gesture_resolved', audio);
-        }).catch((err: any) => {
-          setDiagTestMessage(`[DIRECT GESTURE ERR] ${err?.message || err}`);
-          logStandaloneAudioState('diag_direct_gesture_rejected', audio, { error: err });
-        });
-      } else {
-        setDiagTestMessage(`[DIRECT GESTURE] legacy play() returned, curTime=${audio.currentTime}`);
-        logStandaloneAudioState('diag_direct_gesture_legacy', audio);
-      }
-    } catch (e: any) {
-      setDiagTestMessage(`[DIRECT GESTURE ERR] ${e?.message || e}`);
-    }
-  };
-
-  // Stable audio element ref callback to track DOM identity across renders
-  const setAudioRef = useCallback((el: HTMLAudioElement | null) => {
-    if (el) {
-      if (!(el as any).__audio_dom_instance_id) {
-        (el as any).__audio_dom_instance_id = audioInstanceIdRef.current;
-        initialAudioElementRef.current = el;
-      }
-      audioRef.current = el;
-      if (isTargetStandalone) {
-        logStandaloneAudioState('audio_ref_mounted', el);
-      }
-    }
-  }, [isTargetStandalone, logStandaloneAudioState]);
-
-  // Standalone viewport and layout lockdown: prevent body, root, and sidebar scroll drift in iOS 10 WebClip
-  useEffect(() => {
-    if (!isTargetStandalone) return;
-
-    const enforceViewportLock = () => {
-      try {
-        document.documentElement.style.height = '100%';
-        document.documentElement.style.overflow = 'hidden';
-        document.documentElement.style.position = 'fixed';
-        document.documentElement.style.width = '100%';
-        document.body.style.height = '100%';
-        document.body.style.overflow = 'hidden';
-        document.body.style.position = 'fixed';
-        document.body.style.width = '100%';
-        if (window.scrollY !== 0 || window.scrollX !== 0) {
-          window.scrollTo(0, 0);
-        }
-        if (document.body.scrollTop !== 0) {
-          document.body.scrollTop = 0;
-        }
-        if (document.documentElement.scrollTop !== 0) {
-          document.documentElement.scrollTop = 0;
-        }
-        const rootEl = document.getElementById('room-session-root');
-        if (rootEl && (rootEl.scrollTop !== 0 || rootEl.scrollLeft !== 0)) {
-          rootEl.scrollTop = 0;
-          rootEl.scrollLeft = 0;
-        }
-        const contentEl = document.getElementById('room-session-content');
-        if (contentEl && (contentEl.scrollTop !== 0 || contentEl.scrollLeft !== 0)) {
-          contentEl.scrollTop = 0;
-          contentEl.scrollLeft = 0;
-        }
-        const sidebarEl = document.getElementById('room-session-sidebar');
-        if (sidebarEl && (sidebarEl.scrollTop !== 0 || sidebarEl.scrollLeft !== 0)) {
-          sidebarEl.scrollTop = 0;
-          sidebarEl.scrollLeft = 0;
-        }
-        const mainEl = document.getElementById('room-session-main');
-        if (mainEl && (mainEl.scrollTop !== 0 || mainEl.scrollLeft !== 0)) {
-          mainEl.scrollTop = 0;
-          mainEl.scrollLeft = 0;
-        }
-      } catch (e) {}
-    };
-
-    enforceViewportLock();
-    measureStandaloneLayout('initial_mount');
-    window.addEventListener('scroll', enforceViewportLock, { passive: true });
-    window.addEventListener('orientationchange', enforceViewportLock);
-    return () => {
-      window.removeEventListener('scroll', enforceViewportLock);
-      window.removeEventListener('orientationchange', enforceViewportLock);
-    };
-  }, [isTargetStandalone, measureStandaloneLayout]);
-
-  // Track queue length changes to measure layout immediately before and after adding a song
-  useEffect(() => {
-    if (isTargetStandalone) {
-      const prev = prevQueueLengthRef.current;
-      const curr = queue.length;
-      if (prev === 0 && curr > 0) {
-        measureStandaloneLayout('after_song_added_sync');
-        setTimeout(() => measureStandaloneLayout('after_song_added_50ms'), 50);
-        setTimeout(() => measureStandaloneLayout('after_song_added_200ms'), 200);
-        setTimeout(() => measureStandaloneLayout('after_song_added_500ms'), 500);
-
-        if (window.scrollY !== 0 || window.scrollX !== 0) {
-          window.scrollTo(0, 0);
-        }
-        if (document.body.scrollTop !== 0) {
-          document.body.scrollTop = 0;
-        }
-        if (document.documentElement.scrollTop !== 0) {
-          document.documentElement.scrollTop = 0;
-        }
-        const rootEl = document.getElementById('room-session-root');
-        if (rootEl) rootEl.scrollTop = 0;
-        const contentEl = document.getElementById('room-session-content');
-        if (contentEl) contentEl.scrollTop = 0;
-        const sidebarEl = document.getElementById('room-session-sidebar');
-        if (sidebarEl) sidebarEl.scrollTop = 0;
-      }
-      prevQueueLengthRef.current = curr;
-    }
-  }, [queue.length, isTargetStandalone, measureStandaloneLayout]);
-
-  // -------------------------------------------------------------
   // TV Remote / D-pad Navigation Focus Management
-  // -------------------------------------------------------------
   const playButtonRef = useRef<HTMLButtonElement>(null);
   const lastFocusedElementRef = useRef<HTMLElement | null>(null);
   const lastFocusedTvIdRef = useRef<string | null>(null);
@@ -660,7 +284,7 @@ export default function RoomSession() {
 
   // Focus recovery if focus lands back on body unexpectedly during TV navigation
   useEffect(() => {
-    if (validationStatus === 'valid' && isHost && lastFocusedTvIdRef.current && !isTargetStandalone) {
+    if (validationStatus === 'valid' && isHost && lastFocusedTvIdRef.current) {
       if (document.activeElement === document.body) {
         const prevEl = document.querySelector<HTMLElement>(`[data-tv-id="${lastFocusedTvIdRef.current}"]`);
         if (prevEl && !prevEl.hasAttribute('disabled')) {
@@ -668,7 +292,7 @@ export default function RoomSession() {
         }
       }
     }
-  }, [validationStatus, isHost, isTargetStandalone, safeFocus]);
+  }, [validationStatus, isHost, safeFocus]);
 
   // Overlay Focus Traps and Restoration
   useEffect(() => {
@@ -1290,57 +914,6 @@ export default function RoomSession() {
   // Determine current song
   const currentSong = queue.find(q => q.status === 'playing') || queue.find(q => q.status === 'pending') || queue[0];
 
-  // Audio lifecycle monitoring in iOS 10 standalone mode
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !isTargetStandalone) return;
-
-    const events = [
-      'loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough',
-      'play', 'playing', 'timeupdate', 'progress', 'waiting', 'stalled', 'suspend',
-      'pause', 'ended', 'abort', 'error', 'seeking', 'seeked', 'durationchange'
-    ];
-
-    const handlers: Record<string, (e?: Event) => void> = {};
-    events.forEach((evt) => {
-      handlers[evt] = (e?: Event) => {
-        const extraData: any = {};
-        if (evt === 'error' && audio.error) {
-          extraData.errorCode = audio.error.code;
-          extraData.errorMessage = (audio.error as any).message;
-        }
-        logStandaloneAudioState(evt, audio, extraData);
-      };
-      audio.addEventListener(evt, handlers[evt]);
-    });
-
-    logStandaloneAudioState('initial_mount_inspect', audio);
-
-    return () => {
-      events.forEach((evt) => {
-        audio.removeEventListener(evt, handlers[evt]);
-      });
-    };
-  }, [isTargetStandalone, logStandaloneAudioState, currentSong?.songId]);
-
-  // In iOS 10 standalone mode, dynamically calling .load() when the audio src changes prepares media buffer
-  useEffect(() => {
-    if (isTargetStandalone && audioRef.current && currentSong?.songId) {
-      const audio = audioRef.current;
-      const targetSrc = `/api/songs/${currentSong.songId}/audio?type=${variant}`;
-      try {
-        if (!audio.src || !audio.src.includes(`/api/songs/${currentSong.songId}/audio`)) {
-          audio.src = targetSrc;
-        }
-        logStandaloneAudioState('song_changed_calling_load', audio);
-        audio.load();
-        logStandaloneAudioState('song_changed_after_load', audio);
-      } catch (e) {
-        console.warn('[Audio] Error calling load on track change:', e);
-      }
-    }
-  }, [currentSong?.songId, variant, isTargetStandalone, logStandaloneAudioState]);
-
   // Fetch song details and lyrics whenever currentSong changes
   useEffect(() => {
     let isCancelled = false;
@@ -1588,49 +1161,29 @@ export default function RoomSession() {
     }
   };
 
-  // Safe play helper for iOS 10 WebKit and modern browsers
+  // Safe play helper for iOS Safari and modern browsers
   const safePlay = useCallback((audio: HTMLAudioElement | null) => {
     if (!audio) return;
     try {
-      if (isTargetStandalone) {
-        logStandaloneAudioState('before_safePlay', audio);
-        audio.muted = false;
-        if (!audio.src && currentSong?.songId) {
-          audio.src = `/api/songs/${currentSong.songId}/audio?type=${variant}`;
-        }
-      }
-
       const playPromise = audio.play();
       if (playPromise && typeof playPromise.then === 'function') {
         playPromise
           .then(() => {
             setAudioAutoplayBlocked(false);
-            if (isTargetStandalone) {
-              logStandaloneAudioState('play_promise_resolved', audio);
-            }
           })
           .catch((err: any) => {
             console.warn('[AUDIO] Autoplay prevented or waiting for interaction:', err);
             setAudioAutoplayBlocked(true);
-            if (isTargetStandalone) {
-              logStandaloneAudioState('play_promise_rejected', audio, { error: String(err) });
-            }
           });
       } else {
         // Legacy WebKit (iOS 10 Safari) returns undefined synchronously when play() succeeds
         setAudioAutoplayBlocked(false);
-        if (isTargetStandalone) {
-          logStandaloneAudioState('play_sync_legacy_return', audio);
-        }
       }
     } catch (err) {
       console.warn('[AUDIO] Synchronous play failed:', err);
       setAudioAutoplayBlocked(true);
-      if (isTargetStandalone) {
-        logStandaloneAudioState('play_sync_exception', audio, { error: String(err) });
-      }
     }
-  }, [isTargetStandalone, logStandaloneAudioState, currentSong?.songId, variant]);
+  }, []);
 
   // Host Control actions
   const togglePlay = () => {
@@ -1848,9 +1401,6 @@ export default function RoomSession() {
   const handleAddSongToQueue = async (songId: number) => {
     if (!sessionId) return;
     try {
-      if (isTargetStandalone) {
-        measureStandaloneLayout('immediately_before_adding_song');
-      }
       setAddingSongId(songId);
       const res = await fetch(`/api/karaoke/sessions/${sessionId}/queue`, {
         method: 'POST',
@@ -2288,13 +1838,11 @@ export default function RoomSession() {
       {/* Main Container */}
       <div 
         id="room-session-content"
-        style={isTargetStandalone ? { height: 'calc(100% - 54px)', maxHeight: 'calc(100% - 54px)', minHeight: 0 } : undefined}
         className="flex-1 min-h-0 flex overflow-hidden relative w-full p-3 lg:p-4 gap-3 lg:gap-4"
       >
         {/* Main Stage: Lyrics Card Container */}
         <main 
           id="room-session-main"
-          style={isTargetStandalone ? { height: '100%', maxHeight: '100%', minHeight: 0 } : undefined}
           className="relative overflow-hidden rounded-2xl md:rounded-3xl bg-gradient-to-br from-[#171827] via-[#1b172a] to-[#141522] border border-white/10 shadow-xl flex-1 flex flex-col justify-between h-full min-h-0 min-w-0 transition-all select-none"
         >
           {/* Ambient Glow matching Homepage & Sidebar Feature Cards */}
@@ -2463,12 +2011,10 @@ export default function RoomSession() {
           {/* Audio Player for Host */}
           {isHost && (
             <audio 
-              ref={setAudioRef}
+              ref={audioRef}
               src={currentSong ? `/api/songs/${currentSong.songId}/audio?type=${variant}` : undefined}
               preload="auto"
               playsInline
-              {...(isTargetStandalone ? { 'webkit-playsinline': 'true' } : {})}
-              controls={isTargetStandalone && isNativeControlsVisible}
               onTimeUpdate={() => {
                 if (audioRef.current) {
                   setCurrentTime(audioRef.current.currentTime);
@@ -2477,9 +2023,6 @@ export default function RoomSession() {
               onLoadedMetadata={() => {
                 if (audioRef.current) {
                   setDuration(audioRef.current.duration);
-                  if (isTargetStandalone) {
-                    logStandaloneAudioState('loadedmetadata', audioRef.current);
-                  }
                   if (restorePositionRef.current) {
                     audioRef.current.currentTime = restorePositionRef.current.time;
                     if (restorePositionRef.current.playing) {
@@ -2494,28 +2037,7 @@ export default function RoomSession() {
                 }
               }}
               onEnded={handleSongEnded}
-              style={isTargetStandalone ? (
-                isNativeControlsVisible ? {
-                  position: 'fixed',
-                  left: '10px',
-                  top: '100px',
-                  width: '300px',
-                  height: '40px',
-                  opacity: 1,
-                  zIndex: 99999,
-                  pointerEvents: 'auto'
-                } : {
-                  position: 'fixed',
-                  width: '2px',
-                  height: '2px',
-                  bottom: '0px',
-                  left: '0px',
-                  opacity: 0.05,
-                  pointerEvents: 'none',
-                  zIndex: 10
-                }
-              ) : undefined}
-              className={isTargetStandalone ? '' : 'hidden'}
+              className="hidden"
             />
           )}
         </main>
@@ -2524,7 +2046,6 @@ export default function RoomSession() {
         {isHost && (
           <aside 
             id="room-session-sidebar"
-            style={isTargetStandalone ? { height: '100%', maxHeight: '100%', minHeight: 0 } : undefined}
             className="hidden landscape:flex portrait:hidden flex-col h-full landscape:w-[20%] min-w-[210px] max-w-[320px] bg-[#0A0B12]/80 backdrop-blur-xl border-l border-white/10 p-3 lg:p-4 gap-3 lg:gap-4 shadow-2xl z-20 select-none overflow-hidden shrink-0"
           >
             {/* Card 1: Join Session / QR Code Card */}
@@ -2709,121 +2230,6 @@ export default function RoomSession() {
           </div>
         )}
       </AnimatePresence>
-      {/* Optional In-App Diagnostic Widget for Standalone iOS 10 testing */}
-      {isTargetStandalone && (
-        <>
-          <button
-            type="button"
-            onClick={() => setShowStandaloneDiag(prev => !prev)}
-            className="fixed bottom-2 left-2 z-50 text-[10px] font-mono bg-black/80 text-emerald-400 border border-emerald-500/40 px-2 py-1 rounded opacity-75 hover:opacity-100"
-          >
-            iOS10 Diag
-          </button>
-          {showStandaloneDiag && (
-            <div className="fixed bottom-10 left-2 z-50 bg-black/95 text-zinc-200 border border-emerald-500/50 p-3 rounded-xl font-mono text-[10px] max-w-sm max-h-80 overflow-y-auto space-y-1.5 shadow-2xl backdrop-blur-md select-text pointer-events-auto">
-              <div className="text-emerald-400 font-bold border-b border-white/10 pb-1 flex justify-between items-center">
-                <span>iOS 10 Standalone Diag</span>
-                <button onClick={() => setShowStandaloneDiag(false)} className="text-zinc-400 hover:text-white px-1">✕</button>
-              </div>
-              <div><strong>Win:</strong> {typeof window !== 'undefined' ? `${window.innerWidth}x${window.innerHeight}` : 'N/A'} (scrollY: {typeof window !== 'undefined' ? window.scrollY : 0})</div>
-              <div><strong>Doc/Body:</strong> clientH: {typeof document !== 'undefined' ? document.documentElement.clientHeight : 0}, scrollH: {typeof document !== 'undefined' ? document.body.scrollHeight : 0}</div>
-              {standaloneLayoutDiag && (
-                <div>
-                  <strong>Layout ({standaloneLayoutDiag.trigger}):</strong>
-                  <div>QR Top: {standaloneLayoutDiag.qrRect ? Math.round(standaloneLayoutDiag.qrRect.top) : 'N/A'}px</div>
-                  <div>Header Bottom: {standaloneLayoutDiag.headerRect ? Math.round(standaloneLayoutDiag.headerRect.bottom) : 'N/A'}px</div>
-                </div>
-              )}
-              {standaloneAudioDiag && (
-                <div className="pt-1.5 border-t border-white/10 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <strong className="text-white">Audio Status:</strong>
-                    <span className={`px-1.5 py-0.5 rounded font-bold uppercase text-[9px] ${
-                      standaloneAudioDiag.status === 'PLAYING' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' :
-                      standaloneAudioDiag.status === 'CLOCK_FROZEN' ? 'bg-amber-500/30 text-amber-300 border border-amber-500/60 animate-pulse' :
-                      standaloneAudioDiag.status === 'PAUSED' ? 'bg-zinc-700/50 text-zinc-300 border border-zinc-500/40' :
-                      standaloneAudioDiag.status === 'MEDIA_ERROR' ? 'bg-red-500/20 text-red-300 border border-red-500/40' :
-                      standaloneAudioDiag.status === 'BLOCKED' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' :
-                      'bg-blue-500/20 text-blue-300 border border-blue-500/40'
-                    }`}>
-                      {standaloneAudioDiag.status}
-                    </span>
-                  </div>
-                  <div className="text-zinc-400 text-[9px]">{standaloneAudioDiag.statusDetail}</div>
-
-                  <div className="flex items-center justify-between bg-white/5 px-1.5 py-1 rounded">
-                    <span>Clock Advancing:</span>
-                    <span className={isClockAdvancing ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
-                      {isClockAdvancing ? 'YES (MOVING)' : 'NO (FROZEN)'}
-                    </span>
-                  </div>
-
-                  <div>
-                    <strong>Recent 300ms Samples:</strong>
-                    <div className="text-cyan-300 tracking-wider">
-                      [{mediaClockSamples.map(s => s.toFixed(1)).join(', ')}]
-                    </div>
-                  </div>
-
-                  <div><strong>Last Event:</strong> <span className="text-cyan-300">{standaloneAudioDiag.lastEvent}</span></div>
-                  <div><strong>Src:</strong> <span className="text-zinc-300 break-all">{standaloneAudioDiag.currentSrc || standaloneAudioDiag.src || 'None'}</span></div>
-                  <div><strong>ReadyState:</strong> {standaloneAudioDiag.readyStateLabel}</div>
-                  <div><strong>NetworkState:</strong> {standaloneAudioDiag.networkStateLabel}</div>
-                  <div><strong>State:</strong> paused={String(standaloneAudioDiag.paused)}, muted={String(standaloneAudioDiag.muted)}, vol={standaloneAudioDiag.volume}</div>
-                  <div><strong>Position:</strong> {standaloneAudioDiag.currentTime?.toFixed?.(2) || 0}s / {standaloneAudioDiag.duration ? standaloneAudioDiag.duration.toFixed(1) + 's' : 'N/A'}</div>
-                  <div><strong>DOM:</strong> connected={String(standaloneAudioDiag.isConnected)}, id={standaloneAudioDiag.domInstanceId}, initial={String(standaloneAudioDiag.survivesInitial)}</div>
-                  {standaloneAudioDiag.computed && (
-                    <div><strong>CSS:</strong> pos={standaloneAudioDiag.computed.position}, disp={standaloneAudioDiag.computed.display}, vis={standaloneAudioDiag.computed.visibility}, op={standaloneAudioDiag.computed.opacity}, z={standaloneAudioDiag.computed.zIndex}</div>
-                  )}
-                  {standaloneAudioDiag.error && (
-                    <div className="text-red-400 font-bold">Error: code {standaloneAudioDiag.error.code} {standaloneAudioDiag.error.message}</div>
-                  )}
-
-                  {/* Interactive Diagnostic Test Suite for iPad 4 iOS 10 */}
-                  <div className="pt-2 border-t border-white/10 space-y-1">
-                    <div className="text-emerald-400 font-semibold text-[9px]">EXPERIMENTAL TESTS (iOS 10):</div>
-                    <div className="grid grid-cols-2 gap-1 text-[8.5px]">
-                      <button
-                        type="button"
-                        onClick={handleSeekTest}
-                        className="bg-blue-600/30 hover:bg-blue-600/50 border border-blue-500/40 text-blue-200 px-1.5 py-1 rounded active:scale-95"
-                      >
-                        Seek +10s
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handlePauseSeekPlayTest}
-                        className="bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-200 px-1.5 py-1 rounded active:scale-95"
-                      >
-                        Pause&gt;Seek&gt;Play
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleDirectGestureLoadPlay}
-                        className="bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-200 px-1.5 py-1 rounded active:scale-95"
-                      >
-                        Tap Load+Play
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIsNativeControlsVisible(prev => !prev)}
-                        className="bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/40 text-amber-200 px-1.5 py-1 rounded active:scale-95"
-                      >
-                        {isNativeControlsVisible ? 'Hide Player Bar' : 'Show Player Bar'}
-                      </button>
-                    </div>
-                    {diagTestMessage && (
-                      <div className="bg-white/10 text-yellow-300 p-1 rounded break-all text-[8px]">
-                        {diagTestMessage}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </>
-      )}
     </div>
   );
 }
