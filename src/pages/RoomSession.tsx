@@ -171,6 +171,7 @@ export default function RoomSession() {
   const [addingSongId, setAddingSongId] = useState<number | null>(null);
   const [addedSongId, setAddedSongId] = useState<number | null>(null);
   const [audioAutoplayBlocked, setAudioAutoplayBlocked] = useState(false);
+  const [audioError, setAudioError] = useState<string | null>(null);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const restorePositionRef = useRef<{ time: number, playing: boolean } | null>(null);
@@ -732,9 +733,18 @@ export default function RoomSession() {
 
     function connect() {
       if (isClosedIntentionally) return;
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      socket = new WebSocket(`${protocol}//${window.location.host}/ws/karaoke?sessionId=${sessionId}&isHost=${isHost}`);
+      const token = getAuthToken();
+      const tokenQuery = token ? `&token=${encodeURIComponent(token)}` : '';
+      socket = new WebSocket(`${protocol}//${window.location.host}/ws/karaoke?sessionId=${sessionId}&isHost=${isHost}${tokenQuery}`);
 
       socket.onopen = () => {
         // Re-fetch authoritative state on connect/reconnect
@@ -829,7 +839,9 @@ export default function RoomSession() {
       };
 
       socket.onclose = () => {
+        socket = null;
         if (!isClosedIntentionally && validationStatus === 'valid') {
+          if (reconnectTimer) clearTimeout(reconnectTimer);
           reconnectTimer = setTimeout(() => {
             connect();
           }, 2000);
@@ -927,58 +939,56 @@ export default function RoomSession() {
     }
     lastSongIdRef.current = currentSong?.songId ?? null;
 
-    // Reset lyrics immediately upon song switch to ensure no stale lyrics state
+    // Reset lyrics and clear previous audio error upon song switch
     setLyrics([]);
+    setAudioError(null);
 
     if (currentSong?.songId) {
       const songId = currentSong.songId;
-      let fetchedHasElrc = false;
 
-      fetch(`/api/songs/${songId}`)
-        .then(async res => {
+      Promise.allSettled([
+        fetch(`/api/songs/${songId}`).then(async res => {
           if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
             return await res.json();
           }
           return null;
-        })
-        .then(data => {
-          if (!isCancelled && data) {
-            setCurrentSongDetails(data);
-            fetchedHasElrc = !!data.hasElrc;
-            if (data.hasElrc) {
-              setLyricsFormat('elrc');
-            } else {
-              setLyricsFormat('lrc');
-            }
-            const lrc = typeof data.lrcOffset === 'number' ? data.lrcOffset : (data.lyricOffset ?? 0);
-            const elrc = typeof data.elrcOffset === 'number' ? data.elrcOffset : (data.lyricOffset ?? 0);
-            setLrcOffset(lrc);
-            setElrcOffset(elrc);
-          }
-        })
-        .catch(err => console.error('Failed to fetch song details:', err));
-
-      fetch(`/api/songs/${songId}/lyrics`)
-        .then(res => {
+        }),
+        fetch(`/api/songs/${songId}/lyrics`).then(async res => {
           if (!res.ok) throw new Error('No lyrics');
-          return res.text();
+          return await res.text();
         })
-        .then(text => {
-          if (!isCancelled) {
-            rawLyricsRef.current = text;
-            const hasElrcMarker = text.includes('<') && text.includes('>');
-            const initialFormat = fetchedHasElrc || hasElrcMarker ? 'elrc' : 'lrc';
-            setLyricsFormat(initialFormat);
-            const parsed = parseLrc(text, initialFormat);
-            setLyrics(parsed);
-          }
-        })
-        .catch(() => {
-          if (!isCancelled) {
-            rawLyricsRef.current = '';
-            setLyrics([]);
-          }
-        });
+      ]).then(([detailsResult, lyricsResult]) => {
+        if (isCancelled) return;
+
+        const data = detailsResult.status === 'fulfilled' ? detailsResult.value : null;
+        const lyricsText = lyricsResult.status === 'fulfilled' ? lyricsResult.value : null;
+
+        if (data) {
+          setCurrentSongDetails(data);
+          const lrc = typeof data.lrcOffset === 'number' ? data.lrcOffset : (data.lyricOffset ?? 0);
+          const elrc = typeof data.elrcOffset === 'number' ? data.elrcOffset : (data.lyricOffset ?? 0);
+          setLrcOffset(lrc);
+          setElrcOffset(elrc);
+        }
+
+        if (lyricsText) {
+          rawLyricsRef.current = lyricsText;
+          const hasElrcMarker = lyricsText.includes('<') && lyricsText.includes('>');
+          const isElrc = Boolean(data?.hasElrc || hasElrcMarker);
+          const format = isElrc ? 'elrc' : 'lrc';
+          setLyricsFormat(format);
+          const parsed = parseLrc(lyricsText, format);
+          setLyrics(parsed);
+        } else {
+          rawLyricsRef.current = '';
+          setLyrics([]);
+          setLyricsFormat(data?.hasElrc ? 'elrc' : 'lrc');
+        }
+      }).catch(err => {
+        if (!isCancelled) {
+          console.error('Failed to load song resources:', err);
+        }
+      });
     } else {
       setCurrentSongDetails(null);
       setLyrics([]);
@@ -1856,7 +1866,20 @@ export default function RoomSession() {
                 <Mic className="w-3 h-3" />
                 <span>Live Lyrics</span>
               </div>
-              {isHost && audioAutoplayBlocked && (
+              {isHost && audioError && (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-500/20 border border-red-500/40 text-red-300 text-[10px] font-bold">
+                  <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                  <span>{audioError}</span>
+                  <button
+                    type="button"
+                    onClick={handleSkip}
+                    className="ml-1 text-white underline hover:text-[#FF4FA3] transition-colors"
+                  >
+                    Skip
+                  </button>
+                </div>
+              )}
+              {isHost && !audioError && audioAutoplayBlocked && (
                 <button
                   type="button"
                   onClick={handleEnableAudio}
@@ -2037,6 +2060,18 @@ export default function RoomSession() {
                 }
               }}
               onEnded={handleSongEnded}
+              onError={(e) => {
+                const err = audioRef.current?.error;
+                console.warn('[AUDIO] Loading error for current song:', err?.code, err?.message);
+                if (variant === 'instrumental' && currentSong) {
+                  console.warn('[AUDIO] Instrumental audio unavailable on disk, falling back to original variant');
+                  setVariant('original');
+                  return;
+                }
+                setPlaying(false);
+                setAudioAutoplayBlocked(false);
+                setAudioError('Audio track could not be loaded or is unavailable on disk. Tap Skip to continue.');
+              }}
               className="hidden"
             />
           )}

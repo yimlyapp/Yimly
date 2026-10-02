@@ -2,7 +2,7 @@ import fsSync from 'fs';
 import fs from 'fs/promises';
 import path from 'path';
 import { db } from '../db/index.js';
-import { libraries, songs } from '../db/schema.js';
+import { libraries, songs, lyrics } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import {
   SUPPORTED_AUDIO_EXTS,
@@ -231,9 +231,31 @@ class LibraryWatcherManager {
         const mainExists = mainPath ? fsSync.existsSync(mainPath) : false;
         const instExists = instPath ? fsSync.existsSync(instPath) : false;
 
-        if (!mainExists && !instExists && mainPath) {
-          console.log(`[LibraryWatcher] Detected deletion (startup reconciliation): ${mainPath}`);
+        if (!mainExists && !instExists) {
+          const pathToDelete = mainPath || instPath;
+          if (pathToDelete) {
+            console.log(`[LibraryWatcher] Detected deletion (startup reconciliation): ${pathToDelete}`);
+            this.enqueue({ libraryId: state.libraryId, filePath: pathToDelete, action: 'delete' });
+          }
+        } else if (mainPath && !mainExists) {
+          console.log(`[LibraryWatcher] Detected main audio deletion (startup reconciliation): ${mainPath}`);
           this.enqueue({ libraryId: state.libraryId, filePath: mainPath, action: 'delete' });
+        } else if (instPath && !instExists) {
+          console.log(`[LibraryWatcher] Detected instrumental audio deletion (startup reconciliation): ${instPath}`);
+          this.enqueue({ libraryId: state.libraryId, filePath: instPath, action: 'delete' });
+        }
+      }
+
+      // Check lyrics in DB whose files no longer exist on disk
+      const dbLyrics = await db.select().from(lyrics);
+      for (const lyr of dbLyrics) {
+        if (lyr.lrcPath && lyr.lrcPath.trim().length > 0 && !fsSync.existsSync(lyr.lrcPath)) {
+          console.log(`[LibraryWatcher] Detected lyrics deletion (startup reconciliation): ${lyr.lrcPath}`);
+          this.enqueue({ libraryId: state.libraryId, filePath: lyr.lrcPath, action: 'delete', isLrc: true });
+        }
+        if (lyr.elrcPath && lyr.elrcPath.trim().length > 0 && !fsSync.existsSync(lyr.elrcPath)) {
+          console.log(`[LibraryWatcher] Detected ELRC lyrics deletion (startup reconciliation): ${lyr.elrcPath}`);
+          this.enqueue({ libraryId: state.libraryId, filePath: lyr.elrcPath, action: 'delete', isLrc: true });
         }
       }
     } catch (err) {

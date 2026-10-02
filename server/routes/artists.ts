@@ -61,11 +61,8 @@ router.get('/:id', async (req, res) => {
       duration: songs.duration,
       variant: songs.variant,
       artworkPath: songs.artworkPath,
-      lrcPath: lyrics.lrcPath,
-      elrcPath: lyrics.elrcPath,
     })
     .from(songs)
-    .leftJoin(lyrics, eq(songs.id, lyrics.songId))
     .where(
       or(
         eq(songs.artistId, artistId),
@@ -73,7 +70,7 @@ router.get('/:id', async (req, res) => {
       )
     );
 
-    // Deduplicate songs by id
+    // Deduplicate songs by id (in case an artist is both direct artistId and in songArtists)
     const uniqueSongsMap = new Map<number, typeof artistSongs[0]>();
     for (const s of artistSongs) {
       if (!uniqueSongsMap.has(s.id)) {
@@ -84,6 +81,18 @@ router.get('/:id', async (req, res) => {
     const allSongIds = uniqueSongs.map(s => s.id);
     const artistsMap = await getSongArtistsMap(allSongIds);
 
+    const lyricsList = allSongIds.length > 0
+      ? await db.select({ songId: lyrics.songId, lrcPath: lyrics.lrcPath, elrcPath: lyrics.elrcPath }).from(lyrics).where(inArray(lyrics.songId, allSongIds))
+      : [];
+    const lyricsMap = new Map<number, { hasLrc: boolean; hasElrc: boolean }>();
+    for (const l of lyricsList) {
+      const prev = lyricsMap.get(l.songId) || { hasLrc: false, hasElrc: false };
+      lyricsMap.set(l.songId, {
+        hasLrc: prev.hasLrc || (!!l.lrcPath && l.lrcPath.trim().length > 0),
+        hasElrc: prev.hasElrc || (!!l.elrcPath && l.elrcPath.trim().length > 0)
+      });
+    }
+
     res.json({
       ...artistRec[0],
       hasArtwork: !!artistRec[0].artworkPath,
@@ -93,13 +102,14 @@ router.get('/:id', async (req, res) => {
       })),
       songs: uniqueSongs.map(s => {
         const trackArtists = artistsMap.get(s.id) || [{ id: artistRec[0].id, name: artistRec[0].name }];
+        const lyr = lyricsMap.get(s.id) || { hasLrc: false, hasElrc: false };
         return {
           ...s,
           artist: formatArtistDisplay(trackArtists),
           artists: trackArtists,
           hasArtwork: !!s.artworkPath || !!artistRec[0].artworkPath,
-          hasLrc: !!s.lrcPath && s.lrcPath.trim().length > 0,
-          hasElrc: !!s.elrcPath && s.elrcPath.trim().length > 0,
+          hasLrc: lyr.hasLrc,
+          hasElrc: lyr.hasElrc,
         };
       }),
     });

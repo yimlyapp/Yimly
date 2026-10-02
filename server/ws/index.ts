@@ -1,8 +1,45 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { db } from '../db/index.js';
-import { sessions, queueItems, songs, artists, settings } from '../db/schema.js';
+import { sessions, queueItems, songs, artists, settings, users } from '../db/schema.js';
 import { eq, asc, and } from 'drizzle-orm';
 import { LyricsAppearanceSettings, DEFAULT_LYRICS_SETTINGS, resolveLyricsSettings } from '../lib/lyrics-settings.js';
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_for_dev';
+
+function extractToken(req: any, params: URLSearchParams): string | null {
+  const queryToken = params.get('token');
+  if (queryToken) return queryToken;
+
+  const authHeader = req.headers?.authorization;
+  if (authHeader && typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+    return authHeader.split(' ')[1];
+  }
+
+  const cookieHeader = req.headers?.cookie;
+  if (cookieHeader && typeof cookieHeader === 'string') {
+    const match = cookieHeader.match(/(?:^|;\s*)yimly_token=([^;]+)/);
+    if (match) return decodeURIComponent(match[1]);
+  }
+
+  return null;
+}
+
+async function authenticateUser(token: string | null): Promise<{ id: number; role: string; username: string } | null> {
+  if (!token) return null;
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    if (!decoded || !decoded.id) return null;
+    const u = await db.select({ id: users.id, role: users.role, username: users.username })
+      .from(users)
+      .where(eq(users.id, decoded.id))
+      .limit(1);
+    if (u.length === 0) return null;
+    return u[0];
+  } catch (e) {
+    return null;
+  }
+}
 
 export interface RoomState {
   playing: boolean;
@@ -126,12 +163,30 @@ export function setupWebSockets(wss: WebSocketServer) {
     const url = req.url;
     const params = new URLSearchParams(url?.split('?')[1]);
     const sessionId = params.get('sessionId');
-    const isHost = params.get('isHost') === 'true';
+    const isHostRequested = params.get('isHost') === 'true';
 
     if (!sessionId) {
       ws.close(1008, 'Session ID required');
       return;
     }
+
+    // Verify session exists and is active in DB
+    const sessionRec = await db.select().from(sessions).where(and(eq(sessions.id, sessionId), eq(sessions.status, 'active'))).limit(1);
+    if (sessionRec.length === 0) {
+      ws.close(1008, 'Session not found or inactive');
+      return;
+    }
+
+    // Authenticate user
+    const token = extractToken(req, params);
+    const authUser = await authenticateUser(token);
+    const isVerifiedHost = Boolean(authUser && (authUser.role === 'administrator' || authUser.id === sessionRec[0].hostId));
+
+    // A client is only treated as host if verified by authentication
+    const isHost = isHostRequested && isVerifiedHost;
+    (ws as any).isHost = isHost;
+    (ws as any).sessionId = sessionId;
+    (ws as any).userId = authUser?.id || null;
 
     const room = await getOrCreateRoom(sessionId);
     room.clients.add(ws);
@@ -166,10 +221,11 @@ export function setupWebSockets(wss: WebSocketServer) {
     ws.on('message', async (message) => {
       try {
         const data = JSON.parse(message.toString());
+        const socketIsHost = (ws as any).isHost === true;
         
         switch (data.type) {
           case 'HEARTBEAT':
-            if (isHost) {
+            if (socketIsHost) {
               room.lastHostHeartbeat = Date.now();
               try {
                 await db.update(sessions).set({ updatedAt: new Date() }).where(eq(sessions.id, sessionId));
@@ -187,37 +243,65 @@ export function setupWebSockets(wss: WebSocketServer) {
             break;
 
           case 'PLAY':
+            if (!socketIsHost) {
+              console.warn(`[WS] Unauthorized non-host attempted PLAY on session ${sessionId}`);
+              break;
+            }
             room.playing = true;
             broadcastToRoom(sessionId, { type: 'PLAYING', payload: { position: room.position } });
             break;
 
           case 'PAUSE':
+            if (!socketIsHost) {
+              console.warn(`[WS] Unauthorized non-host attempted PAUSE on session ${sessionId}`);
+              break;
+            }
             room.playing = false;
             broadcastToRoom(sessionId, { type: 'PAUSED', payload: { position: room.position } });
             break;
 
           case 'SEEK':
+            if (!socketIsHost) {
+              console.warn(`[WS] Unauthorized non-host attempted SEEK on session ${sessionId}`);
+              break;
+            }
             room.position = data.payload.position;
             broadcastToRoom(sessionId, { type: 'SEEKED', payload: { position: room.position } });
             break;
 
           case 'SYNC':
+            if (!socketIsHost) {
+              console.warn(`[WS] Unauthorized non-host attempted SYNC on session ${sessionId}`);
+              break;
+            }
             room.position = data.payload.position;
             room.playing = data.payload.playing;
             broadcastToRoom(sessionId, { type: 'SYNC', payload: { position: room.position, playing: room.playing } });
             break;
 
           case 'RESTART':
+            if (!socketIsHost) {
+              console.warn(`[WS] Unauthorized non-host attempted RESTART on session ${sessionId}`);
+              break;
+            }
             room.position = 0;
             broadcastToRoom(sessionId, { type: 'RESTARTED', payload: { position: 0 } });
             break;
 
           case 'SKIP':
           case 'SONG_FINISHED':
+            if (!socketIsHost) {
+              console.warn(`[WS] Unauthorized non-host attempted ${data.type} on session ${sessionId}`);
+              break;
+            }
             await advanceQueue(sessionId, room);
             break;
 
           case 'VARIANT_CHANGED':
+            if (!socketIsHost) {
+              console.warn(`[WS] Unauthorized non-host attempted VARIANT_CHANGED on session ${sessionId}`);
+              break;
+            }
             room.variant = data.payload.variant;
             if (data.payload.position !== undefined) room.position = data.payload.position;
             if (data.payload.playing !== undefined) room.playing = data.payload.playing;
@@ -232,6 +316,10 @@ export function setupWebSockets(wss: WebSocketServer) {
             break;
 
           case 'OFFSET_CHANGED': {
+            if (!socketIsHost) {
+              console.warn(`[WS] Unauthorized non-host attempted OFFSET_CHANGED on session ${sessionId}`);
+              break;
+            }
             const offsetVal = Math.round(Number(data.payload?.offset) || 0);
             const targetSongId = data.payload?.songId ? Number(data.payload.songId) : room.currentSongId;
             const format = data.payload?.format === 'elrc' ? 'elrc' : (data.payload?.format === 'lrc' ? 'lrc' : undefined);
@@ -275,6 +363,10 @@ export function setupWebSockets(wss: WebSocketServer) {
           }
 
           case 'LYRIC_SETTINGS_CHANGED': {
+            if (!socketIsHost) {
+              console.warn(`[WS] Unauthorized non-host attempted LYRIC_SETTINGS_CHANGED on session ${sessionId}`);
+              break;
+            }
             if (data.payload?.settings) {
               const resolved = resolveLyricsSettings(data.payload.settings);
               room.lyricSettings = resolved;
@@ -317,6 +409,10 @@ export function setupWebSockets(wss: WebSocketServer) {
             break;
 
           case 'SONG_CHANGED': {
+            if (!socketIsHost) {
+              console.warn(`[WS] Unauthorized non-host attempted SONG_CHANGED on session ${sessionId}`);
+              break;
+            }
             room.currentSongId = data.payload.songId ? Number(data.payload.songId) : null;
             room.currentQueueItemId = data.payload.queueItemId || null;
             room.position = 0;
@@ -383,7 +479,7 @@ export function setupWebSockets(wss: WebSocketServer) {
 
     ws.on('close', () => {
       room.clients.delete(ws);
-      if (isHost && room.hostClient === ws) {
+      if ((ws as any).isHost && room.hostClient === ws) {
         room.hostClient = null;
       }
     });
@@ -391,7 +487,7 @@ export function setupWebSockets(wss: WebSocketServer) {
     ws.on('error', (err) => {
       console.warn('[WS] Client socket warning/error:', err.message);
       room.clients.delete(ws);
-      if (isHost && room.hostClient === ws) {
+      if ((ws as any).isHost && room.hostClient === ws) {
         room.hostClient = null;
       }
     });

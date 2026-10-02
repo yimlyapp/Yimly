@@ -1412,6 +1412,22 @@ export async function scanLibrary(libraryId: number, dirPath: string) {
         instrumentalAudioPath: null,
       }).where(eq(songs.id, dbSong.id));
     }
+
+    if (mainExists || instExists) {
+      const songLyrics = await db.select().from(lyrics).where(eq(lyrics.songId, dbSong.id));
+      for (const lyr of songLyrics) {
+        const lrcExists = lyr.lrcPath && lyr.lrcPath.trim().length > 0 ? fsSync.existsSync(lyr.lrcPath) : false;
+        const elrcExists = lyr.elrcPath && lyr.elrcPath.trim().length > 0 ? fsSync.existsSync(lyr.elrcPath) : false;
+
+        if (!lrcExists && !elrcExists) {
+          await db.delete(lyrics).where(eq(lyrics.id, lyr.id));
+        } else if (!lrcExists && elrcExists && lyr.lrcPath) {
+          await db.update(lyrics).set({ lrcPath: '' }).where(eq(lyrics.id, lyr.id));
+        } else if (lrcExists && !elrcExists && lyr.elrcPath) {
+          await db.update(lyrics).set({ elrcPath: null }).where(eq(lyrics.id, lyr.id));
+        }
+      }
+    }
   }
 
   await normalizeMultiArtistsInDatabase();

@@ -69,11 +69,12 @@ router.get('/', async (req, res) => {
     const lyricsList = songIds.length > 0
       ? await db.select({ songId: lyrics.songId, lrcPath: lyrics.lrcPath, elrcPath: lyrics.elrcPath }).from(lyrics).where(inArray(lyrics.songId, songIds))
       : [];
-    const lyricsMap = new Map();
+    const lyricsMap = new Map<number, { hasLrc: boolean; hasElrc: boolean }>();
     for (const l of lyricsList) {
+      const prev = lyricsMap.get(l.songId) || { hasLrc: false, hasElrc: false };
       lyricsMap.set(l.songId, {
-        hasLrc: !!l.lrcPath && l.lrcPath.trim().length > 0,
-        hasElrc: !!l.elrcPath && l.elrcPath.trim().length > 0
+        hasLrc: prev.hasLrc || (!!l.lrcPath && l.lrcPath.trim().length > 0),
+        hasElrc: prev.hasElrc || (!!l.elrcPath && l.elrcPath.trim().length > 0)
       });
     }
 
@@ -141,11 +142,12 @@ router.get('/search', async (req, res) => {
     const lyricsList = songIds.length > 0
       ? await db.select({ songId: lyrics.songId, lrcPath: lyrics.lrcPath, elrcPath: lyrics.elrcPath }).from(lyrics).where(inArray(lyrics.songId, songIds))
       : [];
-    const lyricsMap = new Map();
+    const lyricsMap = new Map<number, { hasLrc: boolean; hasElrc: boolean }>();
     for (const l of lyricsList) {
+      const prev = lyricsMap.get(l.songId) || { hasLrc: false, hasElrc: false };
       lyricsMap.set(l.songId, {
-        hasLrc: !!l.lrcPath && l.lrcPath.trim().length > 0,
-        hasElrc: !!l.elrcPath && l.elrcPath.trim().length > 0
+        hasLrc: prev.hasLrc || (!!l.lrcPath && l.lrcPath.trim().length > 0),
+        hasElrc: prev.hasElrc || (!!l.elrcPath && l.elrcPath.trim().length > 0)
       });
     }
 
@@ -172,6 +174,8 @@ router.get('/search', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid song ID' });
+
     const songRec = await db.select({
       id: songs.id,
       title: songs.title,
@@ -187,10 +191,6 @@ router.get('/:id', async (req, res) => {
       discNumber: songs.discNumber,
       mainAudioPath: songs.mainAudioPath,
       instrumentalAudioPath: songs.instrumentalAudioPath,
-      hasInstrumental: songs.instrumentalAudioPath,
-      hasLrc: lyrics.id,
-      lrcPath: lyrics.lrcPath,
-      elrcPath: lyrics.elrcPath,
       artworkPath: songs.artworkPath,
       albumArtworkPath: albums.artworkPath,
       lrcOffset: songs.lrcOffset,
@@ -200,14 +200,14 @@ router.get('/:id', async (req, res) => {
     .from(songs)
     .leftJoin(artists, eq(songs.artistId, artists.id))
     .leftJoin(albums, eq(songs.albumId, albums.id))
-    .leftJoin(lyrics, eq(songs.id, lyrics.songId))
     .where(eq(songs.id, id))
     .limit(1);
 
     if (songRec.length === 0) return res.status(404).json({ error: 'Song not found' });
 
-    let hasElrc = !!songRec[0].elrcPath && songRec[0].elrcPath.trim().length > 0;
-    let hasLrc = !!songRec[0].lrcPath && songRec[0].lrcPath.trim().length > 0;
+    const songLyrics = await db.select().from(lyrics).where(eq(lyrics.songId, id));
+    let hasElrc = songLyrics.some(l => !!l.elrcPath && l.elrcPath.trim().length > 0 && fs.existsSync(l.elrcPath));
+    let hasLrc = songLyrics.some(l => !!l.lrcPath && l.lrcPath.trim().length > 0 && fs.existsSync(l.lrcPath));
     const audioPath = songRec[0].mainAudioPath || songRec[0].instrumentalAudioPath;
     
     // Fallback: check filesystem if not in db
@@ -244,6 +244,7 @@ router.get('/:id', async (req, res) => {
 
     const lrcOffsetVal = typeof songRec[0].lrcOffset === 'number' ? songRec[0].lrcOffset : (songRec[0].lyricOffset ?? 0);
     const elrcOffsetVal = typeof songRec[0].elrcOffset === 'number' ? songRec[0].elrcOffset : (songRec[0].lyricOffset ?? 0);
+    const hasInstrumental = !!(songRec[0].instrumentalAudioPath && fs.existsSync(songRec[0].instrumentalAudioPath));
 
     res.json({
       ...songRec[0],
@@ -252,7 +253,7 @@ router.get('/:id', async (req, res) => {
       hasArtwork: !!songRec[0].artworkPath || !!songRec[0].albumArtworkPath,
       hasLrc: hasLrc,
       hasElrc: hasElrc,
-      hasInstrumental: !!songRec[0].hasInstrumental,
+      hasInstrumental,
       lrcOffset: lrcOffsetVal,
       elrcOffset: elrcOffsetVal,
       lyricOffset: songRec[0].lyricOffset ?? 0,
@@ -330,17 +331,29 @@ export async function handleAudioStream(req: express.Request, res: express.Respo
     }
 
     let audioPath = song[0].mainAudioPath;
+    let fallbackPath: string | null = null;
+
     if (type === 'instrumental' && song[0].instrumentalAudioPath) {
       audioPath = song[0].instrumentalAudioPath;
+      if (song[0].mainAudioPath) {
+        fallbackPath = song[0].mainAudioPath;
+      }
     } else if (!audioPath && song[0].instrumentalAudioPath) {
       audioPath = song[0].instrumentalAudioPath;
+    } else if (audioPath && song[0].instrumentalAudioPath) {
+      fallbackPath = song[0].instrumentalAudioPath;
     }
 
     if (!audioPath || typeof audioPath !== 'string' || audioPath.trim().length === 0) {
-      return res.status(404).json({ error: 'Audio file not found' });
+      if (fallbackPath) {
+        audioPath = fallbackPath;
+        fallbackPath = null;
+      } else {
+        return res.status(404).json({ error: 'Audio file not found' });
+      }
     }
 
-    const resolvedPath = path.resolve(audioPath);
+    let resolvedPath = path.resolve(audioPath);
 
     // Verify file exists, is readable, and obtain filesystem size and modification time
     let stat: fs.Stats;
@@ -348,7 +361,19 @@ export async function handleAudioStream(req: express.Request, res: express.Respo
       await fs.promises.access(resolvedPath, fs.constants.R_OK);
       stat = await fs.promises.stat(resolvedPath);
     } catch (accessErr: any) {
-      return res.status(404).json({ error: 'Audio file not found or inaccessible on disk' });
+      if (fallbackPath) {
+        try {
+          const fallbackResolved = path.resolve(fallbackPath);
+          await fs.promises.access(fallbackResolved, fs.constants.R_OK);
+          stat = await fs.promises.stat(fallbackResolved);
+          resolvedPath = fallbackResolved;
+          console.warn(`[AUDIO STREAM] Requested audio track inaccessible for song #${id}, falling back to alternative track.`);
+        } catch (fallbackErr) {
+          return res.status(404).json({ error: 'Audio file not found or inaccessible on disk' });
+        }
+      } else {
+        return res.status(404).json({ error: 'Audio file not found or inaccessible on disk' });
+      }
     }
 
     if (!stat.isFile()) {

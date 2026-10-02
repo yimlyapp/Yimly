@@ -19,6 +19,7 @@ export interface SearchableSong {
   album?: string;
   duration?: number;
   hasLrc?: boolean;
+  hasElrc?: boolean;
   hasInstrumental?: boolean;
 }
 

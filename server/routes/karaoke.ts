@@ -3,9 +3,9 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { db } from '../db/index.js';
-import { sessions, controllers, queueItems, songs, artists, albums, songArtists, users, settings } from '../db/schema.js';
+import { sessions, controllers, queueItems, songs, artists, albums, songArtists, users, settings, lyrics } from '../db/schema.js';
 import { eq, and, asc, or, inArray, like } from 'drizzle-orm';
-import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { requireAuth, requireAdmin, AuthenticatedRequest } from '../middleware/auth.js';
 import crypto from 'crypto';
 import { 
   notifyQueueUpdate, 
@@ -553,12 +553,16 @@ router.post('/sessions/:sessionId/end', async (req: any, res: any) => {
 });
 
 // Host Heartbeat Endpoint
-router.post('/sessions/:sessionId/heartbeat', async (req, res) => {
+router.post('/sessions/:sessionId/heartbeat', async (req: AuthenticatedRequest, res) => {
   try {
     const { sessionId } = req.params;
     const session = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
     if (session.length === 0 || session[0].status !== 'active') {
       return res.status(410).json({ error: 'Session expired or not found', code: 'ROOM_EXPIRED' });
+    }
+    const user = req.user;
+    if (!user || (user.role !== 'administrator' && session[0].hostId !== user.id)) {
+      return res.status(403).json({ error: 'Forbidden. Only the room host can send heartbeats.' });
     }
     await handleHostHeartbeat(sessionId);
     res.json({ success: true, timestamp: Date.now() });
@@ -569,12 +573,16 @@ router.post('/sessions/:sessionId/heartbeat', async (req, res) => {
 });
 
 // Skip Track Endpoint
-router.post('/sessions/:sessionId/skip', async (req, res) => {
+router.post('/sessions/:sessionId/skip', async (req: AuthenticatedRequest, res) => {
   try {
     const { sessionId } = req.params;
     const session = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
     if (session.length === 0 || session[0].status !== 'active') {
       return res.status(410).json({ error: 'Session expired or not found', code: 'ROOM_EXPIRED' });
+    }
+    const user = req.user;
+    if (!user || (user.role !== 'administrator' && session[0].hostId !== user.id)) {
+      return res.status(403).json({ error: 'Forbidden. Only the room host can skip tracks.' });
     }
     await advanceQueueBySessionId(sessionId);
     res.json({ success: true });
@@ -714,14 +722,19 @@ router.get('/sessions/:sessionId/lyrics-settings', async (req, res) => {
 const updateSessionLyricsSettings = async (req: any, res: any) => {
   try {
     const { sessionId } = req.params;
+    const session = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (session.length === 0 || session[0].status !== 'active') {
+      return res.status(404).json({ error: 'Active session not found' });
+    }
+
+    const user = req.user;
+    if (!user || (user.role !== 'administrator' && session[0].hostId !== user.id)) {
+      return res.status(403).json({ error: 'Forbidden. Only the room host can update room lyric settings.' });
+    }
+
     const raw = req.body?.settings || req.body;
     const resolved = resolveLyricsSettings(raw);
     const jsonStr = JSON.stringify(resolved);
-
-    const session = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-    if (session.length === 0) {
-      return res.status(404).json({ error: 'Session not found' });
-    }
 
     await db.update(sessions)
       .set({ lyricSettings: jsonStr, updatedAt: new Date() })
@@ -817,28 +830,21 @@ router.get('/sessions/:sessionId/state', async (req, res) => {
 });
 
 // Add to Queue
-router.post('/sessions/:sessionId/queue', async (req, res) => {
+router.post('/sessions/:sessionId/queue', async (req: AuthenticatedRequest, res) => {
   try {
     const { sessionId } = req.params;
     const { songId, controllerId } = req.body;
-    const user = (req as any).user;
-
-    console.log('[QUEUE DEBUG] sessionId=', sessionId, 'controllerId=', controllerId, 'user=', user?.id || 'unauthenticated', 'body=', req.body);
+    const user = req.user;
 
     const session = await db.select().from(sessions).where(and(eq(sessions.id, sessionId), eq(sessions.status, 'active'))).limit(1);
     if (session.length === 0) {
-      console.log('[QUEUE DEBUG FAILURE] Active session not found for sessionId:', sessionId);
       return res.status(404).json({ error: 'Active session not found' });
     }
 
     const song = await db.select().from(songs).where(eq(songs.id, Number(songId))).limit(1);
     if (song.length === 0) {
-      console.log('[QUEUE DEBUG FAILURE] Song not found for songId:', songId);
       return res.status(404).json({ error: 'Song not found' });
     }
-
-    const existingQueue = await db.select().from(queueItems).where(eq(queueItems.sessionId, sessionId));
-    const nextPosition = existingQueue.length > 0 ? Math.max(...existingQueue.map(q => q.position)) + 1 : 1;
 
     let userId: number | null = null;
     let guestName: string | null = null;
@@ -846,23 +852,21 @@ router.post('/sessions/:sessionId/queue', async (req, res) => {
     if (user?.id) {
       userId = user.id;
     } else {
-      if (controllerId) {
-        const ctrl = await db.select().from(controllers).where(
-          and(eq(controllers.id, controllerId), eq(controllers.sessionId, sessionId))
-        ).limit(1);
-        if (ctrl.length > 0) {
-          userId = ctrl[0].userId || null;
-          guestName = ctrl[0].guestName || 'Guest';
-          console.log('[QUEUE DEBUG] Found controller:', ctrl[0]);
-        } else {
-          console.log('[QUEUE DEBUG] Controller ID provided but not found in session controllers table:', controllerId);
-          guestName = req.body.guestName || 'Guest';
-        }
-      } else {
-        console.log('[QUEUE DEBUG] No user and no controllerId provided. Assigning default guest.');
-        guestName = req.body.guestName || 'Guest';
+      if (!controllerId) {
+        return res.status(403).json({ error: 'Valid controller ID or authentication required to queue songs in this room' });
       }
+      const ctrl = await db.select().from(controllers).where(
+        and(eq(controllers.id, controllerId), eq(controllers.sessionId, sessionId))
+      ).limit(1);
+      if (ctrl.length === 0) {
+        return res.status(403).json({ error: 'Invalid or expired controller ID for this room' });
+      }
+      userId = ctrl[0].userId || null;
+      guestName = ctrl[0].guestName || (req.body?.guestName ? String(req.body.guestName).trim() : 'Guest');
     }
+
+    const existingQueue = await db.select().from(queueItems).where(eq(queueItems.sessionId, sessionId));
+    const nextPosition = existingQueue.length > 0 ? Math.max(...existingQueue.map(q => q.position)) + 1 : 1;
 
     const inserted = await db.insert(queueItems).values({
       sessionId,
@@ -873,13 +877,11 @@ router.post('/sessions/:sessionId/queue', async (req, res) => {
       position: nextPosition,
     }).returning();
 
-    console.log('[QUEUE DEBUG SUCCESS] Inserted queue item:', inserted[0]);
-
     notifyQueueUpdate(sessionId);
     
     res.json(inserted[0]);
   } catch (error) {
-    console.error('[QUEUE DEBUG ERROR] Failed to add to queue:', error);
+    console.error('[QUEUE] Failed to add to queue:', error);
     res.status(500).json({ error: 'Failed to add to queue' });
   }
 });
@@ -908,8 +910,21 @@ router.get('/songs', async (req, res) => {
     const songIds = allSongs.map(s => s.id);
     const artistsMap = await getSongArtistsMap(songIds);
 
+    const lyricsList = songIds.length > 0
+      ? await db.select({ songId: lyrics.songId, lrcPath: lyrics.lrcPath, elrcPath: lyrics.elrcPath }).from(lyrics).where(inArray(lyrics.songId, songIds))
+      : [];
+    const lyricsMap = new Map<number, { hasLrc: boolean; hasElrc: boolean }>();
+    for (const l of lyricsList) {
+      const prev = lyricsMap.get(l.songId) || { hasLrc: false, hasElrc: false };
+      lyricsMap.set(l.songId, {
+        hasLrc: prev.hasLrc || (!!l.lrcPath && l.lrcPath.trim().length > 0),
+        hasElrc: prev.hasElrc || (!!l.elrcPath && l.elrcPath.trim().length > 0)
+      });
+    }
+
     const formatted = allSongs.map(s => {
       const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
+      const lyr = lyricsMap.get(s.id) || { hasLrc: false, hasElrc: false };
       return {
         id: s.id,
         title: s.title,
@@ -919,6 +934,8 @@ router.get('/songs', async (req, res) => {
         duration: s.duration,
         variant: s.variant,
         hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
+        hasLrc: lyr.hasLrc,
+        hasElrc: lyr.hasElrc,
       };
     });
 
@@ -971,8 +988,21 @@ router.get('/search', async (req, res) => {
     const songIds = searchSongs.map(s => s.id);
     const artistsMap = await getSongArtistsMap(songIds);
 
+    const lyricsList = songIds.length > 0
+      ? await db.select({ songId: lyrics.songId, lrcPath: lyrics.lrcPath, elrcPath: lyrics.elrcPath }).from(lyrics).where(inArray(lyrics.songId, songIds))
+      : [];
+    const lyricsMap = new Map<number, { hasLrc: boolean; hasElrc: boolean }>();
+    for (const l of lyricsList) {
+      const prev = lyricsMap.get(l.songId) || { hasLrc: false, hasElrc: false };
+      lyricsMap.set(l.songId, {
+        hasLrc: prev.hasLrc || (!!l.lrcPath && l.lrcPath.trim().length > 0),
+        hasElrc: prev.hasElrc || (!!l.elrcPath && l.elrcPath.trim().length > 0)
+      });
+    }
+
     const formatted = searchSongs.map(s => {
       const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
+      const lyr = lyricsMap.get(s.id) || { hasLrc: false, hasElrc: false };
       return {
         id: s.id,
         title: s.title,
@@ -982,6 +1012,8 @@ router.get('/search', async (req, res) => {
         duration: s.duration,
         variant: s.variant,
         hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
+        hasLrc: lyr.hasLrc,
+        hasElrc: lyr.hasElrc,
       };
     });
 

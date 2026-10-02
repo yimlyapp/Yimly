@@ -1,10 +1,11 @@
 {
+  "id": "/",
   "name": "Yimly",
   "short_name": "Yimly",
   "description": "A lightweight, self-hosted karaoke media server and web application.",
   "start_url": "/",
   "scope": "/",
-  "display": "browser",
+  "display": "standalone",
   "background_color": "#08090E",
   "theme_color": "#08090E",
   "icons": [
@@ -16,12 +17,14 @@
     {
       "src": "/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
       "src": "/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     }
   ]
 }

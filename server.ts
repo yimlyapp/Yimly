@@ -3,12 +3,13 @@ import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import cookieParser from 'cookie-parser';
-import { setupDatabase, db, databaseCorrupted, databaseErrorMessage, checkpointAndCloseDatabase } from './server/db/index.js';
+import { setupDatabase, db, databaseCorrupted, databaseErrorMessage, checkpointAndCloseDatabase, sqlite } from './server/db/index.js';
 import { users } from './server/db/schema.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { setupWebSockets } from './server/ws/index.js';
+import { requireAuth } from './server/middleware/auth.js';
 
 // Convert import.meta.url for path resolution
 const __filename = fileURLToPath(import.meta.url);
@@ -22,10 +23,41 @@ setupWebSockets(wss);
 const PORT = process.env.PORT || 3000;
 const isProd = process.env.NODE_ENV === 'production';
 
+// Production configuration and secrets verification
+const JWT_SECRET = process.env.JWT_SECRET;
+if (isProd && (!JWT_SECRET || JWT_SECRET === 'fallback_secret_for_dev' || JWT_SECRET === 'change_this_to_a_long_random_secret_in_production')) {
+  console.error('🚨 CRITICAL CONFIGURATION ERROR: A secure JWT_SECRET environment variable must be specified in production mode.');
+  process.exit(1);
+}
+
+import { createRateLimiter } from './server/middleware/rate-limiter.js';
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
 app.use(express.json());
 app.use(cookieParser());
 
-// Setup database on startup
+const loginLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 50,
+  message: 'Too many login attempts. Please try again in a minute.'
+});
+
+const setupLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 50,
+  message: 'Too many setup attempts. Please try again in a minute.'
+});
+
+let isStarting = true;
+let isShuttingDown = false;
+
+// Setup database on startup with unhandled rejection protection
 setupDatabase().then(async () => {
   console.log('Database connected.');
   try {
@@ -40,10 +72,31 @@ setupDatabase().then(async () => {
   } catch (wErr) {
     console.error('Failed to initialize library watcher on startup:', wErr);
   }
+  isStarting = false;
+}).catch((err) => {
+  console.error('🚨 CRITICAL DATABASE INITIALIZATION FAILED:', err);
+  process.exit(1);
 });
 
-// Health Check
-app.get('/health', (req, res) => {
+// Robust Health and Readiness Check Endpoint
+app.get('/health', async (req, res) => {
+  if (isShuttingDown) {
+    return res.status(503).json({
+      status: 'unhealthy',
+      version: '1.0.0',
+      database: 'disconnected',
+      error: 'Application is shutting down'
+    });
+  }
+
+  if (isStarting) {
+    return res.status(503).json({
+      status: 'starting',
+      version: '1.0.0',
+      database: 'connecting'
+    });
+  }
+
   if (databaseCorrupted) {
     return res.status(503).json({
       status: 'unhealthy',
@@ -52,6 +105,32 @@ app.get('/health', (req, res) => {
       error: databaseErrorMessage || 'Database corruption detected. Manual recovery required.'
     });
   }
+
+  // 1. Verify database liveness
+  try {
+    await sqlite.execute('SELECT 1;');
+  } catch (dbErr: any) {
+    return res.status(503).json({
+      status: 'unhealthy',
+      version: '1.0.0',
+      database: 'unavailable',
+      error: dbErr?.message || 'Database is not responding'
+    });
+  }
+
+  // 2. Verify required storage write access
+  const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
+  try {
+    fs.accessSync(dataDir, fs.constants.R_OK | fs.constants.W_OK);
+  } catch (storageErr: any) {
+    return res.status(503).json({
+      status: 'unhealthy',
+      version: '1.0.0',
+      database: 'connected',
+      error: `Storage directory is inaccessible or read-only: ${storageErr?.message || 'Permission denied'}`
+    });
+  }
+
   res.json({
     status: 'ok',
     version: '1.0.0',
@@ -61,9 +140,11 @@ app.get('/health', (req, res) => {
 
 // Setup Setup Routes
 import setupRoutes from './server/routes/setup.js';
+app.post('/api/setup', setupLimiter);
 app.use('/api/setup', setupRoutes);
 
 import authRoutes from './server/routes/auth.js';
+app.use('/api/auth/login', loginLimiter);
 app.use('/api/auth', authRoutes);
 
 // Add users routes (we will create this later)
@@ -100,91 +181,8 @@ app.use('/api/playlists', playlistsRoutes);
 import favoritesRoutes from './server/routes/favorites.js';
 app.use('/api/favorites', favoritesRoutes);
 
-// Global Search endpoint
-import { artists, albums, songs, songArtists } from './server/db/schema.js';
-import { eq, like, or, inArray } from 'drizzle-orm';
-import { requireAuth } from './server/middleware/auth.js';
-import { formatArtistDisplay } from './server/lib/artist-utils.js';
-import { getSongArtistsMap } from './server/routes/songs.js';
-
-app.get('/api/search', requireAuth, async (req, res) => {
-  try {
-    const q = req.query.q as string;
-    if (!q) return res.json([]);
-
-    const searchStr = `%${q}%`;
-
-    // Find song IDs where any linked artist matches search
-    const matchingArtistSongIds = await db.select({ songId: songArtists.songId })
-      .from(songArtists)
-      .innerJoin(artists, eq(songArtists.artistId, artists.id))
-      .where(like(artists.name, searchStr));
-
-    const songIdsFromArtists = matchingArtistSongIds.map(r => r.songId);
-
-    const foundSongs = await db.select({
-      id: songs.id,
-      title: songs.title,
-      artist: artists.name,
-      artistId: songs.artistId,
-      album: albums.title,
-      artworkPath: songs.artworkPath,
-      albumArtworkPath: albums.artworkPath,
-    })
-    .from(songs)
-    .leftJoin(artists, eq(songs.artistId, artists.id))
-    .leftJoin(albums, eq(songs.albumId, albums.id))
-    .where(
-      or(
-        like(songs.title, searchStr),
-        like(artists.name, searchStr),
-        like(songs.mainAudioPath, searchStr),
-        songIdsFromArtists.length > 0 ? inArray(songs.id, songIdsFromArtists) : undefined
-      )
-    )
-    .limit(15);
-
-    const songIds = foundSongs.map(s => s.id);
-    const artistsMap = await getSongArtistsMap(songIds);
-
-    const foundArtists = await db.select({
-      id: artists.id,
-      name: artists.name,
-      artworkPath: artists.artworkPath,
-    })
-    .from(artists)
-    .where(like(artists.name, searchStr))
-    .limit(10);
-
-    const foundAlbums = await db.select({
-      id: albums.id,
-      title: albums.title,
-      artist: artists.name,
-      artworkPath: albums.artworkPath,
-    })
-    .from(albums)
-    .leftJoin(artists, eq(albums.artistId, artists.id))
-    .where(like(albums.title, searchStr))
-    .limit(10);
-
-    res.json([
-      ...foundArtists.map(a => ({ type: 'artist', hasArtwork: !!a.artworkPath, ...a })),
-      ...foundAlbums.map(al => ({ type: 'album', hasArtwork: !!al.artworkPath, ...al })),
-      ...foundSongs.map(s => {
-        const trackArtists = artistsMap.get(s.id) || (s.artist ? [{ id: s.artistId, name: s.artist }] : []);
-        return {
-          type: 'song',
-          ...s,
-          artist: formatArtistDisplay(trackArtists.length > 0 ? trackArtists : s.artist),
-          artists: trackArtists,
-          hasArtwork: !!s.artworkPath || !!s.albumArtworkPath,
-        };
-      }),
-    ]);
-  } catch (error) {
-    res.status(500).json({ error: 'Global search failed' });
-  }
-});
+import searchRoutes from './server/routes/search.js';
+app.use('/api/search', searchRoutes);
 
 // Direct artwork serving route
 app.get('/api/artwork/:filename', (req, res) => {
@@ -267,23 +265,61 @@ async function startServer() {
   });
 }
 
-// Graceful shutdown on restart/termination to prevent SQLite WAL corruption
-process.on('SIGINT', async () => {
-  try {
-    const { libraryWatcher } = await import('./server/lib/watcher.js');
-    libraryWatcher.stopAll();
-  } catch {}
-  await checkpointAndCloseDatabase();
-  process.exit(0);
-});
+// Robust Graceful Shutdown handling for process termination
+async function handleGracefulShutdown(signal: string) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`[GracefulShutdown] Received ${signal}. Initiating graceful shutdown...`);
 
-process.on('SIGTERM', async () => {
+  // 1. Gracefully close active WebSockets
   try {
+    console.log('[GracefulShutdown] Closing active WebSocket sessions...');
+    for (const client of wss.clients) {
+      if (client.readyState === 1 /* OPEN */) {
+        client.close(1001, 'Server is shutting down');
+      }
+    }
+    wss.close();
+  } catch (wsErr) {
+    console.error('[GracefulShutdown] Error closing WebSockets:', wsErr);
+  }
+
+  // 2. Stop accepting new HTTP requests and close server
+  try {
+    console.log('[GracefulShutdown] Closing HTTP server...');
+    httpServer.close((err) => {
+      if (err) {
+        console.error('[GracefulShutdown] Error closing HTTP server:', err);
+      } else {
+        console.log('[GracefulShutdown] HTTP server closed.');
+      }
+    });
+  } catch (httpErr) {
+    console.error('[GracefulShutdown] Error closing HTTP server:', httpErr);
+  }
+
+  // 3. Stop library watchers
+  try {
+    console.log('[GracefulShutdown] Stopping library watchers...');
     const { libraryWatcher } = await import('./server/lib/watcher.js');
     libraryWatcher.stopAll();
-  } catch {}
-  await checkpointAndCloseDatabase();
+  } catch (watcherErr) {
+    console.error('[GracefulShutdown] Error stopping library watchers:', watcherErr);
+  }
+
+  // 4. Safely checkpoint and close SQLite database to prevent WAL corruption
+  try {
+    console.log('[GracefulShutdown] Checkpointing and closing SQLite database...');
+    await checkpointAndCloseDatabase();
+  } catch (dbErr) {
+    console.error('[GracefulShutdown] Error closing database:', dbErr);
+  }
+
+  console.log('[GracefulShutdown] Shutdown complete. Exiting.');
   process.exit(0);
-});
+}
+
+process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
 
 startServer();

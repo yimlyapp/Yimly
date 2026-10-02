@@ -213,28 +213,60 @@ export async function cleanupOrphanedRecords(): Promise<{
   deletedArtists: number;
 }> {
   try {
-    // 1. Delete orphaned song_artists where song no longer exists or artist no longer exists
-    await db.delete(songArtists).where(sql`
-      ${songArtists.songId} NOT IN (SELECT id FROM ${songs})
-      OR ${songArtists.artistId} NOT IN (SELECT id FROM ${artists})
-    `);
+    // 1. Get all active song IDs and artist IDs
+    const allSongRows = await db.select({ id: songs.id }).from(songs);
+    const activeSongIds = new Set(allSongRows.map(s => s.id));
 
-    // 2. Delete orphaned lyrics where song no longer exists
-    await db.delete(lyrics).where(sql`
-      ${lyrics.songId} NOT IN (SELECT id FROM ${songs})
-    `);
+    const allArtistRows = await db.select({ id: artists.id }).from(artists);
+    const activeArtistIds = new Set(allArtistRows.map(a => a.id));
 
-    // 3. Delete orphaned albums (albums with 0 songs)
-    await db.delete(albums).where(sql`
-      NOT EXISTS (SELECT 1 FROM ${songs} WHERE ${songs.albumId} = ${albums.id})
-    `);
+    // Delete orphaned song_artists where songId or artistId no longer exist
+    const allSongArtists = await db.select().from(songArtists);
+    for (const sa of allSongArtists) {
+      if (!activeSongIds.has(sa.songId) || !activeArtistIds.has(sa.artistId)) {
+        await db.delete(songArtists).where(eq(songArtists.id, sa.id));
+      }
+    }
 
-    // 4. Delete orphaned artists (artists with 0 songs and 0 albums)
-    await db.delete(artists).where(sql`
-      NOT EXISTS (SELECT 1 FROM ${songs} WHERE ${songs.artistId} = ${artists.id})
-      AND NOT EXISTS (SELECT 1 FROM ${songArtists} WHERE ${songArtists.artistId} = ${artists.id})
-      AND NOT EXISTS (SELECT 1 FROM ${albums} WHERE ${albums.artistId} = ${artists.id})
-    `);
+    // Delete orphaned lyrics where songId no longer exists
+    const allLyrics = await db.select().from(lyrics);
+    for (const lyr of allLyrics) {
+      if (!activeSongIds.has(lyr.songId)) {
+        await db.delete(lyrics).where(eq(lyrics.id, lyr.id));
+      }
+    }
+
+    // 2. Find albums with 1+ songs
+    const songsWithAlbum = await db.select({ albumId: songs.albumId }).from(songs).where(isNotNull(songs.albumId));
+    const activeAlbumIdsWithSongs = new Set(songsWithAlbum.map(s => s.albumId!).filter(Boolean));
+
+    // Delete albums that have 0 associated songs
+    const allAlbums = await db.select().from(albums);
+    for (const alb of allAlbums) {
+      if (!activeAlbumIdsWithSongs.has(alb.id)) {
+        await db.delete(albums).where(eq(albums.id, alb.id));
+      }
+    }
+
+    // 3. Find artists associated with remaining albums
+    const remainingAlbums = await db.select({ artistId: albums.artistId }).from(albums);
+    const activeArtistIdsWithAlbums = new Set(remainingAlbums.map(a => a.artistId));
+
+    // Find artists associated with songs (either as primary artist in songs or in song_artists)
+    const songsPrimaryArtist = await db.select({ artistId: songs.artistId }).from(songs);
+    const activeArtistIdsWithSongs = new Set(songsPrimaryArtist.map(s => s.artistId));
+
+    const secondarySongArtists = await db.select({ artistId: songArtists.artistId }).from(songArtists);
+    for (const sa of secondarySongArtists) {
+      activeArtistIdsWithSongs.add(sa.artistId);
+    }
+
+    // Delete artists that have 0 associated songs AND 0 remaining albums
+    for (const art of allArtistRows) {
+      if (!activeArtistIdsWithSongs.has(art.id) && !activeArtistIdsWithAlbums.has(art.id)) {
+        await db.delete(artists).where(eq(artists.id, art.id));
+      }
+    }
 
     return {
       deletedSongArtists: 0,

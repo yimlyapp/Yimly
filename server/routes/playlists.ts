@@ -225,11 +225,12 @@ router.get('/:id', async (req: AuthenticatedRequest, res) => {
     const lyricsList = songIds.length > 0
       ? await db.select({ songId: lyrics.songId, lrcPath: lyrics.lrcPath, elrcPath: lyrics.elrcPath }).from(lyrics).where(inArray(lyrics.songId, songIds))
       : [];
-    const lyricsMap = new Map();
+    const lyricsMap = new Map<number, { hasLrc: boolean; hasElrc: boolean }>();
     for (const l of lyricsList) {
+      const prev = lyricsMap.get(l.songId) || { hasLrc: false, hasElrc: false };
       lyricsMap.set(l.songId, {
-        hasLrc: !!l.lrcPath && l.lrcPath.trim().length > 0,
-        hasElrc: !!l.elrcPath && l.elrcPath.trim().length > 0
+        hasLrc: prev.hasLrc || (!!l.lrcPath && l.lrcPath.trim().length > 0),
+        hasElrc: prev.hasElrc || (!!l.elrcPath && l.elrcPath.trim().length > 0)
       });
     }
 

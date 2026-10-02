@@ -1,6 +1,8 @@
 {
-  "name": "Yimly",
-  "description": "A lightweight, self-hosted karaoke media server and web application.",
+  "name": "Remix Yimly-Karoke-Server",
+  "description": "A lightweight, self-hosted karaoke media server for managing local audio, instrumental tracks, and synchronized lyrics.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

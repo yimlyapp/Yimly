@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
 import { albums, artists, songs, lyrics } from '../db/schema.js';
-import { eq, sql, isNotNull, and } from 'drizzle-orm';
+import { eq, sql, isNotNull, and, inArray } from 'drizzle-orm';
 import { requireAuth } from '../middleware/auth.js';
 import { formatArtistDisplay } from '../lib/artist-utils.js';
 import { getSongArtistsMap } from './songs.js';
@@ -65,28 +65,38 @@ router.get('/:id', async (req, res) => {
       duration: songs.duration,
       variant: songs.variant,
       artworkPath: songs.artworkPath,
-      lrcPath: lyrics.lrcPath,
-      elrcPath: lyrics.elrcPath,
     })
     .from(songs)
-    .leftJoin(lyrics, eq(songs.id, lyrics.songId))
     .where(eq(songs.albumId, albumId));
 
     const songIds = albumSongs.map(s => s.id);
     const artistsMap = await getSongArtistsMap(songIds);
+
+    const lyricsList = songIds.length > 0
+      ? await db.select({ songId: lyrics.songId, lrcPath: lyrics.lrcPath, elrcPath: lyrics.elrcPath }).from(lyrics).where(inArray(lyrics.songId, songIds))
+      : [];
+    const lyricsMap = new Map<number, { hasLrc: boolean; hasElrc: boolean }>();
+    for (const l of lyricsList) {
+      const prev = lyricsMap.get(l.songId) || { hasLrc: false, hasElrc: false };
+      lyricsMap.set(l.songId, {
+        hasLrc: prev.hasLrc || (!!l.lrcPath && l.lrcPath.trim().length > 0),
+        hasElrc: prev.hasElrc || (!!l.elrcPath && l.elrcPath.trim().length > 0)
+      });
+    }
 
     res.json({
       ...albumRec[0],
       hasArtwork: !!albumRec[0].artworkPath,
       songs: albumSongs.map(s => {
         const trackArtists = artistsMap.get(s.id) || (albumRec[0].artist ? [{ id: albumRec[0].artistId, name: albumRec[0].artist }] : []);
+        const lyr = lyricsMap.get(s.id) || { hasLrc: false, hasElrc: false };
         return {
           ...s,
           artist: formatArtistDisplay(trackArtists),
           artists: trackArtists,
           hasArtwork: !!s.artworkPath || !!albumRec[0].artworkPath,
-          hasLrc: !!s.lrcPath && s.lrcPath.trim().length > 0,
-          hasElrc: !!s.elrcPath && s.elrcPath.trim().length > 0,
+          hasLrc: lyr.hasLrc,
+          hasElrc: lyr.hasElrc,
         };
       }),
     });
